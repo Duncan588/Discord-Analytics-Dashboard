@@ -6,18 +6,29 @@
 >
 > 本项目的代码 **99% 由 Google Gemini 生成**。我作为架构师和提示词工程师（Prompt Engineer）构建了这个全栈分析工具。
 
+如果你认为本项目对你有价值 欢迎以加密货币打赏 你的支持将不胜感激
+
+```
+0x6b40b502842dd1b1b094a32e4c4e2279f6326078
+```
+
+If you find this project valuable you are welcome to support it with a cryptocurrency donation Your support is greatly appreciated
+
+```
+0x6b40b502842dd1b1b094a32e4c4e2279f6326078
+```
+
 可收费进行部署
 需要联系 Discord
-
-https://discord.gg/VQVJpQznfc
-30USDT/server
+>https://discord.gg/VQVJpQznfc
+>30USDT/server
 ---
 
 Paid deployment service available
 Contact via Discord
+>https://discord.gg/VQVJpQznfc
+>30USDT/server
 
-https://discord.gg/VQVJpQznfc
-30USDT/server
 
 ---
 
