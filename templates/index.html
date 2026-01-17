@@ -45,7 +45,7 @@
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mb-6">
             <div class="p-6 bg-[#292b2f] rounded-2xl border-t-4 border-[#5865f2] shadow-lg"><div class="text-gray-400 text-xs font-bold tracking-widest uppercase mb-1">收录帖子</div><div class="text-3xl md:text-4xl font-extrabold text-white">{{ total_threads }}</div></div>
             <div class="p-6 bg-[#292b2f] rounded-2xl border-t-4 border-[#faa61a] shadow-lg"><div class="text-gray-400 text-xs font-bold tracking-widest uppercase mb-1">收录消息</div><div class="text-3xl md:text-4xl font-extrabold text-white">{{ total_msgs }}</div></div>
-            <div class="p-6 bg-[#292b2f] rounded-2xl border-t-4 border-[#3ba55c] shadow-lg hover:bg-[#32353b] transition cursor-pointer" @click="showLeaderboard=true; page=1; users=[]; fetch('/api/leaderboard?page=1').then(r=>r.json()).then(d=>{users=users.concat(d);})"><div class="flex justify-between items-start"><div><div class="text-gray-400 text-xs font-bold tracking-widest uppercase mb-1">活跃成员 (点击查看)</div><div class="text-3xl md:text-4xl font-extrabold text-white group-hover:text-[#3ba55c] transition">{{ total_users }}</div></div><svg class="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg></div></div>
+            <div class="p-6 bg-[#292b2f] rounded-2xl border-t-4 border-[#3ba55c] shadow-lg hover:bg-[#32353b] transition cursor-pointer" @click="showLeaderboard=true"><div class="flex justify-between items-start"><div><div class="text-gray-400 text-xs font-bold tracking-widest uppercase mb-1">活跃成员 (点击查看)</div><div class="text-3xl md:text-4xl font-extrabold text-white group-hover:text-[#3ba55c] transition">{{ total_users }}</div></div><svg class="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg></div></div>
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-8">
@@ -91,7 +91,14 @@
                             <a href="/user/{{ u.user_id }}"><img src="{{ u.avatar_url }}" class="w-8 h-8 rounded-full" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'"></a>
                             <div class="truncate">
                                 <a href="/user/{{ u.user_id }}" class="text-white text-sm font-bold block truncate">{{ u.nickname or u.username }}</a>
-                                <div class="flex flex-wrap gap-1 mt-1">{% for e in u.top_emojis[:3] %}<div class="emoji-tag" title="{{ e.emoji_name }}"><img src="{{ e.emoji_url }}" class="w-3 h-3"><span class="text-[9px] text-gray-400">{{ e.c }}</span></div>{% endfor %}</div>
+                                <div class="flex flex-wrap gap-1 mt-1">
+                                    {% for e in u.top_emojis[:3] %}
+                                    <div class="emoji-tag" title="{{ e.emoji_name }}">
+                                        <img src="{{ e.emoji_url }}" class="w-3 h-3">
+                                        <span class="text-[9px] text-gray-400">{{ e.c }}</span>
+                                    </div>
+                                    {% endfor %}
+                                </div>
                             </div>
                         </div>
                         <span class="text-gray-500 text-xs font-mono">{{ u.msg_count }}</span>
@@ -117,6 +124,7 @@
                 <button @click="showLeaderboard = false" class="text-gray-400 hover:text-white">✕</button>
             </div>
             <div class="overflow-y-auto h-[60vh] pr-2 space-y-2 no-scrollbar" @scroll="if($el.scrollTop + $el.clientHeight >= $el.scrollHeight - 50 && !loading) { loading=true; page++; fetch('/api/leaderboard?page='+page).then(r=>r.json()).then(d=>{ users=users.concat(d); loading=false; }); }">
+
                 {% for u in full_leaderboard %}
                 <div class="flex items-center justify-between p-3 bg-[#202225] rounded-xl hover:bg-[#292b2f] transition">
                     <div class="flex items-center gap-4">
@@ -135,10 +143,10 @@
                 </div>
                 {% endfor %}
 
-                <template x-for="(u, index) in users" :key="u.user_id">
+                <template x-for="u in users" :key="u.user_id">
                     <div class="flex items-center justify-between p-3 bg-[#202225] rounded-xl hover:bg-[#292b2f] transition">
                         <div class="flex items-center gap-4">
-                            <span class="text-gray-500 font-mono font-bold w-8 text-center" x-text="index + 51"></span>
+                            <span class="text-gray-500 font-mono font-bold w-8 text-center" x-text="u.rank"></span>
                             <a :href="'/user/'+u.user_id"><img :src="u.avatar_url" class="w-10 h-10 rounded-full bg-gray-700" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'"></a>
                             <div>
                                 <a :href="'/user/'+u.user_id" class="text-white font-bold block" x-text="u.nickname || u.username"></a>
