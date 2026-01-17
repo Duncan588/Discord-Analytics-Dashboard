@@ -15,18 +15,16 @@ from multiprocessing import Pool, cpu_count
 
 app = Flask(__name__)
 app.secret_key = 'YOUR_SUPER_SECRET_KEY_CHANGE_THIS'
+app.permanent_session_lifetime = timedelta(days=30)
 
 # ================= 配置区 =================
 DB_DATABASE = 'discord_data.db'
-SERVER_ID = "频道id"
+SERVER_ID = "915249444721668096"
 ITEMS_PER_PAGE = 100
 CSV_FILENAME = 'members.csv'
 CACHE_FILE = 'cache_data_full.pkl'
 CHECKPOINT_INTERVAL = 50
-
-# 管理员 ID
-ADMIN_IDS = ["discord admin ID"]
-
+ADMIN_IDS = ["891196284998930522"]
 DISCORD_CLIENT_ID = "Client ID"  # <--- 填入你的 Client ID
 DISCORD_CLIENT_SECRET = "Client Secret"  # <--- 填入你的 Client Secret
 API_BASE_URL = 'https://discord.com/api/v10'
@@ -34,7 +32,6 @@ API_BASE_URL = 'https://discord.com/api/v10'
 
 # =========================================
 
-# --- 0. 工具函数 ---
 def format_time(seconds):
     if seconds < 0: seconds = 0
     m, s = divmod(int(seconds), 60);
@@ -43,25 +40,10 @@ def format_time(seconds):
     return f"{m:02d}:{s:02d}"
 
 
-def print_progress_bar(iteration, total, start_time, prefix='', length=30):
-    if total == 0: total = 1
-    percent = ("{0:.1f}").format(100 * (iteration / float(total)))
-    filled_length = int(length * iteration // total)
-    bar = '█' * filled_length + '-' * (length - filled_length)
-    elapsed_time = time.time() - start_time
-    speed = iteration / elapsed_time if elapsed_time > 0 and iteration > 0 else 0
-    eta_seconds = (total - iteration) / speed if speed > 0 else 0
-    sys.stdout.write(
-        f'\r{prefix} |{bar}| {percent}% ({iteration}/{total}) [{speed:.1f} it/s] ETA: {format_time(eta_seconds)}')
-    sys.stdout.flush()
-    if iteration == total: print()
-
-
 def log_step(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-# --- 1. 数据库 ---
 def get_db():
     db = getattr(g, '_database', None)
     if db is None: db = g._database = sqlite3.connect(DB_DATABASE); db.row_factory = sqlite3.Row
@@ -86,18 +68,23 @@ def init_db_structure():
         cur.execute("ALTER TABLE users ADD COLUMN last_visit DATETIME")
     except:
         pass
-    try:
-        cur.execute(
-            """CREATE TABLE IF NOT EXISTS profile_views (id INTEGER PRIMARY KEY AUTOINCREMENT, target_user_id TEXT, viewer_user_id TEXT, viewer_name TEXT, viewer_avatar TEXT, timestamp DATETIME, UNIQUE(target_user_id, viewer_user_id))""")
-    except:
-        pass
-    try:
-        cur.execute(
-            """CREATE TABLE IF NOT EXISTS web_visitors (user_id TEXT PRIMARY KEY, username TEXT, nickname TEXT, avatar_url TEXT, last_visit DATETIME)""")
-    except:
-        pass
+
+    # 强制使用新表名，规避旧表结构不兼容问题
     cur.execute(
-        """CREATE TABLE IF NOT EXISTS claim_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, requester_id TEXT, target_id TEXT, target_name TEXT, status INTEGER DEFAULT 0, created_at DATETIME, UNIQUE(requester_id, target_id))""")
+        """CREATE TABLE IF NOT EXISTS web_visitors (user_id TEXT PRIMARY KEY, username TEXT, nickname TEXT, avatar_url TEXT, last_visit DATETIME)""")
+    cur.execute(
+        """CREATE TABLE IF NOT EXISTS profile_views (id INTEGER PRIMARY KEY AUTOINCREMENT, target_user_id TEXT, viewer_user_id TEXT, viewer_name TEXT, viewer_avatar TEXT, timestamp DATETIME, UNIQUE(target_user_id, viewer_user_id))""")
+
+    # 【改名】使用 v2 确保表结构最新
+    cur.execute("""CREATE TABLE IF NOT EXISTS claim_requests_v2 (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, 
+        requester_id TEXT, 
+        target_id TEXT, 
+        target_name TEXT, 
+        status INTEGER DEFAULT 0, 
+        created_at DATETIME, 
+        UNIQUE(requester_id, target_id)
+    )""")
     cur.execute(
         """CREATE TABLE IF NOT EXISTS user_merges (target_id TEXT PRIMARY KEY, parent_id TEXT, created_at DATETIME)""")
     conn.commit();
@@ -182,7 +169,7 @@ def get_word_cloud_counter(text_list):
                   '虽然', '不是', '还有', '这里', '那里', '今天', '明天', '真的', '可能', '图片', '表情', '回复',
                   '一个', '一下', '自己', '只是', '非常', '不能', '不要', '需要', '如果', '以及', '我们', '你们',
                   '他们', '看到', '不过', '确实', '已经', '大家', '为什么', '不会', '不是', '这样', '那个', '这么',
-                  '那么', '那些'}
+                  '那么', '那些', '是不是', '有没有'}
     filtered_words = [w for w in words if w not in stop_words]
     return collections.Counter(filtered_words)
 
@@ -219,7 +206,6 @@ def process_messages(cur, raw_messages):
     return messages
 
 
-# --- Workers ---
 def analyze_message_chunk(args):
     db_path, start_id, end_id = args
     conn = sqlite3.connect(db_path);
@@ -234,7 +220,6 @@ def analyze_message_chunk(args):
         conn.close(); return collections.Counter()
 
 
-# --- Data Engine ---
 class DataEngine:
     def __init__(self):
         self.cache = {"homepage": {}, "users": {}, "last_msg_id": 0, "global_word_counter": collections.Counter(),
@@ -256,13 +241,12 @@ class DataEngine:
         return self.cache['merges']
 
     def get_merged_ids(self, uid):
-        # 获取所有孩子 + 自己
         children = [k for k, v in self.cache.get('merges', {}).items() if v == str(uid)]
         return [str(uid)] + children
 
     def force_clean_cache(self):
         if not self.cache.get("global_word_counter"): return
-        log_step("🧹 词云清洗...")
+        log_step("🧹 深度清洗词云缓存...")
         cleaned = collections.Counter(
             {k: v for k, v in self.cache["global_word_counter"].items() if is_pure_chinese(k)})
         self.cache["global_word_counter"] = cleaned
@@ -283,7 +267,7 @@ class DataEngine:
         loaded = False
         if os.path.exists(CACHE_FILE):
             try:
-                log_step(">> 读取缓存...")
+                log_step(">> 读取本地缓存...")
                 with open(CACHE_FILE, 'rb') as f:
                     disk_cache = pickle.load(f)
                     if 'merges' not in disk_cache: disk_cache['merges'] = {}
@@ -296,13 +280,12 @@ class DataEngine:
                 pass
 
         if loaded:
-            log_step("✅ 缓存有效")
-            # 即使缓存有效，也刷新一次首页，确保排行榜和访客数据最新
-            self.refresh_homepage_stats(cur)
+            log_step("✅ 缓存有效，刷新首页...")
+            self.refresh_homepage_stats(cur, db_max_id)
             conn.close();
             return
 
-        log_step(f"🚀 增量计算...")
+        log_step(f"🚀 增量计算 (DB: {db_max_id})")
         min_id = self.cache.get("last_msg_id", 0)
         cur.execute("SELECT count(*) FROM messages WHERE message_id > ?", (min_id,))
         if cur.fetchone()[0] > 0:
@@ -320,13 +303,16 @@ class DataEngine:
             self.cache["global_word_counter"] = merge_counters(self.cache.get("global_word_counter"), new_counter)
             self.force_clean_cache()
 
-        self.refresh_homepage_stats(cur)
+        self.refresh_homepage_stats(cur, db_max_id)
         self.cache["last_msg_id"] = db_max_id
         self.save_to_disk()
         conn.close()
 
-    def refresh_homepage_stats(self, cur):
-        # 实时计算首页数据，确保不为空
+    def refresh_homepage_stats(self, cur, db_max_id):
+        conn = sqlite3.connect(DB_DATABASE);
+        conn.row_factory = sqlite3.Row;
+        cur = conn.cursor()
+
         server_word_cloud = format_word_cloud(self.cache["global_word_counter"], 60)
         server_word_rank = server_word_cloud[:15]
 
@@ -403,6 +389,7 @@ class DataEngine:
                                   'chart_daily': chart_daily, 'chart_hourly': chart_hourly,
                                   'server_word_cloud': server_word_cloud, 'server_word_rank': server_word_rank,
                                   'top_users': top_users, 'top_threads': top_threads, 'top_hot_msgs': top_hot_msgs}
+        conn.close()
 
     def get_user_data(self, user_id):
         return {}, {}
@@ -464,8 +451,8 @@ def callback():
 
         session['user'] = {'id': user_data['id'], 'username': user_data['username'],
                            'avatar': f"https://cdn.discordapp.com/avatars/{user_data['id']}/{user_data['avatar']}.png"}
+        session.permanent = True
 
-        # 【跳转逻辑】
         if request.cookies.get('has_seen_report'):
             return redirect(url_for('index'))
         else:
@@ -485,7 +472,6 @@ def index():
     cur = conn.cursor()
     u = session['user']
     now_str = datetime.now(timezone.utc).isoformat()
-    # 【修复访客记录】UPSERT
     try:
         cur.execute(
             "INSERT INTO web_visitors (user_id, username, nickname, avatar_url, last_visit) VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET last_visit=excluded.last_visit, avatar_url=excluded.avatar_url",
@@ -494,25 +480,24 @@ def index():
     except Exception as e:
         print(f"Vis Error: {e}")
 
-    # 【修复首页空白】如果 Cache 没有数据，现场生成
-    data = data_engine.cache.get("homepage")
+    data = data_engine.cache.get("homepage", {})
     if not data or not data.get('total_msgs'):
-        print("Homepage cache empty, refreshing...")
         data_engine.refresh_homepage_stats(cur, 0)
         data = data_engine.cache.get("homepage", {})
 
     cur.execute("SELECT user_id, nickname, username, avatar_url, last_visit FROM web_visitors ORDER BY last_visit DESC")
     site_visitors = cur.fetchall()
 
+    # 预加载 Top 50 (含表情名)
     cur.execute(
         "SELECT u.user_id, u.username, u.nickname, u.avatar_url, count(m.message_id) as msg_count FROM users u JOIN messages m ON u.user_id = m.author_id GROUP BY u.user_id ORDER BY msg_count DESC LIMIT 50")
     full_leaderboard = []
     for u in cur.fetchall():
         d = dict(u);
         cur.execute(
-            "SELECT emoji_url FROM reactions r JOIN messages m ON r.message_id=m.message_id WHERE m.author_id=? GROUP BY r.emoji_name ORDER BY count(*) DESC LIMIT 3",
+            "SELECT emoji_url, emoji_name, count(*) as c FROM reactions r JOIN messages m ON r.message_id=m.message_id WHERE m.author_id=? GROUP BY r.emoji_name ORDER BY count(*) DESC LIMIT 3",
             (u['user_id'],))
-        d['top_emojis'] = [r['emoji_url'] for r in cur.fetchall()]
+        d['top_emojis'] = [dict(r) for r in cur.fetchall()]
         full_leaderboard.append(d)
 
     return render_template('index.html', server_id=SERVER_ID, current_user=session['user'], site_visitors=site_visitors,
@@ -536,12 +521,15 @@ def api_leaderboard():
         "SELECT u.user_id, u.username, u.nickname, u.avatar_url, count(m.message_id) as msg_count FROM users u JOIN messages m ON u.user_id = m.author_id GROUP BY u.user_id ORDER BY msg_count DESC LIMIT 50 OFFSET ?",
         (offset,))
     users = []
-    for u in cur.fetchall():
-        d = dict(u);
+    # 【核心修复】后端直接计算Rank，前端只负责显示，解决 101->51 问题
+    start_rank = offset + 1
+    for i, u in enumerate(cur.fetchall()):
+        d = dict(u)
+        d['rank'] = start_rank + i  # 绝对排名
         cur.execute(
-            "SELECT emoji_url FROM reactions r JOIN messages m ON r.message_id=m.message_id WHERE m.author_id=? GROUP BY r.emoji_name ORDER BY count(*) DESC LIMIT 3",
+            "SELECT emoji_url, emoji_name, count(*) as c FROM reactions r JOIN messages m ON r.message_id=m.message_id WHERE m.author_id=? GROUP BY r.emoji_name ORDER BY count(*) DESC LIMIT 3",
             (u['user_id'],))
-        d['top_emojis'] = [r['emoji_url'] for r in cur.fetchall()]
+        d['top_emojis'] = [dict(r) for r in cur.fetchall()]
         users.append(d)
     return jsonify(users)
 
@@ -561,7 +549,6 @@ def search():
 @app.route('/user/<user_id>')
 @login_required
 def user_profile(user_id):
-    # 防止死循环：如果 A->B, B->A，或者 Parent==Target
     parent_id = data_engine.cache.get('merges', {}).get(str(user_id))
     if parent_id and str(parent_id) != str(user_id):
         flash(f"账号 {user_id} 已合并至 {parent_id}");
@@ -690,15 +677,15 @@ def claim_account():
     if target_id == requester_id: return "无效请求", 400
     conn = get_db();
     cur = conn.cursor()
-    print(f"[CLAIM DEBUG] {requester_id} claiming {target_id}")
+
+    # 强制更新表名为 v2
     cur.execute("SELECT nickname FROM users WHERE user_id=?", (target_id,));
     t = cur.fetchone()
     if not t: return "目标不存在", 404
     try:
-        cur.execute("INSERT INTO claim_requests (requester_id, target_id, target_name, created_at) VALUES (?,?,?,?)",
+        cur.execute("INSERT INTO claim_requests_v2 (requester_id, target_id, target_name, created_at) VALUES (?,?,?,?)",
                     (requester_id, target_id, t['nickname'], datetime.now()));
         conn.commit()
-        print(f"[CLAIM SUCCESS]")
         flash("认领申请已提交，请等待管理员审核。")
     except:
         flash("申请已存在")
@@ -710,8 +697,9 @@ def claim_account():
 def admin_panel():
     conn = get_db();
     cur = conn.cursor()
+    # 使用 v2 表
     cur.execute(
-        "SELECT r.*, u.username as req_name, u.avatar_url as req_avatar FROM claim_requests r LEFT JOIN users u ON r.requester_id=u.user_id WHERE r.status=0")
+        "SELECT r.*, u.username as req_name, u.avatar_url as req_avatar FROM claim_requests_v2 r LEFT JOIN users u ON r.requester_id=u.user_id WHERE r.status=0")
     reqs = cur.fetchall()
     cur.execute("SELECT m.*, u.username as parent_name FROM user_merges m LEFT JOIN users u ON m.parent_id=u.user_id")
     merges = cur.fetchall()
@@ -723,10 +711,11 @@ def admin_panel():
 def admin_approve(req_id):
     conn = get_db();
     cur = conn.cursor()
-    cur.execute("SELECT * FROM claim_requests WHERE id=?", (req_id,));
+    # 使用 v2 表
+    cur.execute("SELECT * FROM claim_requests_v2 WHERE id=?", (req_id,));
     req = cur.fetchone()
     if req:
-        cur.execute("UPDATE claim_requests SET status=1 WHERE id=?", (req_id,))
+        cur.execute("UPDATE claim_requests_v2 SET status=1 WHERE id=?", (req_id,))
         cur.execute("INSERT OR REPLACE INTO user_merges (target_id, parent_id, created_at) VALUES (?,?,?)",
                     (req['target_id'], req['requester_id'], datetime.now()))
         conn.commit();
@@ -750,7 +739,7 @@ def admin_unmerge(target_id):
 def admin_reset_all():
     conn = get_db();
     cur = conn.cursor()
-    cur.execute("DELETE FROM claim_requests")
+    cur.execute("DELETE FROM claim_requests_v2")
     cur.execute("DELETE FROM user_merges")
     conn.commit()
     data_engine.cache['merges'] = {}
@@ -767,7 +756,6 @@ def report():
         cur.execute("SELECT * FROM users WHERE user_id = ?", (user_id,));
         db_user = cur.fetchone()
 
-        # 补全
         if not db_user:
             db_user = {'user_id': user_id, 'username': session['user']['username'],
                        'avatar_url': session['user']['avatar'], 'nickname': session['user']['username']}
@@ -778,8 +766,10 @@ def report():
         report = {}
         cur.execute(f"SELECT min(timestamp) as joined FROM messages WHERE author_id IN ({ids_ph})", merged_ids)
         joined_row = cur.fetchone();
-        report['join_date'] = datetimeformat_filter(joined_row['joined'], '%Y-%m-%d') if joined_row and joined_row[
-            'joined'] else "未知"
+        if joined_row and joined_row['joined']:
+            report['join_date'] = datetimeformat_filter(joined_row['joined'], '%Y-%m-%d')
+        else:
+            report['join_date'] = "未知"
 
         cur.execute(
             f"SELECT substr(timestamp, 1, 10) as day, count(*) as c FROM messages WHERE author_id IN ({ids_ph}) GROUP BY day ORDER BY c DESC LIMIT 1",
@@ -833,7 +823,6 @@ def report():
             (*merged_ids, *merged_ids, *merged_ids))
         row = cur.fetchone();
         report['top_friend_incoming'] = dict(row) if row else None
-
         cur.execute(
             f"SELECT u.nickname, u.username, u.avatar_url, COUNT(*) as score FROM (SELECT mentioned_user_id as target_id FROM mentions WHERE author_id IN ({ids_ph}) UNION ALL SELECT m.author_id as target_id FROM reactions r JOIN messages m ON r.message_id = m.message_id WHERE r.user_id IN ({ids_ph})) raw JOIN users u ON raw.target_id = u.user_id WHERE u.user_id NOT IN ({ids_ph}) GROUP BY u.user_id ORDER BY score DESC LIMIT 1",
             (*merged_ids, *merged_ids, *merged_ids))
