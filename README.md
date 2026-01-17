@@ -9,15 +9,15 @@
 可收费进行部署
 需要联系 Discord
 
-`https://discord.gg/VQVJpQznfc`
-
+https://discord.gg/VQVJpQznfc
+30USDT/server
 ---
 
 Paid deployment service available
 Contact via Discord
 
-`https://discord.gg/VQVJpQznfc`
-
+https://discord.gg/VQVJpQznfc
+30USDT/server
 
 ---
 
