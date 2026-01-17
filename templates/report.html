@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>年度总结 - {{ user.nickname }}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/TagCloud@2.2.0/dist/TagCloud.min.js"></script>
+    <style>
+        body { background-color: #000; color: #fff; font-family: "Microsoft YaHei", sans-serif; overflow: hidden; }
+        .scroll-container { height: 100dvh; overflow-y: scroll; scroll-snap-type: y mandatory; scroll-behavior: smooth; scrollbar-width: none; }
+        .scroll-container::-webkit-scrollbar { display: none; }
+        .section { height: 100dvh; width: 100%; scroll-snap-align: start; display: flex; flex-direction: column; justify-content: center; align-items: center; position: relative; }
+        .bg-gradient-1 { background: linear-gradient(to bottom right, #2c2f33, #111); }
+        .bg-gradient-2 { background: linear-gradient(to bottom right, #23272a, #2c2f33); }
+        .bg-gradient-3 { background: linear-gradient(to bottom right, #5865f2, #23272a); }
+        .bg-gradient-4 { background: linear-gradient(to bottom right, #000, #23272a); }
+        .card { background-color: #2f3136; border-radius: 1rem; border: 1px solid #202225; width: 100%; transition: transform 0.2s; cursor: pointer; }
+        .card:hover { transform: scale(1.02); border-color: #5865f2; }
+        .animate-up { animation: fadeInUp 0.8s ease-out forwards; opacity: 0; transform: translateY(30px); }
+        @keyframes fadeInUp { to { opacity: 1; transform: translateY(0); } }
+        @media (min-width: 768px) { .card { max-width: 600px; } }
+        .tagcloud { display: inline-block; margin: 0 auto; font-size: 16px; }
+        .tagcloud--item { color: #fff; padding: 5px; cursor: pointer; }
+        .tagcloud--item:hover { color: #5865f2; }
+    </style>
+</head>
+<body>
+    <div class="scroll-container" id="scroller">
+
+        <div class="section bg-gradient-1 px-6 pb-24 md:pb-0">
+            <div class="animate-up flex flex-col items-center w-full">
+                <img src="{{ user.avatar_url }}" class="w-32 h-32 md:w-48 md:h-48 rounded-full border-4 md:border-8 border-[#5865f2] shadow-2xl mb-6 md:mb-8">
+                <h1 class="text-4xl md:text-6xl font-bold mb-2 md:mb-4 text-center leading-tight truncate w-full">{{ user.nickname if user.nickname else user.username }}</h1>
+                <p class="text-gray-400 text-lg md:text-2xl mb-8 md:mb-12">@{{ user.username }}</p>
+                <div class="flex gap-4">
+                    <div class="bg-[#2f3136] px-6 py-4 md:px-10 md:py-6 rounded-2xl md:rounded-3xl shadow-xl border border-gray-700">
+                        <div class="text-gray-500 text-sm md:text-lg uppercase tracking-widest mb-1 md:mb-2 text-center">初次相遇</div>
+                        <div class="text-xl md:text-3xl font-bold text-[#5865f2]">{{ join_date }}</div>
+                    </div>
+                    <div class="bg-[#2f3136] px-6 py-4 md:px-10 md:py-6 rounded-2xl md:rounded-3xl shadow-xl border border-gray-700">
+                        <div class="text-gray-500 text-sm md:text-lg uppercase tracking-widest mb-1 md:mb-2 text-center">击败全服</div>
+                        <div class="text-xl md:text-3xl font-bold text-[#3ba55c]">{{ percentile }}%</div>
+                    </div>
+                </div>
+            </div>
+            <div class="absolute bottom-20 md:bottom-10 text-gray-500 animate-bounce text-sm md:text-xl opacity-70">↓ 下滑查看更多</div>
+        </div>
+
+        <div class="section bg-gradient-2 px-4 pb-24 md:pb-0">
+            <div class="w-full max-w-4xl space-y-3 md:space-y-8 animate-up" style="animation-delay: 0.2s;">
+                <h2 class="text-2xl md:text-5xl font-bold text-center mb-4 md:mb-12 text-[#00b0f4]">数据高光时刻</h2>
+                {% if most_active_day %}
+                <div class="card flex justify-between items-center mx-auto cursor-default hover:scale-100 hover:border-[#202225] p-3 md:p-6"><span class="text-gray-400 text-sm md:text-xl">📅 发言最多的一天</span><div class="text-right"><div class="text-lg md:text-3xl font-bold text-white">{{ most_active_day.day }}</div><div class="text-xs md:text-lg text-gray-500">{{ most_active_day.c }} 条消息</div></div></div>
+                {% endif %}
+                {% if latest_msg %}
+                <div class="mx-auto w-full max-w-[800px]"><p class="text-xs md:text-lg text-gray-400 mb-1 md:mb-3 text-center">🌙 熬夜最晚 ({{ latest_msg.timestamp | datetimeformat('%H:%M') }})</p><a href="https://discord.com/channels/{{ server_id }}/{{ latest_msg.thread_id }}/{{ latest_msg.message_id }}" target="_blank" class="block card p-3 md:p-6 mx-auto bg-[#36393f] border-l-4 md:border-l-8 border-[#eb459e]"><div class="flex justify-between items-center mb-1 md:mb-4"><span class="text-[10px] md:text-sm bg-[#2f3136] px-2 py-0.5 rounded text-gray-400 truncate max-w-[150px]"># {{ latest_msg.thread_name }}</span><span class="text-[10px] md:text-sm text-gray-500 shrink-0">{{ latest_msg.timestamp | datetimeformat }}</span></div><p class="text-gray-300 text-sm md:text-xl line-clamp-1 md:line-clamp-2 leading-relaxed">{{ latest_msg.content }}</p></a></div>
+                {% endif %}
+                {% if most_replied_thread %}
+                <div class="mx-auto w-full max-w-[800px]"><p class="text-xs md:text-lg text-gray-400 mb-1 md:mb-3 text-center">🔥 引发热议的帖子</p><a href="https://discord.com/channels/{{ server_id }}/{{ most_replied_thread.thread_id }}" target="_blank" class="block card p-3 md:p-6 mx-auto flex gap-3 md:gap-6 items-center bg-[#36393f]"><img src="{{ most_replied_thread.op_user.avatar_url }}" class="w-10 h-10 md:w-16 md:h-16 rounded-full"><div class="flex-1 min-w-0"><div class="font-bold text-white text-base md:text-2xl truncate mb-0.5 md:mb-1">{{ most_replied_thread.name }}</div><div class="text-[10px] md:text-sm text-gray-400">{{ most_replied_thread.exported_at | datetimeformat }}</div></div><div class="bg-[#2f3136] px-2 py-1 md:px-4 md:py-2 rounded-lg text-sm md:text-lg text-gray-300 font-bold whitespace-nowrap">💬 {{ most_replied_thread.reply_count }}</div></a></div>
+                {% endif %}
+                {% if most_liked_msg %}
+                <div class="mx-auto w-full max-w-[800px]"><p class="text-xs md:text-lg text-gray-400 mb-1 md:mb-3 text-center">❤️ 最受欢迎的消息</p><a href="https://discord.com/channels/{{ server_id }}/{{ most_liked_msg.thread_id }}/{{ most_liked_msg.message_id }}" target="_blank" class="block card p-3 md:p-6 mx-auto bg-[#36393f] border-l-4 md:border-l-8 border-[#faa61a]"><p class="text-gray-300 text-sm md:text-xl mb-2 md:mb-4 line-clamp-1 md:line-clamp-2 leading-relaxed">{{ most_liked_msg.content }}</p><div class="flex gap-2 overflow-x-auto">{% for r in most_liked_msg.detailed_reactions %}<div class="bg-[#2f3136] px-2 py-0.5 md:px-3 md:py-1 rounded text-[10px] md:text-sm flex items-center gap-1 text-gray-400 border border-gray-700 shrink-0"><img src="{{ r.emoji_url }}" class="w-3 h-3 md:w-5 md:h-5"> {{ r.count }}</div>{% endfor %}</div></a></div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="section bg-gradient-3 px-4 pb-24 md:pb-0">
+            <div class="w-full max-w-4xl space-y-8 animate-up" style="animation-delay: 0.2s;">
+                <h2 class="text-2xl md:text-5xl font-bold text-center mb-4 text-green-400">你的年度关键词</h2>
+                <div class="card bg-[#2f3136] rounded-3xl p-6 mx-auto relative h-[400px] flex items-center justify-center overflow-hidden">
+                    <span id="report-word-cloud"></span>
+                </div>
+            </div>
+        </div>
+
+        <div class="section bg-gradient-3 px-4 pb-24 md:pb-0">
+            <div class="w-full max-w-6xl grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-12 animate-up">
+                {% if top_friend_outgoing %}
+                <div class="flex flex-col items-center p-6 md:p-12 bg-[#2f3136]/50 rounded-2xl md:rounded-[2rem] backdrop-blur-md border border-white/10 shadow-2xl"><h3 class="text-xl md:text-3xl font-bold mb-4 md:mb-8 text-blue-300">你最常互动的</h3><img src="{{ top_friend_outgoing.avatar_url }}" class="w-24 h-24 md:w-40 md:h-40 rounded-full border-4 md:border-8 border-blue-400 mb-3 md:mb-6 shadow-xl"><div class="text-2xl md:text-4xl font-bold mb-1 md:mb-2 text-center">{{ top_friend_outgoing.nickname or top_friend_outgoing.username }}</div><div class="text-sm md:text-xl text-gray-300 bg-blue-500/20 px-3 py-1 md:px-4 md:py-2 rounded-full mt-1 md:mt-2">互动 {{ top_friend_outgoing.score }} 次</div></div>
+                {% endif %}
+                {% if top_friend_incoming %}
+                <div class="flex flex-col items-center p-6 md:p-12 bg-[#2f3136]/50 rounded-2xl md:rounded-[2rem] backdrop-blur-md border border-white/10 shadow-2xl"><h3 class="text-xl md:text-3xl font-bold mb-4 md:mb-8 text-pink-300">最常与你互动的</h3><img src="{{ top_friend_incoming.avatar_url }}" class="w-24 h-24 md:w-40 md:h-40 rounded-full border-4 md:border-8 border-pink-400 mb-3 md:mb-6 shadow-xl"><div class="text-2xl md:text-4xl font-bold mb-1 md:mb-2 text-center">{{ top_friend_incoming.nickname or top_friend_incoming.username }}</div><div class="text-sm md:text-xl text-gray-300 bg-pink-500/20 px-3 py-1 md:px-4 md:py-2 rounded-full mt-1 md:mt-2">互动 {{ top_friend_incoming.score }} 次</div></div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="section bg-gradient-4 px-6 pb-24 md:pb-0">
+            <div class="text-center animate-up w-full"><h1 class="text-5xl md:text-8xl font-bold mb-6 md:mb-10 leading-tight">这就是你的<br>2025</h1><p class="text-gray-400 text-lg md:text-3xl mb-10 md:mb-16">感谢在抽象派留下的每一个足迹</p><a href="/" class="bg-white text-black px-10 py-4 md:px-12 md:py-6 rounded-full font-bold text-lg md:text-3xl hover:scale-110 transition inline-block shadow-[0_0_30px_rgba(255,255,255,0.3)]">返回首页</a></div>
+        </div>
+    </div>
+
+    <script>
+        const wordList = {{ word_cloud_data | map(attribute='text') | list | tojson }};
+        if(wordList.length > 0) { TagCloud('#report-word-cloud', wordList, { radius: 150, maxSpeed: 'normal', initSpeed: 'normal', direction: 135, keep: true }); }
+    </script>
+</body>
+</html>

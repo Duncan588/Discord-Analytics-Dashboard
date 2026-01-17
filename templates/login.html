@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>登录 - Discord 档案馆</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>body { background-color: #36393f; color: #dcddde; font-family: "Microsoft YaHei", sans-serif; }</style>
+</head>
+<body class="h-screen flex items-center justify-center bg-[url('https://cdn.discordapp.com/attachments/915249444721668096/1065640382894981120/798836.jpg')] bg-cover bg-center px-4">
+    <div class="absolute inset-0 bg-black/60 backdrop-blur-sm"></div>
+
+    <div class="relative z-10 bg-[#2f3136] rounded-3xl shadow-2xl text-center w-full border border-[#202225]
+                p-8 md:p-10
+                max-w-lg md:max-w-md">
+
+        <h1 class="font-extrabold text-white mb-4
+                   text-4xl md:text-3xl">
+            🌊 抽象派档案馆
+        </h1>
+
+        <p class="text-gray-300 mb-10
+                  text-lg md:text-base">
+            请登录以查看服务器数据统计与个人报告
+        </p>
+
+        {% if error %}
+        <div class="mb-8 bg-red-500/10 border-2 border-red-500 text-red-400 rounded-2xl font-bold
+                    px-6 py-4 text-base
+                    md:px-4 md:py-3 md:text-sm">
+            ⚠️ {{ error }}
+        </div>
+        {% endif %}
+
+        <a href="/auth/discord" class="flex items-center justify-center gap-3 bg-[#5865f2] hover:bg-[#4752c4] text-white rounded-2xl font-bold transition transform hover:scale-105 shadow-xl
+                                       py-4 px-8 text-xl
+                                       md:py-3 md:px-6 md:text-base">
+            <svg class="w-8 h-8 md:w-6 md:h-6" fill="currentColor" viewBox="0 0 24 24"><path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037 3.996 3.996 0 0 0-.374.767 19.896 19.896 0 0 0-5.962 0 4.14 4.14 0 0 0-.375-.767.076.076 0 0 0-.079-.037 19.793 19.793 0 0 0-4.886 1.515.075.075 0 0 0-.03.028C1.488 9.53 1.056 14.542 2.054 19.508a.075.075 0 0 0 .028.04 19.893 19.893 0 0 0 5.992 3.03.078.078 0 0 0 .085-.027c.462-.63.874-1.295 1.225-1.99a.076.076 0 0 0-.041-.106 13.111 13.111 0 0 1-1.889-.903.075.075 0 0 1-.007-.124c.125-.094.248-.19.37-.29a.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.242.193.367.287a.075.075 0 0 1-.006.124 12.657 12.657 0 0 1-1.888.903.076.076 0 0 0-.04.106c.35.694.766 1.359 1.228 1.99a.075.075 0 0 0 .084.027 19.92 19.92 0 0 0 6.002-3.03.075.075 0 0 0 .028-.041c1.066-5.263.504-10.279-2.099-15.11a.076.076 0 0 0-.03-.028zM8.02 15.331c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.418 2.157-2.418 1.21 0 2.176 1.085 2.157 2.418 0 1.334-.956 2.419-2.157 2.419zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.418 2.157-2.418 1.21 0 2.176 1.085 2.157 2.418 0 1.334-.946 2.419-2.157 2.419z"/></svg>
+            使用 Discord 登录
+        </a>
+    </div>
+</body>
+</html>

@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ user.nickname }} 的个人档案</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/TagCloud@2.2.0/dist/TagCloud.min.js"></script>
+    <style>
+        body { background-color: #36393f; color: #dcddde; font-family: "Microsoft YaHei", sans-serif; }
+        .card { background-color: #2f3136; border-radius: 1rem; border: 1px solid #202225; }
+        .card:hover { border-color: #000; }
+        .reaction-pill { background-color: #2f3136; border: 1px solid #202225; border-radius: 0.25rem; display: inline-flex; align-items: center; padding: 2px 6px; margin-right: 4px; font-size: 0.75rem; color: #b9bbbe; font-family: monospace; }
+        .reaction-pill:hover { background-color: #36393f; border-color: #7289da; color: #fff; }
+        .emoji-tag { background: #2f3136; padding: 3px 6px; border-radius: 4px; border: 1px solid #202225; font-size: 10px; color: #b9bbbe; display: flex; align-items: center; gap: 4px; }
+        .btn-sort { @apply text-xs px-4 py-2 rounded-lg border border-gray-700 bg-[#2f3136] text-gray-400 transition font-bold; }
+        .btn-sort:hover { @apply bg-[#40444b] text-gray-200; }
+        .btn-sort.active { @apply border-[#5865f2] text-[#5865f2] bg-[#5865f2]/10; position: relative; }
+        .page-link { @apply px-3 py-1 rounded-md border border-gray-700 bg-[#2f3136] text-gray-400 text-sm hover:bg-[#40444b] transition; }
+        .page-link.active { @apply bg-[#5865f2] text-white border-[#5865f2]; }
+        input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 16px; width: 16px; border-radius: 50%; background: #5865f2; cursor: pointer; margin-top: -6px; }
+        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 4px; cursor: pointer; background: #40444b; border-radius: 2px; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        .tagcloud { display: inline-block; margin: 0 auto; font-size: 14px; }
+        .tagcloud--item { color: #fff; padding: 5px; cursor: pointer; }
+        .tagcloud--item:hover { color: #5865f2; }
+        .modal-bg { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); backdrop-filter: blur(5px); z-index: 50; display: flex; justify-content: center; align-items: center; }
+        .modal-content { background: #2f3136; padding: 20px; border-radius: 16px; width: 90%; max-width: 400px; max-height: 80vh; overflow-y: auto; border: 1px solid #202225; }
+    </style>
+</head>
+<body class="p-4 md:p-12 min-h-screen" x-data="{ tab: 'threads', chartMode: 'daily', rangeVal: 100, showViews: false }">
+    <div class="max-w-6xl mx-auto">
+        <div class="flex justify-between items-center mb-6">
+            <a href="/" class="text-[#00b0f4] hover:text-[#00b0f4]/80 inline-flex items-center gap-1 font-bold transition">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
+                返回首页
+            </a>
+
+            <div class="flex gap-3">
+                {% if current_user and current_user.id != user.user_id %}
+                <form action="/claim_account" method="post" onsubmit="return confirm('确认申请认领此账号？需管理员审核。');">
+                    <input type="hidden" name="target_id" value="{{ user.user_id }}">
+                    <button type="submit" class="bg-[#2f3136] border border-gray-600 hover:bg-gray-700 text-gray-300 px-3 py-2 rounded-xl text-sm transition">
+                        🔗 认领此账号
+                    </button>
+                </form>
+                {% endif %}
+
+                {% if current_user and current_user.id == user.user_id %}
+                <a href="/report" target="_blank" class="bg-gradient-to-r from-[#5865f2] to-[#eb459e] text-white px-3 py-1.5 md:px-4 md:py-2 rounded-xl font-bold text-xs md:text-sm shadow-lg hover:shadow-xl hover:scale-105 transition flex items-center gap-2">
+                    ✨ 生成我的年度报告
+                </a>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="card p-6 md:p-8 mb-8 bg-[#202225] shadow-lg rounded-2xl">
+            <div class="flex flex-col lg:flex-row gap-8">
+                <div class="flex-1 flex flex-col md:flex-row gap-6 items-center md:items-start border-b lg:border-b-0 lg:border-r border-gray-700 pb-6 lg:pb-0 lg:pr-6">
+                    <img src="{{ user.avatar_url }}" class="w-24 h-24 md:w-32 md:h-32 rounded-full border-4 border-[#2f3136] shadow-xl" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'">
+                    <div class="text-center md:text-left flex-1">
+                        <h1 class="text-2xl md:text-3xl font-extrabold text-white mb-2">{{ user.nickname if user.nickname else user.username }}</h1>
+                        <div class="text-gray-400 mb-4 flex flex-col gap-1">
+                            <span class="text-base md:text-lg">@{{ user.username }}</span>
+                            <span class="text-xs text-gray-500 bg-[#2f3136] px-2 py-1 rounded-lg inline-block w-max mx-auto md:mx-0 font-mono select-all">UID: {{ user.user_id }}</span>
+                        </div>
+                        <div class="flex gap-6 md:gap-8 justify-center md:justify-start mt-6">
+                            <div class="text-center"><div class="text-2xl md:text-3xl font-bold text-[#00b0f4]">{{ msg_count }}</div><div class="text-[10px] md:text-xs text-gray-500 font-bold uppercase tracking-wider mt-1">发言</div></div>
+                            <div class="text-center"><div class="text-2xl md:text-3xl font-bold text-[#eb459e]">{{ reaction_received_count }}</div><div class="text-[10px] md:text-xs text-gray-500 font-bold uppercase tracking-wider mt-1">获赞</div></div>
+                            <div class="text-center cursor-pointer group" @click="showViews = true">
+                                <div class="text-2xl md:text-3xl font-bold text-[#3ba55c] group-hover:underline">{{ view_count }}</div>
+                                <div class="text-[10px] md:text-xs text-gray-500 font-bold uppercase tracking-wider mt-1 group-hover:text-white">浏览</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="flex-1 flex flex-col justify-center space-y-6">
+                    <div class="flex items-center gap-4"><h4 class="text-xs font-bold text-gray-500 uppercase w-20 shrink-0 text-right">经常使用</h4><div class="flex flex-wrap gap-2">{% for e in top_emojis_given %}<div class="emoji-tag"><img src="{{ e.emoji_url }}" class="w-4 h-4 object-contain"><span>{{ e.c }}</span></div>{% endfor %}</div></div>
+                    <div class="flex items-center gap-4"><h4 class="text-xs font-bold text-[#eb459e] uppercase w-20 shrink-0 text-right">热门获赞</h4><div class="flex flex-wrap gap-2">{% for e in top_emojis_received %}<div class="emoji-tag"><img src="{{ e.emoji_url }}" class="w-4 h-4 object-contain"><span>{{ e.c }}</span></div>{% endfor %}</div></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+            <div class="card p-4 md:p-6 lg:col-span-1 bg-[#202225] shadow-md rounded-2xl">
+                <div class="flex flex-col gap-2 mb-4 border-b border-gray-700 pb-2">
+                    <div class="flex justify-between items-center">
+                        <h3 class="text-xs font-bold text-gray-400 uppercase tracking-widest">活跃度统计</h3>
+                        <div class="flex bg-[#2f3136] rounded-lg p-1">
+                            <button @click="chartMode = 'daily'" :class="{'bg-[#40444b] text-white shadow': chartMode === 'daily', 'text-gray-500 hover:text-gray-300': chartMode !== 'daily'}" class="text-xs px-2 py-1 rounded-md transition font-medium">📅 日期</button>
+                            <button @click="chartMode = 'hourly'" :class="{'bg-[#40444b] text-white shadow': chartMode === 'hourly', 'text-gray-500 hover:text-gray-300': chartMode !== 'hourly'}" class="text-xs px-2 py-1 rounded-md transition font-medium">⏰ 24h</button>
+                        </div>
+                    </div>
+                    </div>
+                <div class="h-48 w-full relative"><canvas id="chartDaily" x-show="chartMode === 'daily'"></canvas><canvas id="chartHourly" x-show="chartMode === 'hourly'" style="display: none;"></canvas></div>
+            </div>
+            <div class="card p-4 md:p-6 lg:col-span-2 bg-[#202225] shadow-md grid grid-cols-1 md:grid-cols-2 gap-6 rounded-2xl">
+                <div><h3 class="text-xs font-bold mb-4 text-[#3ba55c] uppercase tracking-widest border-b border-gray-700 pb-2">❤️ 在意你的 (他->你)</h3><div class="space-y-2">{% for u in interactions_incoming %}<a href="/user/{{ u.user_id }}" class="flex items-center justify-between p-2 hover:bg-[#2f3136] rounded-xl transition group"><div class="flex items-center"><img src="{{ u.avatar_url }}" class="w-8 h-8 rounded-full mr-3 grayscale group-hover:grayscale-0 transition" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'"><span class="text-sm text-gray-400 group-hover:text-white font-medium">{{ u.nickname or u.username }}</span></div><span class="text-[10px] bg-[#3ba55c]/10 text-[#3ba55c] border border-[#3ba55c]/30 px-2 py-0.5 rounded-full font-mono">{{ u.score }}次</span></a>{% endfor %}</div></div>
+                <div><h3 class="text-xs font-bold mb-4 text-[#5865f2] uppercase tracking-widest border-b border-gray-700 pb-2">💙 你在意的 (你->他)</h3><div class="space-y-2">{% for u in interactions_outgoing %}<a href="/user/{{ u.user_id }}" class="flex items-center justify-between p-2 hover:bg-[#2f3136] rounded-xl transition group"><div class="flex items-center"><img src="{{ u.avatar_url }}" class="w-8 h-8 rounded-full mr-3 grayscale group-hover:grayscale-0 transition" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'"><span class="text-sm text-gray-400 group-hover:text-white font-medium">{{ u.nickname or u.username }}</span></div><span class="text-[10px] bg-[#5865f2]/10 text-[#5865f2] border border-[#5865f2]/30 px-2 py-0.5 rounded-full font-mono">{{ u.score }}次</span></a>{% endfor %}</div></div>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+            <div class="card p-6 bg-[#202225] shadow-lg rounded-2xl lg:col-span-2 flex flex-col items-center justify-center overflow-hidden h-[300px]">
+                <h3 class="text-xs font-bold text-gray-400 uppercase tracking-widest mb-2 w-full text-left">个人词云 (3D)</h3>
+                <span id="user-word-cloud"></span>
+            </div>
+            <div class="card p-6 bg-[#202225] shadow-lg rounded-2xl h-[300px] overflow-y-auto no-scrollbar">
+                <h3 class="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4 border-b border-gray-700 pb-2">常用词排行 Top 10</h3>
+                <ul class="space-y-2">
+                    {% for word in word_cloud_data[:10] %}
+                    <li class="flex justify-between items-center p-2 hover:bg-[#2f3136] rounded transition">
+                        <span class="text-white font-bold">{{ word.text }}</span>
+                        <span class="text-xs text-gray-500 bg-[#2f3136] px-2 py-1 rounded">{{ word.weight }}次</span>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+
+        <div class="flex flex-col md:flex-row justify-between items-end border-b border-gray-700 mb-6 sticky top-0 bg-[#36393f] z-10 pt-4 pb-1">
+            <div class="flex gap-6">
+                <button @click="tab = 'threads'" :class="{ 'border-[#5865f2] text-white': tab === 'threads', 'border-transparent text-gray-500 hover:text-gray-300': tab !== 'threads' }" class="pb-3 border-b-2 font-bold transition text-base md:text-lg flex items-center gap-2">📢 发帖记录</button>
+                <button @click="tab = 'messages'" :class="{ 'border-[#5865f2] text-white': tab === 'messages', 'border-transparent text-gray-500 hover:text-gray-300': tab !== 'messages' }" class="pb-3 border-b-2 font-bold transition text-base md:text-lg flex items-center gap-2">📜 发言记录</button>
+            </div>
+            <div class="mb-3 space-x-2" id="sort-bar">
+                <button onclick="loadData('{{ current_page }}', 'hot')" class="btn-sort {{ 'active' if current_sort == 'hot' else '' }}">🔥 热度</button>
+                <button onclick="loadData('{{ current_page }}', 'time')" class="btn-sort {{ 'active' if current_sort == 'time' else '' }}">🕒 时间</button>
+            </div>
+        </div>
+
+        <div id="content-area">
+            <div x-show="tab === 'threads'" class="space-y-3 animate-fade-in-up">
+                {% for t in my_threads %}
+                <a href="https://discord.com/channels/{{ server_id }}/{{ t.thread_id }}" target="_blank" class="block bg-[#36393f] border border-[#202225] p-4 rounded-2xl hover:bg-[#202225] transition group">
+                    <div class="flex gap-3 md:gap-4">
+                        <div class="shrink-0 pt-1"><img src="{{ t.op_user.avatar_url }}" class="w-10 h-10 rounded-full border-2 border-[#2f3136] group-hover:border-[#5865f2] transition" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'"></div>
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-start justify-between mb-1">
+                                <h3 class="font-bold text-gray-200 text-sm md:text-base leading-tight truncate pr-2 group-hover:text-[#5865f2] transition">{{ t.name }}</h3>
+                                <span class="text-[10px] text-gray-500 shrink-0 mt-0.5">{{ t.created_at | datetimeformat }}</span>
+                            </div>
+                            <div class="text-xs text-gray-400 mb-2">{{ t.op_user.nickname or t.op_user.username }}</div>
+                            <p class="text-xs md:text-sm text-gray-300 line-clamp-2 mb-3 font-normal">{{ t.first_content }}</p>
+                            <div class="flex items-center gap-3">
+                                <div class="flex items-center gap-1.5 bg-[#2f3136] px-2 py-1 rounded text-xs text-gray-400 group-hover:bg-[#40444b] transition">💬 {{ t.reply_count }}</div>
+                                {% if t.top_emoji_url %}
+                                <div class="flex items-center gap-1.5 bg-[#2f3136] px-2 py-1 rounded text-xs text-gray-400 group-hover:bg-[#40444b] transition"><img src="{{ t.top_emoji_url }}" class="w-3.5 h-3.5"><span>{{ t.top_emoji_count }}</span></div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </a>
+                {% else %}
+                <div class="text-gray-500 p-8 text-center border border-dashed border-gray-700 rounded-2xl">该用户暂无发布帖子记录。</div>
+                {% endfor %}
+
+                {% if total_thread_pages > 1 %}
+                <div class="flex justify-center gap-2 mt-6 flex-wrap">{% for p in range(1, total_thread_pages + 1) %}<button onclick="loadData('{{ p }}', '{{ current_sort }}')" class="page-link {{ 'active' if p == current_page else '' }}">{{ p }}</button>{% endfor %}</div>
+                {% endif %}
+                <div class="text-center text-xs text-gray-600 mt-4 mb-8">已无更多数据</div>
+            </div>
+
+            <div x-show="tab === 'messages'" class="space-y-3 animate-fade-in-up" style="display: none;">
+                {% for msg in messages %}
+                <a href="https://discord.com/channels/{{ server_id }}/{{ msg.thread_id }}/{{ msg.message_id }}" target="_blank" class="block bg-[#36393f] border border-[#202225] p-4 rounded-2xl hover:bg-[#32353b] hover:border-gray-600 transition group relative no-underline shadow-sm">
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="text-[10px] text-gray-400 bg-[#2f3136] px-2 py-0.5 rounded-md font-medium border border-gray-700/50"># {{ msg.thread_name }}</span>
+                        <span class="text-xs text-gray-500 font-mono">{{ msg.timestamp | datetimeformat }}</span>
+                    </div>
+                    <div class="text-gray-300 whitespace-pre-wrap leading-relaxed mb-3 text-sm font-normal">{{ msg.content }}</div>
+                    {% if msg.detailed_reactions %}
+                    <div class="flex flex-wrap gap-1">{% for r in msg.detailed_reactions %}<div class="reaction-pill"><img src="{{ r.emoji_url }}" class="w-3.5 h-3.5 mr-1"><span>{{ r.count }}</span></div>{% endfor %}</div>
+                    {% endif %}
+                </a>
+                {% endfor %}
+
+                {% if total_msg_pages > 1 %}
+                <div class="flex justify-center gap-2 mt-6 flex-wrap">{% for p in range(1, total_msg_pages + 1) %}<button onclick="loadData('{{ p }}', '{{ current_sort }}')" class="page-link {{ 'active' if p == current_page else '' }}">{{ p }}</button>{% endfor %}</div>
+                {% endif %}
+                <div class="text-center text-xs text-gray-600 mt-4 mb-8">已无更多数据</div>
+            </div>
+        </div>
+    </div>
+
+    <div x-show="showViews" class="modal-bg" style="display: none;" x-transition>
+        <div class="modal-content" @click.away="showViews = false">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-bold text-white">最近访客</h3>
+                <button @click="showViews = false" class="text-gray-400 hover:text-white">✕</button>
+            </div>
+            <div class="space-y-3">
+                {% for v in recent_viewers %}
+                <div class="flex items-center gap-3 p-2 bg-[#202225] rounded-xl">
+                    <img src="{{ v.viewer_avatar }}" class="w-10 h-10 rounded-full" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'">
+                    <div>
+                        <div class="text-sm font-bold text-white">{{ v.viewer_name }}</div>
+                        <div class="text-xs text-gray-500">{{ v.timestamp | raw_datetime }}</div>
+                    </div>
+                </div>
+                {% else %}
+                <div class="text-gray-500 text-center py-4">暂无访客记录</div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function loadData(page, sort) {
+            const url = `/user/{{ user.user_id }}?page=${page}&sort=${sort}`;
+            document.getElementById('content-area').style.opacity = '0.5';
+            fetch(url).then(response => response.text()).then(html => {
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(html, 'text/html');
+                document.getElementById('content-area').innerHTML = doc.getElementById('content-area').innerHTML;
+                document.getElementById('sort-bar').innerHTML = doc.getElementById('sort-bar').innerHTML;
+                document.getElementById('content-area').style.opacity = '1';
+            }).catch(err => console.error('Failed to load:', err));
+        }
+
+        // 3D 词云
+        const userTexts = {{ word_cloud_data | map(attribute='text') | list | tojson }};
+        if(userTexts.length > 0) {
+            TagCloud('#user-word-cloud', userTexts, { radius: 120, maxSpeed: 'normal', initSpeed: 'normal', direction: 135, keep: true });
+        }
+
+        const chartOptions = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, interaction: { intersect: false, mode: 'index' }, scales: { y: { beginAtZero: true, grid: { color: '#2f3136' }, ticks: { color: '#72767d', font: { size: 10, family: 'monospace' } } }, x: { grid: { display: false }, ticks: { color: '#72767d', font: { size: 10, family: 'monospace' } } } } };
+        const ctxDaily = document.getElementById('chartDaily').getContext('2d');
+        const rawDataDaily = {{ chart_daily | tojson }};
+        let dailyChart = new Chart(ctxDaily, { type: 'line', data: { labels: rawDataDaily.map(d => d.day.substr(5)), datasets: [{ label: '发言数', data: rawDataDaily.map(d => d.c), borderColor: '#00b0f4', backgroundColor: 'rgba(0, 176, 244, 0.1)', borderWidth: 2, tension: 0.3, pointRadius: 0, hitRadius: 10, fill: true }] }, options: chartOptions });
+
+        // 【修正】移除滑块更新函数
+
+        const ctxHourly = document.getElementById('chartHourly').getContext('2d'); const dataHourly = {{ chart_hourly | tojson }}; new Chart(ctxHourly, { type: 'bar', data: { labels: dataHourly.map(d => d.hour), datasets: [{ label: '时段活跃度', data: dataHourly.map(d => d.c), backgroundColor: '#5865f2', borderRadius: 3, hoverBackgroundColor: '#4752c4' }] }, options: chartOptions });
+    </script>
+</body>
+</html>

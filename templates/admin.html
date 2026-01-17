@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>管理后台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-[#36393f] text-white p-8">
+    <div class="max-w-4xl mx-auto">
+        <div class="flex justify-between items-center mb-8">
+            <h1 class="text-2xl font-bold">🛡️ 管理员控制台</h1>
+            <a href="/" class="text-gray-400 hover:text-white">返回首页</a>
+        </div>
+
+        <div class="bg-[#2f3136] rounded-xl p-6 shadow-lg mb-8">
+            <h2 class="text-xl font-bold mb-4 text-yellow-500">待审核的认领请求</h2>
+            {% if pending_requests %}
+            <div class="space-y-4">
+                {% for req in pending_requests %}
+                <div class="flex items-center justify-between bg-[#202225] p-4 rounded-lg border border-gray-700">
+                    <div class="flex items-center gap-4">
+                        <img src="{{ req.req_avatar }}" class="w-10 h-10 rounded-full" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'">
+                        <div>
+                            <div class="font-bold">{{ req.req_name }} <span class="text-gray-500 text-xs">({{ req.requester_id }})</span></div>
+                            <div class="text-sm text-gray-400">请求认领账号: <span class="text-white font-bold">{{ req.target_name }}</span> ({{ req.target_id }})</div>
+                            <div class="text-xs text-gray-500">{{ req.created_at }}</div>
+                        </div>
+                    </div>
+                    <div class="flex gap-2">
+                        <a href="/admin/approve/{{ req.id }}" class="bg-green-600 hover:bg-green-700 px-3 py-1 rounded text-sm transition">通过</a>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="text-gray-500 text-center py-4">暂无待审核请求</div>
+            {% endif %}
+        </div>
+
+        <div class="bg-[#2f3136] rounded-xl p-6 shadow-lg mb-8">
+            <h2 class="text-xl font-bold mb-4 text-green-500">已生效的合并关系</h2>
+            <table class="w-full text-left text-sm text-gray-400">
+                <thead class="border-b border-gray-700">
+                    <tr><th class="pb-2">旧账号 (Target)</th><th class="pb-2">主账号 (Parent)</th><th class="pb-2">操作</th></tr>
+                </thead>
+                <tbody>
+                    {% for m in active_merges %}
+                    <tr class="border-b border-gray-700/50">
+                        <td class="py-2 font-mono">{{ m.target_id }}</td>
+                        <td class="py-2 font-mono text-white">{{ m.parent_name }} ({{ m.parent_id }})</td>
+                        <td class="py-2">
+                            <a href="/admin/unmerge/{{ m.target_id }}" class="text-red-400 hover:underline" onclick="return confirm('确定要解除此合并吗？')">解除关系</a>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="3" class="py-4 text-center text-gray-500">暂无合并记录</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="border-t border-gray-700 pt-8 mt-12">
+            <h3 class="text-red-500 font-bold mb-4">⚠️ 危险操作区</h3>
+            <a href="/admin/reset_all_claims" onclick="return confirm('警告：这将清空所有【待审核】和【已生效】的账号合并数据！此操作不可逆！\n\n确定要继续吗？')" class="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg font-bold shadow-lg transition">
+                💥 清空所有认领与合并数据
+            </a>
+        </div>
+    </div>
+</body>
+</html>

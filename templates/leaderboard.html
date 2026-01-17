@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>完整排行榜</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>body { background-color: #36393f; color: #dcddde; }</style>
+</head>
+<body class="p-8">
+    <div class="max-w-4xl mx-auto">
+        <div class="flex justify-between items-center mb-8">
+            <h1 class="text-3xl font-bold text-white">🏆 活跃成员排行榜 (Top 200)</h1>
+            <a href="/" class="text-[#00b0f4] hover:underline">返回首页</a>
+        </div>
+
+        <div class="bg-[#2f3136] rounded-xl shadow-lg overflow-hidden">
+            <table class="w-full text-left">
+                <thead class="bg-[#202225] text-gray-400 uppercase text-xs">
+                    <tr>
+                        <th class="p-4 w-16 text-center">#</th>
+                        <th class="p-4">用户</th>
+                        <th class="p-4 text-right">消息数</th>
+                        <th class="p-4">常用表情</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-700">
+                    {% for u in users %}
+                    <tr class="hover:bg-[#36393f] transition">
+                        <td class="p-4 text-center font-mono font-bold text-xl
+                            {% if loop.index == 1 %}text-yellow-400{% elif loop.index == 2 %}text-gray-300{% elif loop.index == 3 %}text-orange-400{% endif %}">
+                            {{ loop.index }}
+                        </td>
+                        <td class="p-4">
+                            <a href="/user/{{ u.user_id }}" class="flex items-center gap-3 group">
+                                <img src="{{ u.avatar_url }}" class="w-10 h-10 rounded-full group-hover:ring-2 ring-[#5865f2]">
+                                <div>
+                                    <div class="font-bold text-white group-hover:text-[#5865f2]">{{ u.nickname or u.username }}</div>
+                                    <div class="text-xs text-gray-500">@{{ u.username }}</div>
+                                </div>
+                            </a>
+                        </td>
+                        <td class="p-4 text-right font-mono text-lg text-white">{{ u.msg_count }}</td>
+                        <td class="p-4">
+                            <div class="flex gap-2">
+                                {% for e in u.top_emojis %}
+                                <div class="bg-[#202225] px-2 py-1 rounded border border-gray-700 flex items-center gap-1" title="{{ e.emoji_name }}">
+                                    <img src="{{ e.emoji_url }}" class="w-4 h-4">
+                                    <span class="text-xs text-gray-500">{{ e.c }}</span>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html>
