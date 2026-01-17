@@ -28,15 +28,20 @@
     * Discord OAuth2 Login integration.
     * Admin panel for merging user accounts (e.g., old/new accounts).
 
+
 ### 📸 Screenshots
 
-| **Dashboard Home** | **User Profile** |
-|:---:|:---:|
-| ![Dashboard Home](https://via.placeholder.com/600x300?text=Insert+Dashboard+Home+Screenshot) | ![User Profile](https://via.placeholder.com/600x300?text=Insert+User+Profile+Screenshot) |
+| **Home / 首页** | **User Profile / 用户** | **Admin Panel / 管理员** |
+|:---:|:---:|:---:|
+| <img src="%E7%95%8C%E9%9D%A2%E6%BC%94%E7%A4%BA/Home.png" height="200px"> | <img src="%E7%95%8C%E9%9D%A2%E6%BC%94%E7%A4%BA/User%20Profile.png" height="200px"> | <img src="%E7%95%8C%E9%9D%A2%E6%BC%94%E7%A4%BA/admin.png" height="200px"> |
 
-| **Activity Charts** | **Admin Panel** |
-|:---:|:---:|
-| ![Activity Charts](https://via.placeholder.com/600x300?text=Insert+Activity+Charts+Screenshot) | ![Admin Panel](https://via.placeholder.com/600x300?text=Insert+Admin+Panel+Screenshot) |
+| **Login / 登录** | **Report / 报告** | **Report 2 / 报告 2** |
+|:---:|:---:|:---:|
+| <img src="%E7%95%8C%E9%9D%A2%E6%BC%94%E7%A4%BA/Login.png" height="200px"> | <img src="%E7%95%8C%E9%9D%A2%E6%BC%94%E7%A4%BA/Report1.png" height="200px"> | <img src="%E7%95%8C%E9%9D%A2%E6%BC%94%E7%A4%BA/Report2.png" height="200px"> |
+
+| **Report 3 / 报告 3** | **Report 4 / 报告 4** | **Report 5 / 报告 5** |
+|:---:|:---:|:---:|
+| <img src="%E7%95%8C%E9%9D%A2%E6%BC%94%E7%A4%BA/Report3.png" height="200px"> | <img src="%E7%95%8C%E9%9D%A2%E6%BC%94%E7%A4%BA/Report4.png" height="200px"> | <img src="%E7%95%8C%E9%9D%A2%E6%BC%94%E7%A4%BA/Report5.png" height="200px"> |
 
 ### Prerequisites
 1.  Python 3.8+
@@ -146,13 +151,17 @@ Visit `http://localhost:5000` in your browser.
 
 ### 📸 界面展示
 
-| **首页概览** | **用户个人档案** |
-|:---:|:---:|
-| ![Dashboard Home]([https://via.placeholder.com/600x300?text=%E9%A6%96%E9%A1%B5%E6%88%AA%E5%9B%BE%E4%BD%8D%E7%BD%AE](https://github.com/Duncan588/Discord-Analytics-Dashboard/blob/0f3964a19a683ec98915fec3e9d5878943f0f5e7/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-01-17%20135839.png)) | ![User Profile]([https://via.placeholder.com/600x300?text=%E4%B8%AA%E4%BA%BA%E6%A1%A3%E6%A1%88%E6%88%AA%E5%9B%BE%E4%BD%8D%E7%BD%AE](https://github.com/Duncan588/Discord-Analytics-Dashboard/blob/main/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-01-17%20135907.png)) |
+| **Home / 首页** | **User Profile / 用户** | **Admin Panel / 管理员** |
+|:---:|:---:|:---:|
+| <img src="%E7%95%8C%E9%9D%A2%E6%BC%94%E7%A4%BA/Home.png" height="200px"> | <img src="%E7%95%8C%E9%9D%A2%E6%BC%94%E7%A4%BA/User%20Profile.png" height="200px"> | <img src="%E7%95%8C%E9%9D%A2%E6%BC%94%E7%A4%BA/admin.png" height="200px"> |
 
-| **活跃度图表** | **管理员后台** |
-|:---:|:---:|
-| ![Activity Charts]([https://via.placeholder.com/600x300?text=%E6%B4%BB%E8%B7%83%E5%BA%A6%E5%9B%BE%E8%A1%A8%E4%BD%8D%E7%BD%AE](https://github.com/Duncan588/Discord-Analytics-Dashboard/blob/0f3964a19a683ec98915fec3e9d5878943f0f5e7/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-01-17%20135810.png)) | ![Admin Panel]([https://via.placeholder.com/600x300?text=%E7%AE%A1%E7%90%86%E5%91%98%E5%90%8E%E5%8F%B0%E4%BD%8D%E7%BD%AE](https://github.com/Duncan588/Discord-Analytics-Dashboard/blob/0f3964a19a683ec98915fec3e9d5878943f0f5e7/%E5%B1%8F%E5%B9%95%E6%88%AA%E5%9B%BE%202026-01-17%20135727.png)) |
+| **Login / 登录** | **Report / 报告** | **Report 2 / 报告 2** |
+|:---:|:---:|:---:|
+| <img src="%E7%95%8C%E9%9D%A2%E6%BC%94%E7%A4%BA/Login.png" height="200px"> | <img src="%E7%95%8C%E9%9D%A2%E6%BC%94%E7%A4%BA/Report1.png" height="200px"> | <img src="%E7%95%8C%E9%9D%A2%E6%BC%94%E7%A4%BA/Report2.png" height="200px"> |
+
+| **Report 3 / 报告 3** | **Report 4 / 报告 4** | **Report 5 / 报告 5** |
+|:---:|:---:|:---:|
+| <img src="%E7%95%8C%E9%9D%A2%E6%BC%94%E7%A4%BA/Report3.png" height="200px"> | <img src="%E7%95%8C%E9%9D%A2%E6%BC%94%E7%A4%BA/Report4.png" height="200px"> | <img src="%E7%95%8C%E9%9D%A2%E6%BC%94%E7%A4%BA/Report5.png" height="200px"> |
 
 ### 前置要求
 1.  Python 3.8 或更高版本。
