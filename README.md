@@ -18,18 +18,6 @@ If you find this project valuable you are welcome to support it with a cryptocur
 0x6b40b502842dd1b1b094a32e4c4e2279f6326078
 ```
 
-可收费进行部署
-需要联系 Discord
->https://discord.gg/VQVJpQznfc
->30USDT/server
----
-
-Paid deployment service available
-Contact via Discord
->https://discord.gg/VQVJpQznfc
->30USDT/server
-
-
 ---
 
 [English](#english) | [中文](#chinese)
