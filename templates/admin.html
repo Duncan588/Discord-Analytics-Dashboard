@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>管理后台</title>
+<meta name="discord-client-id" content="{{ discord_client_id }}">
+<script src="/static/js/discord-activity.js?v=20260821-8" defer></script>
+<script src="/static/js/i18n.js?v=20260821-3" defer></script>
+<link rel="stylesheet" href="/static/css/fallback.css?v=20260821-1">
+<link rel="stylesheet" href="/static/css/tailwind-static.css?v=20260821-1">
+<style>
+  body{background:#36393f;color:#fff;font-family:"Microsoft YaHei",sans-serif}
+  .btn{display:inline-flex;align-items:center;justify-content:center;gap:.4rem;min-height:42px;min-width:108px;padding:.65rem 1rem;border-radius:.75rem;font-weight:700;font-size:.875rem;line-height:1.2;white-space:nowrap;transition:.15s;box-sizing:border-box}@media(max-width:639px){.btn{width:100%;min-width:0}.task-actions{grid-template-columns:1fr 1fr}.task-title{display:flex;flex-wrap:wrap;gap:.35rem;align-items:center}.task-actions form:last-child:nth-child(odd){grid-column:1/-1}}
+  .btn:active{transform:scale(.98)}
+  .btn-primary{background:#5865f2;color:#fff}.btn-primary:hover{background:#4752c4}
+  .btn-secondary{background:#202225;color:#dcddde;border:1px solid #40444b}.btn-secondary:hover{background:#40444b;color:#fff}
+  .btn-danger{background:#ed4245;color:#fff}.btn-danger:hover{background:#c73537}
+  .btn-success{background:#3ba55c;color:#fff}.btn-success:hover{background:#2d7d46}
+  .btn-warning{background:#faa61a;color:#202225}.btn-warning:hover{background:#d99000}
+  .field{width:100%;min-height:42px;background:#202225;border:1px solid #40444b;border-radius:.75rem;padding:.65rem .8rem;color:#fff;outline:none}
+  .field:focus{border-color:#5865f2}
+  .section{background:linear-gradient(145deg,#2f3136,#292b2f);border:1px solid #40444b;border-radius:1rem;padding:1rem;box-shadow:0 10px 30px rgba(0,0,0,.12)}
+  .config-card{background:#202225;border:1px solid #40444b;border-radius:1rem;padding:1rem}
+  .config-label{font-size:.72rem;color:#8f9297;font-weight:700;text-transform:uppercase;letter-spacing:.04em;margin-bottom:.4rem}
+  .hint{font-size:.72rem;color:#72767d;line-height:1.45}
+  @media(min-width:640px){.section{padding:1.5rem}}
+</style>
+</head>
+<body class="min-h-screen p-2 sm:p-4 md:p-8">
+<div class="w-full max-w-6xl mx-auto space-y-4 sm:space-y-6">
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% if messages %}
+{% set has_error = messages | selectattr(0, 'equalto', 'error') | list | length > 0 %}
+<div id="flash-modal" class="fixed inset-0 z-[200] flex items-center justify-center bg-black/70 backdrop-blur-sm p-3">
+  <div class="w-full max-w-xl rounded-2xl border {{ 'border-red-500/60' if has_error else 'border-green-500/60' }} bg-[#2f3136] shadow-2xl p-4 sm:p-5">
+    <div class="flex items-start justify-between gap-3 mb-3">
+      <h3 class="text-base sm:text-lg font-bold {{ 'text-red-300' if has_error else 'text-green-300' }}">{{ '机器人权限检查失败' if has_error else '操作完成' }}</h3>
+      <button type="button" onclick="document.getElementById('flash-modal').remove()" class="btn btn-secondary !min-h-9 !w-9 !p-0">×</button>
+    </div>
+    <div class="space-y-2 text-sm text-gray-200 whitespace-pre-line">{% for category, message in messages %}<div>{{ message }}</div>{% endfor %}</div>
+    {% if has_error %}<p class="mt-4 text-xs text-gray-500">请给机器人授予权限、邀请机器人加入服务器，或取消选择后重新保存。</p>{% endif %}
+    <button type="button" onclick="document.getElementById('flash-modal').remove()" class="btn btn-primary w-full sm:w-auto sm:min-w-28 mt-5">知道了</button>
+  </div>
+</div>
+{% endif %}{% endwith %}
+
+<header class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+  <div class="min-w-0">
+    <h1 class="text-xl sm:text-2xl font-bold truncate">管理后台</h1>
+    <p class="text-gray-500 mt-1 text-sm">下载、数据导入与账号合并管理</p>
+  </div>
+  <details class="relative self-end sm:self-auto shrink-0">
+    <summary class="list-none cursor-pointer"><img src="{{ current_user.avatar }}" class="w-10 h-10 rounded-full border border-[#5865f2]"></summary>
+    <div class="absolute right-0 mt-2 w-40 p-2 rounded-xl bg-[#202225] shadow-xl z-50">
+      <a href="/me" class="block p-2 hover:bg-[#36393f] rounded">个人主页</a>
+      <a href="/admin" class="block p-2 hover:bg-[#36393f] rounded">Admin</a>
+      <button type="button" data-language-toggle class="block w-full text-left p-2 hover:bg-[#36393f] rounded">English</button>
+      <a href="/logout" class="block p-2 text-red-300 hover:bg-[#36393f] rounded">退出登录</a>
+    </div>
+  </details>
+</header>
+
+{% if admin_level == 1 %}
+<section class="section">
+  <h2 class="text-lg font-bold mb-2">白名单用户</h2>
+  <p class="text-gray-500 text-sm mb-4">白名单用于 JSON 导入和下载配额管理；普通用户查看已收录数据不需要白名单。</p>
+  <form method="post" action="/admin/whitelist/add" class="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2 mb-5">
+    <input name="user_id" required pattern="[0-9]+" placeholder="Discord User ID" class="field">
+    <button class="btn btn-primary w-full sm:w-auto">添加白名单</button>
+  </form>
+  <div class="space-y-2">
+  {% for w in whitelist %}
+    <div class="bg-[#202225] rounded-xl p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      <div class="min-w-0"><b>{{ w.username }}</b><span class="text-gray-500 font-mono text-xs ml-2 break-all">{{ w.user_id }}</span></div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:w-auto">
+        <form method="post" action="/admin/quota" class="flex gap-2">
+          <input type="number" min="1" max="100" name="quota" value="{{ w.quota }}" class="field !w-24">
+          <input type="hidden" name="user_id" value="{{ w.user_id }}">
+          <button class="btn btn-success flex-1 sm:flex-none">保存配额</button>
+        </form>
+        <form method="post" action="/admin/whitelist/delete/{{ w.user_id }}" onsubmit="return confirm('确定删除该白名单用户？');">
+          <button class="btn btn-danger w-full">删除</button>
+        </form>
+      </div>
+    </div>
+  {% else %}<p class="text-gray-500">暂无白名单用户</p>{% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<section class="section">
+  <h2 class="text-lg font-bold mb-2">我的下载机器人</h2>
+  <p class="text-gray-500 text-sm mb-4">最多添加 5 个自定义下载机器人；每个服务器还可以额外启用 1 个默认下载机器人，因此单个任务最多 6 个机器人并行。</p>
+  <form method="post" action="/admin/bot/add" class="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2 mb-4">
+    <input name="token" required type="password" placeholder="Discord Bot Token" class="field">
+    <button class="btn btn-primary w-full sm:w-auto">验证并添加</button>
+  </form>
+  <div class="space-y-2">
+  {% for b in bots %}
+    <div class="bg-[#202225] rounded-xl p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+      <span class="truncate">{{ b.name }} <span class="text-gray-600">#{{ b.id }}</span></span>
+      <form method="post" action="/admin/bot/delete/{{ b.id }}" onsubmit="return confirm('确定删除这个下载机器人？');">
+        <button class="btn btn-danger w-full sm:w-auto">删除机器人</button>
+      </form>
+    </div>
+  {% else %}<p class="text-gray-500">暂无下载机器人。</p>{% endfor %}
+  </div>
+</section>
+
+<section class="section">
+  <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-5">
+    <div><h2 class="text-lg font-bold">Discord 数据下载配置</h2><p class="text-gray-500 text-sm mt-1">一个机器人一次只下载一个帖子；多个机器人可以同时下载不同帖子。扫描机器人完成扫描后立即加入下载池。</p></div>
+    <span class="text-xs text-[#8ea1ff] bg-[#5865f2]/10 border border-[#5865f2]/20 rounded-lg px-3 py-2">并行下载</span>
+  </div>
+  <form method="post" action="/admin/download-server" class="space-y-3 mb-5">
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div class="config-card">
+        <div class="config-label">服务器</div>
+        <div class="flex items-center gap-2">
+          <img id="guildIcon" src="https://cdn.discordapp.com/embed/avatars/0.png" class="w-10 h-10 rounded-xl object-cover shrink-0" alt="服务器图标">
+          <select id="guild" name="guild_id" required class="field flex-1"><option>正在读取服务器…</option></select>
+        </div>
+      </div>
+      <div class="config-card">
+        <div class="config-label">Forum</div>
+        <select id="forum" name="forum_channel_id" required class="field"><option>请先选择服务器</option></select>
+      </div>
+    </div>
+
+    <div class="config-card">
+      <div class="config-label">机器人</div>
+      <div class="flex flex-wrap items-center gap-x-5 gap-y-3 text-sm">
+        <label class="inline-flex items-center gap-2 text-[#8ea1ff] font-semibold"><input type="checkbox" name="use_default_bot" value="1">默认下载机器人</label>
+        {% for b in bots %}<label class="inline-flex items-center gap-2"><input type="checkbox" name="bot_ids" value="{{ b.id }}">{{ b.name }}</label>{% endfor %}
+      </div>
+      <p class="hint mt-2">扫描时使用第一个选中的机器人。其余机器人立即进入下载池；扫描完成后第一个机器人也开始下载。</p>
+    </div>
+
+    <div class="config-card border-[#5865f2]/30">
+      <div class="config-label text-[#8ea1ff]">服务器数据更新</div>
+      <label class="flex items-center gap-3 cursor-pointer">
+        <input type="checkbox" name="update_enabled" value="1" class="w-5 h-5">
+        <span class="font-semibold">服务器数据更新</span>
+      </label>
+      <p class="hint mt-2">已有数据库时，机器人扫描帖子 ID 和最后活跃时间；ID 与最后活跃时间完全相同的帖子跳过，只下载新帖子或活跃时间发生变化的帖子。</p>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <div class="config-card">
+        <div class="config-label">机器人下载速度</div>
+        <div class="flex items-center gap-2">
+          <input name="download_interval_ms" type="number" min="0" max="60000" step="1" value="0" class="field" inputmode="numeric">
+          <span class="text-xs text-gray-500 shrink-0">毫秒</span>
+        </div>
+        <p class="hint mt-2">控制同一个机器人完成一个帖子后，开始下一个帖子前等待多久。0 表示不额外等待。多个机器人仍然可以同时下载。</p>
+      </div>
+      <div class="config-card">
+        <div class="config-label">任务调度检查间隔</div>
+        <div class="flex items-center gap-2">
+          <input name="scheduler_interval" type="number" min="50" max="60000" step="1" value="250" class="field" inputmode="numeric">
+          <span class="text-xs text-gray-500 shrink-0">毫秒</span>
+        </div>
+        <p class="hint mt-2">只控制下载任务队列检查频率，不控制 Discord 下载速度。这里只允许数字输入，没有滑块。</p>
+      </div>
+    </div>
+
+    <button class="btn btn-primary w-full">保存配置</button>
+  </form>
+
+  <div class="space-y-2">
+  {% for d in download_servers %}
+    <div class="bg-[#202225] rounded-xl p-3 sm:p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+      <div class="min-w-0 flex items-center gap-3">
+        <img src="{{ d.icon_url or 'https://cdn.discordapp.com/embed/avatars/0.png' }}" class="w-9 h-9 rounded-xl shrink-0" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'">
+        <div class="min-w-0"><b class="block truncate">{{ d.server_display_name or d.guild_name }}</b><div class="text-gray-300 text-sm mt-1 truncate">{{ d.forum_name }}</div><div class="text-gray-500 text-xs mt-1 truncate">{{ d.bot_names|join('、') }} · 下载间隔 {{ d.download_interval_ms or 0 }} 毫秒 · 调度检查 {{ (d.scheduler_interval if d.scheduler_interval and d.scheduler_interval >= 50 else ((d.scheduler_interval or 1) * 1000)) }} 毫秒 · {{ '服务器数据更新' if d.update_enabled else '更新关闭' }}</div></div>
+      </div>
+      <form method="post" action="/admin/download-server/delete/{{ d.id }}" onsubmit="return confirm('确定删除这个下载配置？不会删除已经导入的分析数据库。');">
+        <button class="btn btn-danger w-full md:w-auto">删除配置</button>
+      </form>
+    </div>
+  {% else %}<p class="text-gray-500">暂无下载配置。</p>{% endfor %}
+  </div>
+</section>
+
+<section class="section">
+  <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
+    <div><h2 class="text-lg font-bold">服务器成员名单</h2><p class="text-gray-500 text-sm mt-1">成员名单由白名单管理机器人自动维护。创建下载任务时会自动加入更新队列，新成员加入服务器后会实时写入数据库。</p></div>
+    <span class="text-xs text-gray-500 bg-[#202225] rounded-lg px-3 py-2">由 whitelist_bot.py 自动维护</span>
+  </div>
+  <form method="post" action="/admin/member-sync" class="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2">
+    <select name="guild_id" required class="field">
+      {% for d in download_servers %}<option value="{{ d.guild_id }}">{{ d.server_display_name or d.guild_name }} · {{ d.forum_name }}</option>{% endfor %}
+      {% if not download_servers %}<option value="">请先配置下载服务器</option>{% endif %}
+    </select>
+    <button class="btn btn-secondary w-full sm:w-auto">立即更新成员名单</button>
+  </form>
+</section>
+
+<section class="section">
+  <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mb-4">
+    <div><h2 class="text-lg font-bold">下载任务</h2><p class="text-gray-500 text-sm mt-1">支持暂停、继续和彻底删除。继续下载会保留已完成帖子，只重新处理未完成帖子。启用服务器更新后，新任务会比较帖子 ID 和最后活跃时间，只下载新增或发生变化的帖子。</p></div>
+    {% if admin_level == 2 %}<span class="text-xs text-[#8ea1ff] bg-[#5865f2]/10 rounded-lg px-3 py-2 shrink-0">同时下载 {{ user_quota }} 个服务器</span>{% endif %}
+  </div>
+  <form method="post" action="/admin/download-task" class="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2 mb-5">
+    <select name="config_id" required class="field">
+      {% for d in download_servers %}<option value="{{ d.id }}">{{ d.server_display_name or d.guild_name }} · {{ d.forum_name }} · {{ d.bot_names|join('、') }}</option>
+      {% else %}<option value="">请先配置下载 Forum</option>{% endfor %}
+    </select>
+    <button class="btn btn-primary w-full sm:w-auto">创建下载任务</button>
+  </form>
+
+  <div id="downloadTasks" class="space-y-3">
+  {% for t in tasks %}
+    <div class="bg-[#202225] rounded-xl p-3 sm:p-4" data-task-id="{{ t.id }}" data-status="{{ t.status }}">
+      <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+        <div class="min-w-0">
+          <div class="task-title"><b>任务 #{{ t.id }}</b><span class="text-gray-200 ml-2">{{ t.server_display_name }}</span><span class="text-gray-400 ml-2">{{ t.forum_display_name }}</span></div>
+          <div class="text-xs text-gray-600 mt-1">创建者：{{ t.creator_name }}</div>
+        </div>
+        <div class="task-actions grid grid-cols-1 sm:grid-cols-3 gap-2 w-full sm:w-auto shrink-0"></div>
+      </div>
+      <div class="mt-3 h-2 bg-[#36393f] rounded-full overflow-hidden"><div class="task-progress h-full bg-[#5865f2]" style="width:{{ ((t.completed/t.total*100) if t.total else 0)|round(1) }}%"></div></div>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3 text-xs">
+        <div class="bg-[#202225] rounded-lg p-2"><div class="text-gray-500">阶段</div><div class="task-phase font-bold text-gray-200">{{ t.phase or t.status }}</div></div>
+        <div class="bg-[#202225] rounded-lg p-2"><div class="text-gray-500">已下载 / 总数</div><div class="task-count font-bold text-gray-200">{% if t.phase == 'scanning' %}{{ t.scan_processed or 0 }} 已扫描{% else %}{{ t.completed }}/{{ t.total }}{% endif %}</div></div>
+        <div class="bg-[#202225] rounded-lg p-2"><div class="text-gray-500">已运行时间</div><div class="task-elapsed font-bold text-gray-200">{{ t.elapsed_seconds or 0 }} 秒</div></div>
+        <div class="bg-[#202225] rounded-lg p-2"><div class="text-gray-500">预计剩余</div><div class="task-eta font-bold text-gray-200">{{ t.estimated_seconds or 0 }} 秒</div></div>
+      </div>
+      <div class="task-scan text-xs text-gray-500 mt-2 break-words">扫描：{{ t.scan_processed or 0 }} · 已发现：{{ t.scan_discovered or 0 }} · 活跃机器人：{{ t.active_bots or 0 }}</div>
+      <div class="task-bots grid grid-cols-1 sm:grid-cols-2 gap-1 mt-2"></div>
+      <div class="task-message text-xs text-gray-400 mt-2 break-words">{{ t.message or t.status }}</div>
+      {% if t.error %}<div class="task-error text-yellow-300 text-sm mt-2 whitespace-pre-line break-words">{{ t.error }}</div>{% endif %}
+    </div>
+  {% else %}<p class="text-gray-500">暂无下载任务。</p>{% endfor %}
+  </div>
+</section>
+
+<section class="section">
+  <h2 class="text-lg font-bold mb-4 text-yellow-400">待审核的合并申请</h2>
+  {% for req in pending_requests %}
+  <div class="bg-[#202225] rounded-xl p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-2">
+    <div class="flex items-center gap-3 min-w-0"><img src="{{ req.req_avatar or 'https://cdn.discordapp.com/embed/avatars/0.png' }}" class="w-9 h-9 rounded-full shrink-0"><div class="min-w-0"><b>{{ req.req_name }}</b><div class="text-sm text-gray-400 break-words">申请认领 {{ req.target_name }} · {{ req.target_id }}</div></div></div>
+    <a href="/admin/approve/{{ req.id }}" class="btn btn-success w-full sm:w-auto">通过</a>
+  </div>
+  {% else %}<p class="text-gray-500">暂无待审核申请。</p>{% endfor %}
+</section>
+
+<section class="section">
+  <h2 class="text-lg font-bold mb-4 text-green-400">已生效的合并关系</h2>
+  {% for m in active_merges %}
+  <div class="bg-[#202225] rounded-xl p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
+    <span class="break-all">{{ m.target_id }} → {{ m.parent_name or m.parent_id }}</span>
+    <a href="/admin/unmerge/{{ m.target_id }}" class="btn btn-danger w-full sm:w-auto" onclick="return confirm('确定解除？')">解除</a>
+  </div>
+  {% else %}<p class="text-gray-500">暂无合并关系。</p>{% endfor %}
+</section>
+
+<section class="border-t border-gray-700 pt-4">
+  <a href="/admin/reset_all_claims" class="btn btn-danger w-full sm:w-auto" onclick="return confirm('确定清空当前服务器的认领和合并数据？')">清空当前服务器认领数据</a>
+</section>
+
+<script>
+let resources={forums:{}};
+
+function actionButton(action,label,cls,confirmText=''){
+  const confirmAttr=confirmText?` onsubmit="return confirm('${confirmText.replaceAll("'","\\\\'")}')"`:'';
+  return `<form method="post" action="/admin/download-task/${action.id}/${action.path}"${confirmAttr}><button class="btn ${cls} w-full sm:w-auto">${label}</button></form>`;
+}
+function renderTaskActions(el,t){
+  let html='';
+  if(['pending','running'].includes(t.status)){
+    html+=`<form method="post" action="/admin/download-task/${t.id}/pause"><button class="btn btn-warning w-full sm:w-auto">暂停下载</button></form>`;
+    html+=`<form method="post" action="/admin/download-task/${t.id}/cancel"><button class="btn btn-secondary w-full sm:w-auto">取消任务</button></form>`;
+  }else if(t.status==='paused'){
+    html+=`<form method="post" action="/admin/download-task/${t.id}/resume"><button class="btn btn-success w-full sm:w-auto">继续下载</button></form>`;
+  }
+  html+=`<form method="post" action="/admin/download-task/${t.id}/delete" onsubmit="return confirm('删除后会彻底清空该下载任务的临时文件；如果该任务是当前服务器分析数据来源，还会删除对应分析数据库和用户访问记录。确定继续？')"><button class="btn btn-danger w-full sm:w-auto">删除下载</button></form>`;
+  el.innerHTML=html;
+}
+function phaseLabel(t){
+  const m={queued:'排队中',scanning:'扫描 Discord',downloading:'下载中',importing:'实时写入数据库',paused:'已暂停',cancelled:'已取消',completed:'已完成',failed:'失败'};
+  return m[t.phase]||m[t.status]||t.phase||t.status;
+}
+function formatDuration(sec){
+  sec=Math.max(0,Number(sec||0));
+  const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60), s=Math.floor(sec%60);
+  if(h)return `${h} 小时 ${m} 分`;
+  if(m)return `${m} 分 ${s} 秒`;
+  return `${s} 秒`;
+}
+function formatEta(sec){
+  sec=Math.max(0,Number(sec||0));
+  if(!sec)return '计算中';
+  if(sec<60)return `${Math.round(sec)} 秒`;
+  const m=Math.floor(sec/60),s=Math.round(sec%60);
+  if(m<60)return `${m} 分 ${s} 秒`;
+  return `${Math.floor(m/60)} 小时 ${m%60} 分`;
+}
+function updateTaskCard(t){
+  const e=document.querySelector(`[data-task-id="${t.id}"]`);
+  if(!e)return;
+  let percent=0;
+  if(t.phase==='scanning'){
+    const denom=Math.max(Number(t.scan_total_estimate||0),Number(t.scan_discovered||0),Number(t.scan_processed||0));
+    percent=denom?Math.min(95,Number(t.scan_processed||0)/denom*100):3;
+  }else if(t.total){percent=Math.min(100,Number(t.completed||0)/Number(t.total)*100)}
+  e.querySelector('.task-progress').style.width=percent+'%';
+  e.querySelector('.task-phase').textContent=phaseLabel(t);
+  if(t.phase==='scanning'){ e.querySelector('.task-count').textContent=(t.scan_processed||0)+' 已扫描'; }else{ e.querySelector('.task-count').textContent=(t.completed||0)+'/'+(t.total||0); }
+  e.querySelector('.task-elapsed').textContent=formatDuration(t.elapsed_seconds);
+  e.querySelector('.task-eta').textContent=t.phase==='scanning'?'扫描中':formatEta(t.estimated_seconds);
+  e.querySelector('.task-scan').textContent=`扫描：${t.scan_processed||0} · 已发现：${t.scan_discovered||0} · 活跃机器人：${t.active_bots||0}`;
+  e.querySelector('.task-message').textContent=t.message||t.status;
+  const err=e.querySelector('.task-error');
+  if(err)err.textContent=t.error||'';
+  const bots=e.querySelector('.task-bots');
+  bots.innerHTML=(t.bot_progress||[]).map(b=>`<div class="bg-[#202225] rounded-lg px-2 py-1 flex justify-between gap-2"><span class="truncate">${b.name}</span><span class="text-gray-400 shrink-0">${b.count}</span></div>`).join('');
+  renderTaskActions(e.querySelector('.task-actions'),t);
+}
+async function refreshTasks(){
+  try{
+    const r=await fetch('/admin/download-tasks/status',{cache:'no-store'});
+    const ts=await r.json();
+    let active=false;
+    for(const t of ts){ updateTaskCard(t); active ||= ['pending','running'].includes(t.status) || ['scanning','downloading','importing','queued'].includes(t.phase); }
+    if(active)setTimeout(refreshTasks,1000);
+  }catch(e){setTimeout(refreshTasks,5000)}
+}
+
+async function loadResources(){
+  try{
+    const r=await fetch('/api/managed-discord-resources',{cache:'no-store'});
+    resources=await r.json();
+    const g=document.querySelector('#guild');
+    g.innerHTML='<option value="">选择服务器</option>'+resources.guilds.map(x=>`<option value="${x.id}">${x.name}</option>`).join('');
+    g.onchange=loadForums;
+    if(resources.guilds.length){ g.value=resources.guilds[0].id; loadForums(); }
+  }catch(e){document.querySelector('#guild').innerHTML='<option>请重新登录 Discord</option>'}
+}
+function loadForums(){
+  const guildId=document.querySelector('#guild').value;
+  const guild=resources.guilds.find(x=>String(x.id)===String(guildId));
+  const icon=document.querySelector('#guildIcon');
+  icon.src=(guild&&guild.icon_url)||'https://cdn.discordapp.com/embed/avatars/0.png';
+  icon.onerror=()=>{icon.src='https://cdn.discordapp.com/embed/avatars/0.png'};
+  const fs=resources.forums[guildId]||[];
+  document.querySelector('#forum').innerHTML=fs.length?fs.map(x=>`<option value="${x.id}">${x.name}</option>`).join(''):'<option value="">没有可访问论坛频道</option>';
+}
+document.querySelectorAll('[data-task-id]').forEach(e=>{
+  renderTaskActions(e.querySelector('.task-actions'),{id:e.dataset.taskId,status:e.dataset.status});
+});
+(async()=>{await loadResources();if(document.querySelector('[data-task-id]'))refreshTasks()})();
+document.querySelectorAll('input[name="bot_ids"]').forEach(cb=>cb.addEventListener('change',()=>{
+  const selected=[...document.querySelectorAll('input[name="bot_ids"]:checked')];
+  if(selected.length>5){cb.checked=false;alert('最多选择 5 个自定义下载机器人；默认下载机器人不占用这 5 个名额。')}
+}));
+</script>
+</div>
+</body>
+</html>

@@ -1,0 +1,14 @@
+.env
+dome
+DiscordChatExporter.Cli.win-x64
+__pycache__/
+*.pyc
+*.log
+data/
+raw/
+portal.db
+portal.db-wal
+portal.db-shm
+discord_downloader.log
+discord_data.db
+.flask_secret
