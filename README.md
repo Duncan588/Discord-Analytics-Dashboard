@@ -1,4 +1,4 @@
-# Discord Analytics Dashboard V20
+# Discord Analytics Dashboard
 
 Discord 数据分析、普通用户自动识别与 Forum 数据下载平台。
 
