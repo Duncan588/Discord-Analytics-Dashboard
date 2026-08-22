@@ -39,7 +39,12 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import discord
-from Preparation_Before_Use.discordDB import import_json_incremental, rebuild_user_stats
+from Preparation_Before_Use.discordDB import (
+    add_column_if_missing,
+    import_json_incremental,
+    is_missing_table_error,
+    rebuild_user_stats,
+)
 
 PORTAL_DB = Path(os.getenv("PORTAL_DB", "data/portal.db"))
 if not PORTAL_DB.is_absolute():
@@ -83,21 +88,6 @@ def db():
     conn.execute("PRAGMA busy_timeout=60000")
     conn.execute("PRAGMA journal_mode=WAL")
     return conn
-
-
-def add_column_if_missing(conn, table, column, definition):
-    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-    if column in columns:
-        return
-    try:
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
-    except sqlite3.OperationalError as exc:
-        if "duplicate column name" not in str(exc).lower():
-            raise
-
-
-def is_missing_table_error(exc):
-    return "no such table" in str(exc).lower()
 
 
 def ensure_schema(conn):

@@ -25,10 +25,25 @@ from urllib.parse import urlencode
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.exceptions import HTTPException
 
-from Preparation_Before_Use.discordDB import import_json_to_db, inspect_json, rebuild_user_stats
+from Preparation_Before_Use.discordDB import (
+    add_column_if_missing,
+    import_json_to_db,
+    inspect_json,
+    is_missing_table_error,
+    rebuild_user_stats,
+)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _startup_problems = []
+
+
+class NoServerSelectedError(RuntimeError):
+    pass
+
+
+class ServerDataNotFoundError(RuntimeError):
+    pass
+
 
 def load_local_env(path):
     try:
@@ -178,7 +193,10 @@ _startup_problems.clear()
 
 
 def _json_error_request():
-    return request.path.startswith("/api/") or request.accept_mimetypes.accept_json
+    accepts = request.accept_mimetypes
+    return request.path.startswith("/api/") or (
+        accepts.accept_json and not accepts.accept_html
+    )
 
 
 @app.errorhandler(Exception)
@@ -186,13 +204,26 @@ def handle_unhandled_exception(error):
     if isinstance(error, HTTPException):
         return error
     app.logger.exception("未处理的请求异常 request_id=%s", _request_id())
-    if isinstance(error, RuntimeError) and str(error) in ("未选择服务器", "服务器数据不存在"):
-        if _json_error_request():
-            return jsonify({"ok": False, "error": str(error)}), 400
-        return redirect(url_for("welcome"))
     if _json_error_request():
         return jsonify({"ok": False, "error": "服务器内部错误"}), 500
     return "服务器内部错误", 500
+
+
+def _handle_server_state_error(error):
+    app.logger.warning("请求需要服务器数据 request_id=%s error=%s", _request_id(), error)
+    if _json_error_request():
+        return jsonify({"ok": False, "error": str(error)}), 400
+    return redirect(url_for("welcome"))
+
+
+@app.errorhandler(NoServerSelectedError)
+def handle_no_server_selected(error):
+    return _handle_server_state_error(error)
+
+
+@app.errorhandler(ServerDataNotFoundError)
+def handle_server_data_not_found(error):
+    return _handle_server_state_error(error)
 
 
 def _request_id():
@@ -264,28 +295,13 @@ def server_db_path(server_id):
 def get_db():
     sid = current_server_id()
     if not sid:
-        raise RuntimeError("未选择服务器")
+        raise NoServerSelectedError("未选择服务器")
     if not hasattr(g, "analytics_db"):
         path = server_db_path(sid)
         if not os.path.exists(path):
-            raise RuntimeError("服务器数据不存在")
+            raise ServerDataNotFoundError("服务器数据不存在")
         g.analytics_db = db_connect(path)
     return g.analytics_db
-
-
-def _add_column_if_missing(conn, table, column, definition):
-    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-    if column in columns:
-        return
-    try:
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
-    except sqlite3.OperationalError as exc:
-        if "duplicate column name" not in str(exc).lower():
-            raise
-
-
-def _is_missing_table_error(exc):
-    return "no such table" in str(exc).lower()
 
 
 @app.teardown_appcontext
@@ -443,11 +459,11 @@ def init_portal_db():
         "scan_bot_name": "TEXT"
     }
     for col, typ in task_migrations.items():
-        _add_column_if_missing(conn, "download_tasks", col, typ)
-    _add_column_if_missing(conn, "download_servers", "use_default_bot", "INTEGER DEFAULT 0")
-    _add_column_if_missing(conn, "servers", "source_task_id", "INTEGER")
-    _add_column_if_missing(conn, "download_configs", "update_enabled", "INTEGER DEFAULT 0")
-    _add_column_if_missing(conn, "download_configs", "download_interval_ms", "INTEGER DEFAULT 0")
+        add_column_if_missing(conn, "download_tasks", col, typ)
+    add_column_if_missing(conn, "download_servers", "use_default_bot", "INTEGER DEFAULT 0")
+    add_column_if_missing(conn, "servers", "source_task_id", "INTEGER")
+    add_column_if_missing(conn, "download_configs", "update_enabled", "INTEGER DEFAULT 0")
+    add_column_if_missing(conn, "download_configs", "download_interval_ms", "INTEGER DEFAULT 0")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_download_tasks_status_created ON download_tasks(status,created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_download_tasks_guild_status ON download_tasks(guild_id,status)")
     conn.commit()
@@ -527,7 +543,7 @@ def init_server_db(path):
     CREATE INDEX IF NOT EXISTS idx_react_msg ON reactions(message_id);
     CREATE INDEX IF NOT EXISTS idx_stats_count ON user_stats(msg_count);
     """)
-    _add_column_if_missing(conn, "threads", "last_active_at", "TEXT")
+    add_column_if_missing(conn, "threads", "last_active_at", "TEXT")
     conn.commit()
     conn.close()
 
@@ -2071,7 +2087,7 @@ def _delete_task_data_from_server(p, task_id, guild_id):
         p.execute(f"DELETE FROM thread_scan_state WHERE guild_id=? AND thread_id IN ({ph})",(str(guild_id),*remove))
         p.commit()
     except sqlite3.OperationalError as exc:
-        if not _is_missing_table_error(exc):
+        if not is_missing_table_error(exc):
             raise
         app.logger.warning("删除任务扫描缓存时表不存在 task_id=%s guild_id=%s", task_id, guild_id)
     try:
@@ -2113,7 +2129,7 @@ def admin_download_task_delete(task_id):
         try:
             p.execute("DELETE FROM thread_scan_state WHERE guild_id=?",(guild_id,))
         except sqlite3.OperationalError as exc:
-            if not _is_missing_table_error(exc):
+            if not is_missing_table_error(exc):
                 raise
             app.logger.warning("删除服务器扫描缓存时表不存在 guild_id=%s", guild_id)
     p.commit()
@@ -2157,7 +2173,7 @@ def inject_globals():
         try:
             server = get_portal_db().execute("SELECT * FROM servers WHERE server_id=?", (sid,)).fetchone()
         except Exception as exc:
-            app.logger.warning("注入服务器全局变量失败 sid=%s error=%s", sid, exc, exc_info=True)
+            app.logger.warning("注入服务器全局变量失败 sid=%s error=%s", sid, exc)
     user = session.get("user")
     return {
         "current_server": server,

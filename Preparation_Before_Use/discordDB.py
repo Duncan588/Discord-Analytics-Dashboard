@@ -22,6 +22,21 @@ DEFAULT_DB = "discord_data.db"
 BATCH_SIZE = 5000
 
 
+def add_column_if_missing(conn, table, column, definition):
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column in columns:
+        return
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    except sqlite3.OperationalError as exc:
+        if "duplicate column name" not in str(exc).lower():
+            raise
+
+
+def is_missing_table_error(exc):
+    return "no such table" in str(exc).lower()
+
+
 def connect(path):
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     conn = sqlite3.connect(path, timeout=120)
@@ -156,6 +171,7 @@ def import_json_to_db(filename, db_filename, server_id=None, batch_size=BATCH_SI
     conn = connect(db_filename)
     cur = conn.cursor()
     create_tables(cur)
+    add_column_if_missing(conn, "threads", "last_active_at", "TEXT")
     if not init_new and replace:
         # 同一服务器完整重建时替换分析数据，保留账号合并、访问记录等网站数据。
         for table in ("reactions", "attachments", "mentions", "messages", "threads", "users", "user_stats"):
@@ -183,10 +199,6 @@ def import_json_to_db(filename, db_filename, server_id=None, batch_size=BATCH_SI
             category_id = channel.get("categoryId") or channel.get("id")
             name = channel.get("name") or "Imported Messages"
             exported_at = None
-        try:
-            cur.execute("ALTER TABLE threads ADD COLUMN last_active_at TEXT")
-        except sqlite3.OperationalError:
-            pass
         cur.execute("INSERT OR IGNORE INTO threads(thread_id,category_id,name,exported_at,guild_id,last_active_at) VALUES(?,?,?,?,?,NULL)", (thread_id, category_id, name, exported_at, sid))
         cur.execute("UPDATE threads SET category_id=?,name=?,exported_at=?,guild_id=? WHERE thread_id=?", (category_id,name,exported_at,sid,thread_id))
         thread_count += 1

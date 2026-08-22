@@ -2,6 +2,11 @@ import sqlite3
 import os
 import time
 
+try:
+    import ijson
+except ImportError:
+    ijson = None
+
 # ================= 配置 =================
 JSON_FILENAME = "抽象派 - 日常冲浪区🏄 - 1019924310665728022.json"
 DB_FILENAME = "discord_data.db"
@@ -47,10 +52,8 @@ def create_indexes(cursor):
 
 
 def process_data():
-    try:
-        import ijson  # 需要 pip install ijson
-    except ImportError:
-        raise
+    if ijson is None:
+        raise ImportError("缺少 ijson 库。请运行: pip install ijson")
     if not os.path.exists(JSON_FILENAME):
         raise FileNotFoundError(f"错误: 找不到文件 {JSON_FILENAME}")
 
