@@ -10,8 +10,15 @@
 import argparse
 import json
 import os
-import sqlite3
+import sys
 from datetime import datetime, timezone
+
+# 本文件既作为包模块被网站引用，也会在本目录下直接运行，因此确保能导入根目录模块。
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+from shared.sqlite_utils import add_columns, connect_sqlite
 
 try:
     import ijson
@@ -22,28 +29,8 @@ DEFAULT_DB = "discord_data.db"
 BATCH_SIZE = 5000
 
 
-def add_column_if_missing(conn, table, column, definition):
-    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
-    if column in columns:
-        return
-    try:
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
-    except sqlite3.OperationalError as exc:
-        if "duplicate column name" not in str(exc).lower():
-            raise
-
-
-def is_missing_table_error(exc):
-    return "no such table" in str(exc).lower()
-
-
 def connect(path):
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    conn = sqlite3.connect(path, timeout=120)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA busy_timeout=120000")
-    return conn
+    return connect_sqlite(path, timeout=120, row_factory=False, create_parents=True)
 
 
 def create_tables(cur):
@@ -171,7 +158,7 @@ def import_json_to_db(filename, db_filename, server_id=None, batch_size=BATCH_SI
     conn = connect(db_filename)
     cur = conn.cursor()
     create_tables(cur)
-    add_column_if_missing(conn, "threads", "last_active_at", "TEXT")
+    add_columns(conn, "threads", {"last_active_at": "TEXT"})
     if not init_new and replace:
         # 同一服务器完整重建时替换分析数据，保留账号合并、访问记录等网站数据。
         for table in ("reactions", "attachments", "mentions", "messages", "threads", "users", "user_stats"):

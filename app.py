@@ -12,7 +12,9 @@ import threading
 import signal
 import stat
 import hashlib
+import hmac
 import logging
+import secrets
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -25,13 +27,21 @@ from urllib.parse import urlencode
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.exceptions import HTTPException
 
-from Preparation_Before_Use.discordDB import (
-    add_column_if_missing,
-    import_json_to_db,
-    inspect_json,
-    is_missing_table_error,
-    rebuild_user_stats,
+from Preparation_Before_Use.discordDB import import_json_to_db, inspect_json, rebuild_user_stats
+from shared.discord_api import (
+    API_BASE_URL,
+    any_bot_token,
+    bearer_headers,
+    bot_get,
+    bot_headers,
+    default_downloader_token,
+    guild_icon_url,
+    user_avatar_url,
 )
+from shared.env import env_keys, load_local_env
+from shared.portal import touch_user_presence, upsert_portal_user
+from shared.sqlite_utils import add_columns, connect_sqlite, is_missing_table_error
+from shared.timeutil import parse_utc_datetime, to_local_datetime, utc_now_iso
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _startup_problems = []
@@ -45,40 +55,16 @@ class ServerDataNotFoundError(RuntimeError):
     pass
 
 
-def load_local_env(path):
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            for raw in f:
-                line = raw.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                key, value = line.split("=", 1)
-                key = key.strip()
-                value = value.strip().strip("\"'")
-                if key and key not in os.environ:
-                    os.environ[key] = value
-    except FileNotFoundError:
-        return
-    except OSError as exc:
-        _startup_problems.append(f"读取本地环境文件失败 path={path} error={exc}")
-
-load_local_env(os.path.join(BASE_DIR, ".env"))
-
-def _env_keys(path):
-    keys = set()
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            for raw in f:
-                line = raw.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    keys.add(line.split("=", 1)[0].strip())
-    return keys
+try:
+    load_local_env(os.path.join(BASE_DIR, ".env"))
+except OSError as exc:
+    _startup_problems.append(f"读取本地环境文件失败 path={os.path.join(BASE_DIR, '.env')} error={exc}")
 
 def validate_env_contract():
     example = os.path.join(BASE_DIR, ".env.example")
     actual = os.path.join(BASE_DIR, ".env")
-    expected = _env_keys(example)
-    present = _env_keys(actual)
+    expected = env_keys(example)
+    present = env_keys(actual)
     missing = sorted(expected - present)
     extra = sorted(present - expected)
     if missing:
@@ -95,10 +81,9 @@ if not os.path.isabs(PORTAL_DB):
     PORTAL_DB = os.path.join(BASE_DIR, PORTAL_DB)
 LEGACY_DB = os.path.join(BASE_DIR, "discord_data.db")
 ITEMS_PER_PAGE = 100
-ADMIN_IDS = {x.strip() for x in os.getenv("ADMIN_IDS", "891196284998930522").split(",") if x.strip()}
+ADMIN_IDS = {x.strip() for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()}
 DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID", "").strip()
 DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "").strip()
-API_BASE_URL = "https://discord.com/api/v10"
 SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "").strip()
 if not SECRET_KEY:
     secret_file = os.path.join(BASE_DIR, "data", ".flask_secret")
@@ -115,7 +100,6 @@ if not SECRET_KEY:
         _startup_problems.append(f"读取持久化 SECRET_KEY 失败 path={secret_file} error={exc}")
         SECRET_KEY = ""
     if not SECRET_KEY:
-        import secrets
         SECRET_KEY = secrets.token_urlsafe(48)
         try:
             with open(secret_file, "w", encoding="utf-8") as f:
@@ -251,6 +235,51 @@ def log_request_start():
     )
 
 
+# Activity 登录握手由 Discord 客户端跨站发起，没有页面上下文可携带 CSRF Token；
+# 这些接口不修改已登录用户的数据，因此单独豁免。
+CSRF_EXEMPT_ENDPOINTS = {"activity_token", "activity_log"}
+
+
+def request_page(default=1):
+    """读取分页参数；非法输入回退到首页而不是 500。"""
+    raw = request.args.get("page", default)
+    try:
+        return max(1, min(10 ** 6, int(raw)))
+    except (TypeError, ValueError):
+        return default
+
+
+def csrf_token():
+    token = session.get("_csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["_csrf_token"] = token
+    return token
+
+
+@app.before_request
+def csrf_protect():
+    """所有写操作都必须带上会话内的 CSRF Token。
+
+    Activity 模式下会话 Cookie 是 SameSite=None，浏览器会在跨站请求里携带它，
+    因此仅靠 Cookie 无法区分请求来源。
+    """
+    if request.method in ("GET", "HEAD", "OPTIONS", "TRACE"):
+        return None
+    if request.endpoint in CSRF_EXEMPT_ENDPOINTS:
+        return None
+    expected = session.get("_csrf_token", "")
+    supplied = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token", "")
+    if not expected or not hmac.compare_digest(str(supplied), str(expected)):
+        app.logger.warning(
+            "csrf.reject request_id=%s endpoint=%s", _request_id(), request.endpoint or "-"
+        )
+        if request.path.startswith("/api/") or request.accept_mimetypes.best == "application/json":
+            return jsonify({"ok": False, "error": "CSRF 校验失败，请刷新页面后重试"}), 400
+        return "CSRF 校验失败，请刷新页面后重试", 400
+    return None
+
+
 @app.after_request
 def log_request_end(response):
     started_at = getattr(g, "request_started_at", None)
@@ -270,12 +299,7 @@ def log_request_end(response):
 
 
 def db_connect(path):
-    conn = sqlite3.connect(path, timeout=60)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=60000")
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    return conn
+    return connect_sqlite(path)
 
 
 def get_portal_db():
@@ -458,12 +482,13 @@ def init_portal_db():
         "mode": "TEXT DEFAULT 'initial'",
         "scan_bot_name": "TEXT"
     }
-    for col, typ in task_migrations.items():
-        add_column_if_missing(conn, "download_tasks", col, typ)
-    add_column_if_missing(conn, "download_servers", "use_default_bot", "INTEGER DEFAULT 0")
-    add_column_if_missing(conn, "servers", "source_task_id", "INTEGER")
-    add_column_if_missing(conn, "download_configs", "update_enabled", "INTEGER DEFAULT 0")
-    add_column_if_missing(conn, "download_configs", "download_interval_ms", "INTEGER DEFAULT 0")
+    add_columns(conn, "download_tasks", task_migrations)
+    add_columns(conn, "download_servers", {"use_default_bot": "INTEGER DEFAULT 0"})
+    add_columns(conn, "servers", {"source_task_id": "INTEGER"})
+    add_columns(conn, "download_configs", {
+        "update_enabled": "INTEGER DEFAULT 0",
+        "download_interval_ms": "INTEGER DEFAULT 0",
+    })
     conn.execute("CREATE INDEX IF NOT EXISTS idx_download_tasks_status_created ON download_tasks(status,created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_download_tasks_guild_status ON download_tasks(guild_id,status)")
     conn.commit()
@@ -543,7 +568,7 @@ def init_server_db(path):
     CREATE INDEX IF NOT EXISTS idx_react_msg ON reactions(message_id);
     CREATE INDEX IF NOT EXISTS idx_stats_count ON user_stats(msg_count);
     """)
-    add_column_if_missing(conn, "threads", "last_active_at", "TEXT")
+    add_columns(conn, "threads", {"last_active_at": "TEXT"})
     conn.commit()
     conn.close()
 
@@ -564,7 +589,7 @@ def migrate_legacy_db():
         with open(LEGACY_DB, "rb") as src, open(target, "wb") as dst:
             dst.write(src.read())
     init_server_db(target)
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     conn.execute("""INSERT OR REPLACE INTO servers(
         server_id,name,icon_url,owner_user_id,db_path,created_at,updated_at,source_task_id
     ) VALUES (?,?,?,?,?,?,?,NULL)""", (
@@ -582,16 +607,7 @@ def format_time(seconds):
 
 
 def parse_and_convert(time_str):
-    if not time_str:
-        return None
-    try:
-        value = str(time_str).replace("Z", "+00:00")
-        dt = datetime.fromisoformat(value)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone(timedelta(hours=8)))
-    except (TypeError, ValueError):
-        return None
+    return to_local_datetime(time_str)
 
 
 @app.template_filter("datetimeformat")
@@ -845,42 +861,21 @@ def get_download_quota(user_id):
     return int(row["quota"]) if row else 1
 
 
-def _parse_clamped_int(value, default, lower, upper):
-    if value is None or value == "":
-        return default
-    try:
-        return max(lower, min(upper, int(value)))
-    except (TypeError, ValueError):
-        return None
-
-
 def sync_server_users_to_portal(server_id):
     """把服务器分析库中的普通用户同步到门户数据库，避免普通登录用户被误判为无数据。"""
     sid = str(server_id)
     path = server_db_path(sid)
     if not os.path.exists(path):
         return 0
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     portal = get_portal_db()
     conn = db_connect(path)
     rows = conn.execute("SELECT user_id,username,nickname,avatar_url FROM users WHERE user_id IS NOT NULL AND user_id!=''").fetchall()
     conn.close()
     for row in rows:
         uid = str(row["user_id"])
-        portal.execute(
-            """INSERT INTO portal_users(user_id,username,nickname,avatar_url,last_login)
-               VALUES(?,?,?,?,COALESCE((SELECT last_login FROM portal_users WHERE user_id=?),NULL))
-               ON CONFLICT(user_id) DO UPDATE SET
-               username=CASE WHEN excluded.username!='' THEN excluded.username ELSE portal_users.username END,
-               nickname=CASE WHEN excluded.nickname!='' THEN excluded.nickname ELSE portal_users.nickname END,
-               avatar_url=CASE WHEN excluded.avatar_url!='' THEN excluded.avatar_url ELSE portal_users.avatar_url END""",
-            (uid, row["username"] or uid, row["nickname"] or row["username"] or uid, row["avatar_url"], uid)
-        )
-        portal.execute(
-            """INSERT INTO user_server_presence(user_id,server_id,first_seen,last_seen)
-               VALUES(?,?,?,?) ON CONFLICT(user_id,server_id) DO UPDATE SET last_seen=excluded.last_seen""",
-            (uid, sid, now, now)
-        )
+        upsert_portal_user(portal, uid, row["username"], row["nickname"], row["avatar_url"])
+        touch_user_presence(portal, uid, sid, now)
     portal.commit()
     return len(rows)
 
@@ -924,15 +919,14 @@ def get_servers_for_user(user_id):
                 present = adb.execute("SELECT user_id,username,nickname,avatar_url FROM users WHERE user_id=? LIMIT 1", (uid,)).fetchone()
                 adb.close()
                 if present:
-                    timestamp = datetime.now(timezone.utc).isoformat()
-                    portal.execute("INSERT INTO portal_users(user_id,username,nickname,avatar_url,last_login) VALUES(?,?,?,?,NULL) ON CONFLICT(user_id) DO UPDATE SET username=CASE WHEN excluded.username!='' THEN excluded.username ELSE portal_users.username END,nickname=CASE WHEN excluded.nickname!='' THEN excluded.nickname ELSE portal_users.nickname END,avatar_url=CASE WHEN excluded.avatar_url!='' THEN excluded.avatar_url ELSE portal_users.avatar_url END", (uid, present["username"] or uid, present["nickname"] or present["username"] or uid, present["avatar_url"]))
-                    portal.execute("INSERT INTO user_server_presence(user_id,server_id,first_seen,last_seen) VALUES(?,?,?,?) ON CONFLICT(user_id,server_id) DO UPDATE SET last_seen=excluded.last_seen", (uid, sid, timestamp, timestamp))
+                    upsert_portal_user(portal, uid, present["username"], present["nickname"], present["avatar_url"])
+                    touch_user_presence(portal, uid, sid)
                     portal.commit()
             except Exception:
                 app.logger.exception("检查普通用户服务器数据失败: %s", sid)
         if found or present or str(server["owner_user_id"] or "") == uid:
             if not found:
-                portal.execute("INSERT OR IGNORE INTO user_server_access(user_id,server_id,granted_by,created_at) VALUES(?,?,?,?)", (uid, sid, uid, datetime.now(timezone.utc).isoformat()))
+                portal.execute("INSERT OR IGNORE INTO user_server_access(user_id,server_id,granted_by,created_at) VALUES(?,?,?,?)", (uid, sid, uid, utc_now_iso()))
                 portal.commit()
             result.append(server)
     return result
@@ -1008,7 +1002,7 @@ def register_server(server_id, name, icon_url=None, owner_user_id=None, db_path=
     server_id = str(server_id)
     db_path = db_path or server_db_path(server_id)
     init_server_db(db_path)
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     conn = get_portal_db()
     conn.execute("INSERT INTO servers(server_id,name,icon_url,owner_user_id,db_path,created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(server_id) DO UPDATE SET name=excluded.name,icon_url=excluded.icon_url,db_path=excluded.db_path,updated_at=excluded.updated_at", (server_id, name or f"Discord Server {server_id}", icon_url, owner_user_id, db_path, now, now))
     conn.commit()
@@ -1047,31 +1041,21 @@ def managed_guilds_from_session():
         if guild.get("owner") or permissions & 0x8 or permissions & 0x20:
             result.append(guild)
     for guild in result:
-        icon = guild.get("icon")
-        if icon and guild.get("id"):
-            ext = "gif" if str(icon).startswith("a_") else "png"
-            guild["icon_url"] = f"https://cdn.discordapp.com/icons/{guild.get('id')}/{icon}.{ext}?size=64"
-        else:
-            guild["icon_url"] = "https://cdn.discordapp.com/embed/avatars/0.png"
+        guild["icon_url"] = guild_icon_url(guild.get("id"), guild.get("icon"))
     return result
 
 
 def bot_identity(token):
     """Validate a bot token and return Discord's authoritative bot name."""
-    response = requests.get(f"{API_BASE_URL}/users/@me", headers={"Authorization": f"Bot {token}"}, timeout=12)
+    response = bot_get("/users/@me", token)
     response.raise_for_status()
     data = response.json()
     return data.get("global_name") or data.get("username") or "Discord Bot"
 
 
-
-def _discord_bot_headers(token):
-    return {"Authorization": f"Bot {token}", "User-Agent": "Discord-Analytics-Dashboard/1.0"}
-
-
 def check_bot_forum_access(token, guild_id, forum_id):
     """Validate that a bot is in the guild and can View Channel + Read Message History on a Forum."""
-    headers = _discord_bot_headers(token)
+    headers = bot_headers(token)
     try:
         me = requests.get(f"{API_BASE_URL}/users/@me", headers=headers, timeout=12)
         if me.status_code in (401, 403):
@@ -1159,7 +1143,7 @@ def selected_download_bots(portal, uid, bot_ids, use_default):
     for bid in bot_ids:
         rows.append(owned[bid])
     if use_default:
-        token = (os.getenv("DISCORD_DOWNLOADER_TOKEN") or os.getenv("DISCORD_DOWNLOADER") or "").strip()
+        token = default_downloader_token()
         if not token:
             raise ValueError("已勾选默认下载机器人，但服务器未配置 DISCORD_DOWNLOADER_TOKEN")
         rows.append({"id": "default", "name": "默认下载机器人", "token": token})
@@ -1176,10 +1160,10 @@ def fetch_discord_user(user_id):
     (the site's own default token, falling back to the downloader's), since /users/{id}
     works for any user regardless of shared servers. Returns None if no token is configured
     or the ID doesn't resolve, so callers can fall back to the raw ID."""
-    token = (os.getenv("DISCORD_BOT_TOKEN") or os.getenv("DISCORD_DOWNLOADER_TOKEN") or os.getenv("DISCORD_DOWNLOADER") or "").strip()
+    token = any_bot_token()
     if not token:
         return None
-    response = requests.get(f"{API_BASE_URL}/users/{user_id}", headers={"Authorization": f"Bot {token}"}, timeout=12)
+    response = bot_get(f"/users/{user_id}", token)
     if response.status_code == 404:
         return None
     response.raise_for_status()
@@ -1187,9 +1171,7 @@ def fetch_discord_user(user_id):
     username = data.get("global_name") or data.get("username")
     if not username:
         return None
-    avatar_hash = data.get("avatar")
-    avatar_url = f"https://cdn.discordapp.com/avatars/{user_id}/{avatar_hash}.png?size=64" if avatar_hash else None
-    return {"username": username, "avatar_url": avatar_url}
+    return {"username": username, "avatar_url": user_avatar_url(user_id, data.get("avatar"), size=64, default=None)}
 
 
 def oauth_redirect_uri():
@@ -1287,21 +1269,23 @@ def exchange_discord_code(code, redirect_uri=None, source="unknown", fetch_guild
         access_token = token.get("access_token")
         if not access_token:
             raise RuntimeError(f"Discord Token 响应异常: {token}")
-        r = requests.get(f"{API_BASE_URL}/users/@me", headers={"Authorization": f"Bearer {access_token}"}, timeout=20)
+        r = requests.get(f"{API_BASE_URL}/users/@me", headers=bearer_headers(access_token), timeout=20)
         if r.status_code == 429:
             return False, _discord_rate_limit_error(r, "current_user")
         r.raise_for_status()
         u = r.json()
         guilds = []
         if fetch_guilds:
-            guild_response = requests.get(f"{API_BASE_URL}/users/@me/guilds", headers={"Authorization": f"Bearer {access_token}"}, timeout=20)
+            guild_response = requests.get(f"{API_BASE_URL}/users/@me/guilds", headers=bearer_headers(access_token), timeout=20)
             if guild_response.status_code == 429:
                 return False, _discord_rate_limit_error(guild_response, "user_guilds")
             guild_response.raise_for_status()
             guilds = guild_response.json()
-        avatar = f"https://cdn.discordapp.com/avatars/{u['id']}/{u['avatar']}.png" if u.get("avatar") else "https://cdn.discordapp.com/embed/avatars/0.png"
+        avatar = user_avatar_url(u["id"], u.get("avatar"))
         portal = get_portal_db()
-        portal.execute("INSERT INTO portal_users(user_id,username,nickname,avatar_url,last_login) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET username=excluded.username,nickname=excluded.nickname,avatar_url=excluded.avatar_url,last_login=excluded.last_login", (u["id"], u["username"], u.get("global_name") or u["username"], avatar, datetime.now(timezone.utc).isoformat()))
+        upsert_portal_user(
+            portal, u["id"], u["username"], u.get("global_name") or u["username"], avatar, last_login=utc_now_iso()
+        )
         portal.commit()
         session.clear()
         session["user"] = {"id": u["id"], "username": u["username"], "avatar": avatar}
@@ -1491,6 +1475,9 @@ def upload_json():
         file.save(temp)
         meta = inspect_json(temp)
         sid = str(meta["server_id"])
+        # server_id 来自上传文件内容，会被拼进数据目录路径，必须限制为纯数字 ID。
+        if not sid.isdigit():
+            return "JSON 中的 server_id 无效", 400
         target = server_db_path(sid)
         # 权限 2 用户只能新建/管理自己拥有访问权的服务器，且下载服务器数量受 quota 限制。
         existing = get_portal_db().execute("SELECT 1 FROM servers WHERE server_id=?", (sid,)).fetchone()
@@ -1500,7 +1487,7 @@ def upload_json():
                 return "已达到服务器配额，请联系权限1管理员增加配额", 403
         import_json_to_db(temp, target, server_id=sid)
         register_server(sid, meta.get("server_name") or f"Discord Server {sid}", meta.get("icon_url"), owner_user_id=uid, db_path=target)
-        get_portal_db().execute("INSERT OR IGNORE INTO user_server_access(user_id,server_id,granted_by,created_at) VALUES(?,?,?,?)", (uid, sid, uid, datetime.now(timezone.utc).isoformat()))
+        get_portal_db().execute("INSERT OR IGNORE INTO user_server_access(user_id,server_id,granted_by,created_at) VALUES(?,?,?,?)", (uid, sid, uid, utc_now_iso()))
         get_portal_db().commit()
         sync_server_users_to_portal(sid)
         session["server_id"] = sid
@@ -1558,7 +1545,7 @@ def index():
     sid = current_server_id()
     conn = get_db()
     u = session["user"]
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     conn.execute("INSERT INTO web_visitors(user_id,username,nickname,avatar_url,last_visit) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET username=excluded.username,nickname=excluded.nickname,avatar_url=excluded.avatar_url,last_visit=excluded.last_visit", (u["id"], u["username"], u["username"], u["avatar"], now))
     conn.commit()
     data = data_engine.load_or_compute(sid)
@@ -1575,7 +1562,7 @@ def index():
 @app.route("/api/leaderboard")
 @server_required
 def api_leaderboard():
-    page = max(1, int(request.args.get("page", 1)))
+    page = request_page()
     offset = (page - 1) * 50
     conn = get_db()
     users = []
@@ -1610,7 +1597,7 @@ def user_profile(user_id):
         return "User Not Found", 404
     visitor = session["user"]
     if visitor["id"] != str(user_id):
-        conn.execute("INSERT INTO profile_views(target_user_id,viewer_user_id,viewer_name,viewer_avatar,timestamp) VALUES(?,?,?,?,?) ON CONFLICT(target_user_id,viewer_user_id) DO UPDATE SET timestamp=excluded.timestamp", (user_id, visitor["id"], visitor["username"], visitor["avatar"], datetime.now(timezone.utc).isoformat()))
+        conn.execute("INSERT INTO profile_views(target_user_id,viewer_user_id,viewer_name,viewer_avatar,timestamp) VALUES(?,?,?,?,?) ON CONFLICT(target_user_id,viewer_user_id) DO UPDATE SET timestamp=excluded.timestamp", (user_id, visitor["id"], visitor["username"], visitor["avatar"], utc_now_iso()))
         conn.commit()
     view_count = conn.execute("SELECT count(*) FROM profile_views WHERE target_user_id=?", (user_id,)).fetchone()[0]
     recent_viewers = conn.execute("SELECT viewer_name,viewer_avatar,timestamp FROM profile_views WHERE target_user_id=? ORDER BY timestamp DESC LIMIT 20", (user_id,)).fetchall()
@@ -1619,7 +1606,7 @@ def user_profile(user_id):
     msg_count = conn.execute(f"SELECT count(DISTINCT message_id) FROM messages WHERE author_id IN ({ph})", merged_ids).fetchone()[0]
     reaction_received_count = conn.execute(f"SELECT count(*) FROM reactions r JOIN messages m ON r.message_id=m.message_id WHERE m.author_id IN ({ph})", merged_ids).fetchone()[0]
     sort_by = request.args.get("sort", "hot")
-    page = max(1, int(request.args.get("page", 1)))
+    page = request_page()
     offset = (page - 1) * ITEMS_PER_PAGE
     order = "ORDER BY total_reactions DESC,m.timestamp DESC" if sort_by == "hot" else "ORDER BY m.timestamp DESC"
     messages = process_messages(conn, conn.execute(f"SELECT m.*,t.name thread_name,(SELECT count(*) FROM reactions WHERE message_id=m.message_id) total_reactions FROM messages m JOIN threads t ON m.thread_id=t.thread_id WHERE m.author_id IN ({ph}) {order} LIMIT ? OFFSET ?", (*merged_ids, ITEMS_PER_PAGE, offset)).fetchall())
@@ -1659,7 +1646,7 @@ def claim_account():
     if not target or target_id == requester_id:
         return "无效请求", 400
     try:
-        conn.execute("INSERT INTO claim_requests_v2(requester_id,target_id,target_name,created_at) VALUES(?,?,?,?)", (requester_id, target_id, target["nickname"], datetime.now(timezone.utc).isoformat()))
+        conn.execute("INSERT INTO claim_requests_v2(requester_id,target_id,target_name,created_at) VALUES(?,?,?,?)", (requester_id, target_id, target["nickname"], utc_now_iso()))
         conn.commit(); flash("认领申请已提交，请等待管理员审核。")
     except sqlite3.IntegrityError:
         flash("申请已存在")
@@ -1723,7 +1710,7 @@ def _admin_server_scope():
     return sid
 
 
-@app.route("/admin/approve/<int:req_id>")
+@app.route("/admin/approve/<int:req_id>", methods=["POST"])
 @login_required
 @admin_required
 def admin_approve(req_id):
@@ -1735,12 +1722,12 @@ def admin_approve(req_id):
     req = conn.execute("SELECT * FROM claim_requests_v2 WHERE id=? AND status=0", (req_id,)).fetchone()
     if req:
         conn.execute("UPDATE claim_requests_v2 SET status=1 WHERE id=?", (req_id,))
-        conn.execute("INSERT OR REPLACE INTO user_merges(target_id,parent_id,created_at) VALUES(?,?,?)", (req["target_id"], req["requester_id"], datetime.now(timezone.utc).isoformat()))
+        conn.execute("INSERT OR REPLACE INTO user_merges(target_id,parent_id,created_at) VALUES(?,?,?)", (req["target_id"], req["requester_id"], utc_now_iso()))
         conn.commit()
     return redirect(url_for("admin_panel"))
 
 
-@app.route("/admin/unmerge/<target_id>")
+@app.route("/admin/unmerge/<target_id>", methods=["POST"])
 @login_required
 @admin_required
 def admin_unmerge(target_id):
@@ -1750,7 +1737,7 @@ def admin_unmerge(target_id):
     conn = get_db(); conn.execute("DELETE FROM user_merges WHERE target_id=?", (target_id,)); conn.commit(); return redirect(url_for("admin_panel"))
 
 
-@app.route("/admin/reset_all_claims")
+@app.route("/admin/reset_all_claims", methods=["POST"])
 @login_required
 @admin_required
 def admin_reset_all():
@@ -1776,7 +1763,7 @@ def admin_whitelist_add():
         app.logger.warning("查询白名单用户信息失败 user_id=%s，使用 ID 占位 error=%s", uid, exc)
         info = None
     name = info["username"] if info else uid
-    portal.execute("INSERT OR IGNORE INTO whitelist_users(user_id,username,added_by,created_at) VALUES(?,?,?,?)", (uid, name, session["user"]["id"], datetime.now(timezone.utc).isoformat()))
+    portal.execute("INSERT OR IGNORE INTO whitelist_users(user_id,username,added_by,created_at) VALUES(?,?,?,?)", (uid, name, session["user"]["id"], utc_now_iso()))
     portal.execute("INSERT OR IGNORE INTO server_download_quota(user_id,quota) VALUES(?,1)", (uid,))
     portal.commit()
     return redirect(url_for("admin_panel"))
@@ -1791,8 +1778,11 @@ def admin_whitelist_delete(user_id):
 @login_required
 @level1_required
 def admin_quota():
-    uid=str(request.form.get("user_id","")); quota=_parse_clamped_int(request.form.get("quota","1"), 1, 1, 100)
-    if quota is None: return "配额必须是数字", 400
+    uid=str(request.form.get("user_id",""))
+    try:
+        quota=max(1,min(100,int(request.form.get("quota","1"))))
+    except (TypeError, ValueError):
+        return "配额必须是数字",400
     portal=get_portal_db(); portal.execute("INSERT INTO server_download_quota(user_id,quota) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET quota=excluded.quota",(uid,quota)); portal.commit(); return redirect(url_for("admin_panel"))
 
 @app.route("/admin/access", methods=["POST"])
@@ -1801,7 +1791,7 @@ def admin_quota():
 def admin_access():
     uid=str(request.form.get("user_id","")); sid=str(request.form.get("server_id",""))
     if uid and sid and get_portal_db().execute("SELECT 1 FROM servers WHERE server_id=?",(sid,)).fetchone():
-        p=get_portal_db(); p.execute("INSERT OR IGNORE INTO user_server_access(user_id,server_id,granted_by,created_at) VALUES(?,?,?,?)",(uid,sid,session["user"]["id"],datetime.now(timezone.utc).isoformat())); p.commit()
+        p=get_portal_db(); p.execute("INSERT OR IGNORE INTO user_server_access(user_id,server_id,granted_by,created_at) VALUES(?,?,?,?)",(uid,sid,session["user"]["id"],utc_now_iso())); p.commit()
     return redirect(url_for("admin_panel"))
 
 @app.route("/admin/access/delete", methods=["POST"])
@@ -1823,7 +1813,7 @@ def admin_bot_add():
         name=bot_identity(token)
     except requests.RequestException:
         return "无法验证机器人密钥，请确认 Token 有效后重试",400
-    p.execute("INSERT INTO download_bots(owner_user_id,name,token,created_at) VALUES(?,?,?,?)",(owner,name,token,datetime.now(timezone.utc).isoformat())); p.commit(); return redirect(url_for("admin_panel"))
+    p.execute("INSERT INTO download_bots(owner_user_id,name,token,created_at) VALUES(?,?,?,?)",(owner,name,token,utc_now_iso())); p.commit(); return redirect(url_for("admin_panel"))
 
 @app.route("/admin/bot/delete/<int:bot_id>", methods=["POST"])
 @login_required
@@ -1845,10 +1835,11 @@ def admin_download_server():
     p=get_portal_db(); uid=str(session["user"]["id"])
     guild=str(request.form.get("guild_id","")).strip(); forum=str(request.form.get("forum_channel_id","")).strip()
     bot_ids=[str(x) for x in request.form.getlist("bot_ids") if str(x).isdigit()]; use_default=request.form.get("use_default_bot")=="1"
-    scheduler_interval=_parse_clamped_int(request.form.get("scheduler_interval"), 250, 50, 60000)
-    download_interval_ms=_parse_clamped_int(request.form.get("download_interval_ms"), 0, 0, 60000)
-    if scheduler_interval is None: return "调度间隔必须是数字", 400
-    if download_interval_ms is None: return "下载间隔必须是数字", 400
+    try:
+        scheduler_interval=max(50,min(60000,int(request.form.get("scheduler_interval") or 250)))
+        download_interval_ms=max(0,min(60000,int(request.form.get("download_interval_ms") or 0)))
+    except (TypeError,ValueError):
+        return "调度间隔和下载间隔必须是数字",400
     update_enabled=1 if request.form.get("update_enabled")=="1" else 0
     if not guild.isdigit() or not forum.isdigit(): return "Guild ID 和 Forum Channel ID 必须是数字",400
     if admin_level(uid)==2:
@@ -1872,7 +1863,7 @@ def admin_download_server():
     try:
         # 由用户的 OAuth guild/channel 资源获取权威 Forum 名称。
         for bot in selected[:1]:
-            resp=requests.get(f"{API_BASE_URL}/guilds/{guild}/channels",headers={"Authorization":f"Bot {bot['token']}"},timeout=12)
+            resp=bot_get(f"/guilds/{guild}/channels",bot["token"])
             if resp.ok:
                 ch=next((x for x in resp.json() if str(x.get("id"))==forum),None)
                 if ch: forum_name=ch.get("name") or forum
@@ -1880,7 +1871,7 @@ def admin_download_server():
     except requests.RequestException as exc:
         app.logger.warning("查询 Forum 名称失败 guild_id=%s forum_id=%s，使用 ID 占位 error=%s", guild, forum, exc)
     server_key=f"{guild}:{forum}"
-    p.execute("INSERT INTO download_configs(server_id,owner_user_id,guild_id,forum_channel_id,guild_name,forum_name,enabled,use_default_bot,scheduler_interval,download_interval_ms,update_enabled,updated_at) VALUES(?,?,?,?,?,?,1,?,?,?,?,?) ON CONFLICT(guild_id,forum_channel_id) DO UPDATE SET owner_user_id=excluded.owner_user_id,server_id=excluded.server_id,guild_name=excluded.guild_name,forum_name=excluded.forum_name,enabled=1,use_default_bot=excluded.use_default_bot,scheduler_interval=excluded.scheduler_interval,download_interval_ms=excluded.download_interval_ms,update_enabled=excluded.update_enabled,updated_at=excluded.updated_at",(server_key,uid,guild,forum,guild_name,forum_name,1 if use_default else 0,scheduler_interval,download_interval_ms,update_enabled,datetime.now(timezone.utc).isoformat()))
+    p.execute("INSERT INTO download_configs(server_id,owner_user_id,guild_id,forum_channel_id,guild_name,forum_name,enabled,use_default_bot,scheduler_interval,download_interval_ms,update_enabled,updated_at) VALUES(?,?,?,?,?,?,1,?,?,?,?,?) ON CONFLICT(guild_id,forum_channel_id) DO UPDATE SET owner_user_id=excluded.owner_user_id,server_id=excluded.server_id,guild_name=excluded.guild_name,forum_name=excluded.forum_name,enabled=1,use_default_bot=excluded.use_default_bot,scheduler_interval=excluded.scheduler_interval,download_interval_ms=excluded.download_interval_ms,update_enabled=excluded.update_enabled,updated_at=excluded.updated_at",(server_key,uid,guild,forum,guild_name,forum_name,1 if use_default else 0,scheduler_interval,download_interval_ms,update_enabled,utc_now_iso()))
     cfg=p.execute("SELECT id FROM download_configs WHERE guild_id=? AND forum_channel_id=?",(guild,forum)).fetchone(); cfg_id=int(cfg["id"])
     p.execute("DELETE FROM download_config_bots WHERE config_id=?",(cfg_id,))
     p.executemany("INSERT INTO download_config_bots(config_id,bot_id) VALUES(?,?)",[(cfg_id,x["id"]) for x in selected if x["id"]!="default"])
@@ -1902,7 +1893,8 @@ def downloader_config():
     uid=str(session["user"]["id"]); level=admin_level(uid); p=get_portal_db()
     if level==1: rows=p.execute("SELECT * FROM download_configs WHERE enabled=1 ORDER BY id").fetchall()
     else: rows=p.execute("SELECT * FROM download_configs WHERE enabled=1 AND owner_user_id=? ORDER BY id",(uid,)).fetchall()
-    return jsonify({"servers":[dict(r) for r in rows],"bots":[dict(r) for r in p.execute("SELECT id,name FROM download_bots WHERE owner_user_id=? ORDER BY id",(uid,)).fetchall()],"default_token":os.getenv("DISCORD_DOWNLOADER_TOKEN","") if level==1 else ""})
+    # 机器人 Token 只在服务端使用；不要通过 HTTP 接口回传给浏览器。
+    return jsonify({"servers":[dict(r) for r in rows],"bots":[dict(r) for r in p.execute("SELECT id,name FROM download_bots WHERE owner_user_id=? ORDER BY id",(uid,)).fetchall()]})
 
 @app.route("/api/managed-discord-resources")
 @login_required
@@ -1912,7 +1904,7 @@ def managed_discord_resources():
     uid = str(session["user"]["id"])
     guilds = managed_guilds_from_session()
     bots = [dict(row) for row in get_portal_db().execute("SELECT id,name,token FROM download_bots WHERE owner_user_id=?", (uid,)).fetchall()]
-    default_token = (os.getenv("DISCORD_DOWNLOADER_TOKEN") or os.getenv("DISCORD_DOWNLOADER") or "").strip()
+    default_token = default_downloader_token()
     if default_token:
         bots.append({"id": "default", "name": "默认下载机器人", "token": default_token})
     forums = {}
@@ -1921,7 +1913,7 @@ def managed_discord_resources():
     for bot in bots:
         try:
             for guild in guilds:
-                response = requests.get(f"{API_BASE_URL}/guilds/{guild['id']}/channels", headers={"Authorization": f"Bot {bot['token']}"}, timeout=12)
+                response = bot_get(f"/guilds/{guild['id']}/channels", bot["token"])
                 if response.status_code in (401, 403, 404): continue
                 response.raise_for_status()
                 for channel in response.json():
@@ -1983,7 +1975,7 @@ def request_member_sync(guild_id, requested_by):
     active=p.execute("SELECT id FROM member_sync_requests WHERE guild_id=? AND status IN ('pending','running') ORDER BY id DESC LIMIT 1",(str(guild_id),)).fetchone()
     if active:
         return int(active["id"])
-    cur=p.execute("INSERT INTO member_sync_requests(guild_id,requested_by,status,created_at) VALUES(?,?, 'pending', ?)",(str(guild_id),str(requested_by),datetime.now(timezone.utc).isoformat()))
+    cur=p.execute("INSERT INTO member_sync_requests(guild_id,requested_by,status,created_at) VALUES(?,?, 'pending', ?)",(str(guild_id),str(requested_by),utc_now_iso()))
     p.commit()
     return int(cur.lastrowid)
 
@@ -2016,7 +2008,7 @@ def admin_download_task_add():
         quota=get_download_quota(uid)
         active=p.execute("SELECT COUNT(DISTINCT guild_id) FROM download_tasks WHERE created_by=? AND status IN ('pending','running')",(uid,)).fetchone()[0]
         if active>=quota: return f"已达到下载服务器配额 {quota}",403
-    nowv=datetime.now(timezone.utc).isoformat()
+    nowv=utc_now_iso()
     mode="update" if int(cfg["update_enabled"] or 0) and os.path.exists(server_db_path(str(cfg["guild_id"]))) else "initial"
     p.execute("INSERT INTO download_tasks(guild_id,forum_channel_id,created_by,status,total,completed,created_at,message,config_id,guild_name,forum_name,scheduler_interval,download_interval_ms,mode) VALUES(?,?,?,?,0,0,?,?,?,?,?,?,?,?)",(cfg["guild_id"],cfg["forum_channel_id"],uid,"pending",nowv,f"等待下载器启动 · {'更新模式' if mode=='update' else '首次下载模式'}",cfg["id"],cfg["guild_name"] or cfg["guild_id"],cfg["forum_name"] or cfg["forum_channel_id"],cfg["scheduler_interval"] if int(cfg["scheduler_interval"] or 0) >= 50 else int(cfg["scheduler_interval"] or 1) * 1000,int(cfg["download_interval_ms"] or 0),mode))
     p.commit();
@@ -2042,7 +2034,7 @@ def download_task_scope(task):
 def _task_action(task_id,action):
     p=get_portal_db(); task=p.execute("SELECT * FROM download_tasks WHERE id=?",(task_id,)).fetchone()
     if not task or not download_task_scope(task): return "403 Access Denied",403
-    nowv=datetime.now(timezone.utc).isoformat()
+    nowv=utc_now_iso()
     if action=="pause" and task["status"] in ("pending","running"):
         p.execute("UPDATE download_tasks SET status='paused',phase='paused',message='任务已暂停，可继续下载',finished_at=NULL WHERE id=?",(task_id,))
     elif action=="resume" and task["status"]=="paused":
@@ -2111,7 +2103,7 @@ def admin_download_task_delete(task_id):
     if was_running:
         # 先让后台 Worker 看到取消状态，再做数据库清理。任务行随后立即删除，
         # 避免下载器进程异常退出时留下“隐藏任务”和未清理的分析数据。
-        p.execute("UPDATE download_tasks SET status='cancelled',phase='cancelled',delete_requested=1,message='正在停止并清理任务…',finished_at=? WHERE id=?",(datetime.now(timezone.utc).isoformat(),task_id)); p.commit()
+        p.execute("UPDATE download_tasks SET status='cancelled',phase='cancelled',delete_requested=1,message='正在停止并清理任务…',finished_at=? WHERE id=?",(utc_now_iso(),task_id)); p.commit()
 
     # 这一步必须在删除 download_task_items 之前执行；这些 item 是分析库中
     # 帖子归属的唯一任务索引。后台导入线程还会在写入后检查 cancelled 状态，
@@ -2154,7 +2146,7 @@ def admin_download_tasks_status():
         d=dict(x)
         if d.get("status") in ("pending", "running") and d.get("started_at"):
             try:
-                started_dt=datetime.fromisoformat(str(d["started_at"]).replace("Z", "+00:00"))
+                started_dt=parse_utc_datetime(d["started_at"])
                 d["elapsed_seconds"]=max(int(d.get("elapsed_seconds") or 0), int((datetime.now(timezone.utc)-started_dt).total_seconds()))
             except (TypeError, ValueError) as exc:
                 app.logger.warning("解析下载任务开始时间失败 task_id=%s started_at=%s error=%s", x["id"], d.get("started_at"), exc)
@@ -2182,6 +2174,7 @@ def inject_globals():
         # Client ID 不是敏感信息（会出现在 OAuth 授权链接里），可以放心暴露给前端，
         # Discord 活动模式的 discord-activity.js 需要用它初始化 Embedded App SDK。
         "discord_client_id": DISCORD_CLIENT_ID,
+        "csrf_token": csrf_token,
     }
 
 

@@ -1,6 +1,7 @@
 .env
 dome
 DiscordChatExporter.Cli.win-x64
+venv/
 __pycache__/
 *.pyc
 *.log
