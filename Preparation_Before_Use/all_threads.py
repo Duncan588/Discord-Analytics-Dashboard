@@ -90,7 +90,7 @@ class MyClient(discord.Client):
 intents = discord.Intents.default()
 intents.guilds = True
 
-token = "DISCORD_TOKEN" #在此处设置你的机器人密钥
+token = os.getenv("DISCORD_TOKEN", "").strip()  # 密钥只从环境变量读取，不要写在代码里
 if not token:
     raise SystemExit("请先设置环境变量 DISCORD_TOKEN")
 

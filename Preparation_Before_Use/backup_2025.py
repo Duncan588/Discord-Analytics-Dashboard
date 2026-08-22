@@ -17,15 +17,17 @@ CHECKPOINT_FILE = os.path.join(BASE_DIR, "processed_ids_2025.txt")
 LOG_FILE = os.path.join(BASE_DIR, "backup_log.txt")
 
 # 请确认路径是否正确
-DCE_PATH = r"E:\DiscordChatExporter.Cli.win-x64\DiscordChatExporter.Cli.exe"
+DCE_PATH = os.getenv("DCE_PATH", r"E:\DiscordChatExporter.Cli.win-x64\DiscordChatExporter.Cli.exe")
 
-# 带有名称的 Token 配置 MTQ2MTI5请替换成自己的机器人密钥或者用户密钥
+# 机器人密钥只从环境变量 BACKUP_TOKENS 读取（英文逗号分隔），不要写在代码里。
 TOKENS = [
-    {"name": "下载机器人1", "token": "MTQ2MTI5"},
-    {"name": "下载机器人2", "token": "MTQ2MTI5"},
-    {"name": "下载机器人3", "token": "MTQ2MTI5"},
-    {"name": "下载机器人4", "token": "MTQ2MTI5"},
+    {"name": f"下载机器人{i + 1}", "token": token}
+    for i, token in enumerate(
+        x.strip() for x in os.getenv("BACKUP_TOKENS", "").split(",") if x.strip()
+    )
 ]
+if not TOKENS:
+    raise SystemExit("请先设置环境变量 BACKUP_TOKENS（英文逗号分隔的机器人密钥）")
 
 file_lock = threading.Lock()
 
