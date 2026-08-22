@@ -10,8 +10,15 @@
 import argparse
 import json
 import os
-import sqlite3
+import sys
 from datetime import datetime, timezone
+
+# 本文件既作为包模块被网站引用，也会在本目录下直接运行，因此确保能导入根目录模块。
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
+from shared.sqlite_utils import add_columns, connect_sqlite
 
 try:
     import ijson
@@ -23,12 +30,7 @@ BATCH_SIZE = 5000
 
 
 def connect(path):
-    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    conn = sqlite3.connect(path, timeout=120)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA busy_timeout=120000")
-    return conn
+    return connect_sqlite(path, timeout=120, row_factory=False, create_parents=True)
 
 
 def create_tables(cur):
@@ -183,10 +185,7 @@ def import_json_to_db(filename, db_filename, server_id=None, batch_size=BATCH_SI
             category_id = channel.get("categoryId") or channel.get("id")
             name = channel.get("name") or "Imported Messages"
             exported_at = None
-        try:
-            cur.execute("ALTER TABLE threads ADD COLUMN last_active_at TEXT")
-        except sqlite3.OperationalError:
-            pass
+        add_columns(cur, "threads", {"last_active_at": "TEXT"})
         cur.execute("INSERT OR IGNORE INTO threads(thread_id,category_id,name,exported_at,guild_id,last_active_at) VALUES(?,?,?,?,?,NULL)", (thread_id, category_id, name, exported_at, sid))
         cur.execute("UPDATE threads SET category_id=?,name=?,exported_at=?,guild_id=? WHERE thread_id=?", (category_id,name,exported_at,sid,thread_id))
         thread_count += 1
