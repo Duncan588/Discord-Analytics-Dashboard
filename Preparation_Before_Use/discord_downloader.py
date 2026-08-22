@@ -737,7 +737,7 @@ def import_downloaded_task(task_root, guild_id, task_id):
 
 def finalize_delete_if_requested(task_id, task_root=None):
     conn = db()
-    row = conn.execute("SELECT delete_requested FROM download_tasks WHERE id=?", (task_id,)).fetchone()
+    row = conn.execute("SELECT delete_requested,guild_id FROM download_tasks WHERE id=?", (task_id,)).fetchone()
     if not row:
         conn.close(); return
     if not int(row["delete_requested"] or 0):

@@ -12,3 +12,8 @@ portal.db-shm
 discord_downloader.log
 discord_data.db
 .flask_secret
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+Preparation_Before_Use/backup_log.txt

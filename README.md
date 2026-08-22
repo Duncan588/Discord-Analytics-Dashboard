@@ -24,6 +24,20 @@ venv/bin/python Preparation_Before_Use/whitelist_bot.py
 `venv/bin/python`。否则会出现 `ModuleNotFoundError: No module named 'flask'`，
 Activity 内通常只显示空白页面。
 
+## 单元测试
+
+```bash
+venv/bin/python -m pip install -r requirements-dev.txt
+venv/bin/python -m pytest
+```
+
+测试全部使用临时数据库和 mock 的 Discord 响应，不会读写 `data/`、`raw/`、`.env`
+中的真实数据，也不会访问 Discord API。附带覆盖率报告：
+
+```bash
+venv/bin/python -m pytest --cov=app --cov=Preparation_Before_Use --cov-report=term-missing
+```
+
 ## 项目目录
 
 根目录只保留启动和配置文件：
