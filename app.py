@@ -23,14 +23,14 @@ import requests
 from flask import Flask, render_template, request, g, redirect, session, url_for, jsonify, flash
 from urllib.parse import urlencode
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.exceptions import HTTPException
 
 from Preparation_Before_Use.discordDB import import_json_to_db, inspect_json, rebuild_user_stats
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_startup_problems = []
 
 def load_local_env(path):
-    if not os.path.exists(path):
-        return
     try:
         with open(path, "r", encoding="utf-8") as f:
             for raw in f:
@@ -42,8 +42,10 @@ def load_local_env(path):
                 value = value.strip().strip("\"'")
                 if key and key not in os.environ:
                     os.environ[key] = value
-    except OSError:
-        pass
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        _startup_problems.append(f"读取本地环境文件失败 path={path} error={exc}")
 
 load_local_env(os.path.join(BASE_DIR, ".env"))
 
@@ -85,17 +87,28 @@ API_BASE_URL = "https://discord.com/api/v10"
 SECRET_KEY = os.getenv("FLASK_SECRET_KEY", "").strip()
 if not SECRET_KEY:
     secret_file = os.path.join(BASE_DIR, "data", ".flask_secret")
-    os.makedirs(os.path.dirname(secret_file), exist_ok=True)
+    try:
+        os.makedirs(os.path.dirname(secret_file), exist_ok=True)
+    except OSError as exc:
+        _startup_problems.append(
+            f"准备持久化 SECRET_KEY 目录失败 path={os.path.dirname(secret_file)} error={exc}；会话不会在重启后保留"
+        )
     try:
         with open(secret_file, "r", encoding="utf-8") as f:
             SECRET_KEY = f.read().strip()
-    except OSError:
+    except OSError as exc:
+        _startup_problems.append(f"读取持久化 SECRET_KEY 失败 path={secret_file} error={exc}")
         SECRET_KEY = ""
     if not SECRET_KEY:
         import secrets
         SECRET_KEY = secrets.token_urlsafe(48)
-        with open(secret_file, "w", encoding="utf-8") as f:
-            f.write(SECRET_KEY)
+        try:
+            with open(secret_file, "w", encoding="utf-8") as f:
+                f.write(SECRET_KEY)
+        except OSError as exc:
+            _startup_problems.append(
+                f"写入持久化 SECRET_KEY 失败 path={secret_file} error={exc}；会话不会在重启后保留"
+            )
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
 
 app = Flask(__name__)
@@ -159,6 +172,27 @@ def configure_logging():
 
 
 configure_logging()
+for _problem in _startup_problems:
+    app.logger.warning(_problem)
+_startup_problems.clear()
+
+
+def _json_error_request():
+    return request.path.startswith("/api/") or request.accept_mimetypes.accept_json
+
+
+@app.errorhandler(Exception)
+def handle_unhandled_exception(error):
+    if isinstance(error, HTTPException):
+        return error
+    app.logger.exception("未处理的请求异常 request_id=%s", _request_id())
+    if isinstance(error, RuntimeError) and str(error) in ("未选择服务器", "服务器数据不存在"):
+        if _json_error_request():
+            return jsonify({"ok": False, "error": str(error)}), 400
+        return redirect(url_for("welcome"))
+    if _json_error_request():
+        return jsonify({"ok": False, "error": "服务器内部错误"}), 500
+    return "服务器内部错误", 500
 
 
 def _request_id():
@@ -237,6 +271,21 @@ def get_db():
             raise RuntimeError("服务器数据不存在")
         g.analytics_db = db_connect(path)
     return g.analytics_db
+
+
+def _add_column_if_missing(conn, table, column, definition):
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column in columns:
+        return
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    except sqlite3.OperationalError as exc:
+        if "duplicate column name" not in str(exc).lower():
+            raise
+
+
+def _is_missing_table_error(exc):
+    return "no such table" in str(exc).lower()
 
 
 @app.teardown_appcontext
@@ -394,26 +443,11 @@ def init_portal_db():
         "scan_bot_name": "TEXT"
     }
     for col, typ in task_migrations.items():
-        try:
-            conn.execute(f"ALTER TABLE download_tasks ADD COLUMN {col} {typ}")
-        except sqlite3.OperationalError:
-            pass
-    try:
-        conn.execute("ALTER TABLE download_servers ADD COLUMN use_default_bot INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        conn.execute("ALTER TABLE servers ADD COLUMN source_task_id INTEGER")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        conn.execute("ALTER TABLE download_configs ADD COLUMN update_enabled INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
-    try:
-        conn.execute("ALTER TABLE download_configs ADD COLUMN download_interval_ms INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
-        pass
+        _add_column_if_missing(conn, "download_tasks", col, typ)
+    _add_column_if_missing(conn, "download_servers", "use_default_bot", "INTEGER DEFAULT 0")
+    _add_column_if_missing(conn, "servers", "source_task_id", "INTEGER")
+    _add_column_if_missing(conn, "download_configs", "update_enabled", "INTEGER DEFAULT 0")
+    _add_column_if_missing(conn, "download_configs", "download_interval_ms", "INTEGER DEFAULT 0")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_download_tasks_status_created ON download_tasks(status,created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_download_tasks_guild_status ON download_tasks(guild_id,status)")
     conn.commit()
@@ -493,10 +527,7 @@ def init_server_db(path):
     CREATE INDEX IF NOT EXISTS idx_react_msg ON reactions(message_id);
     CREATE INDEX IF NOT EXISTS idx_stats_count ON user_stats(msg_count);
     """)
-    try:
-        conn.execute("ALTER TABLE threads ADD COLUMN last_active_at TEXT")
-    except sqlite3.OperationalError:
-        pass
+    _add_column_if_missing(conn, "threads", "last_active_at", "TEXT")
     conn.commit()
     conn.close()
 
@@ -543,7 +574,7 @@ def parse_and_convert(time_str):
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(timezone(timedelta(hours=8)))
-    except Exception:
+    except (TypeError, ValueError):
         return None
 
 
@@ -614,15 +645,19 @@ class DataEngine:
     def _load_cache(self, sid):
         if sid in self.cache:
             return self.cache[sid]
+        path = self._cache_file(sid)
         try:
-            with open(self._cache_file(sid), "rb") as f:
+            with open(path, "rb") as f:
                 value = pickle.load(f)
                 self.cache[sid] = value
                 return value
-        except Exception:
-            value = {"last_msg_count": -1, "global_word_counter": collections.Counter(), "homepage": {}, "merges": {}}
-            self.cache[sid] = value
-            return value
+        except FileNotFoundError:
+            app.logger.debug("首页缓存不存在 sid=%s path=%s", sid, path)
+        except (OSError, EOFError, pickle.UnpicklingError, TypeError, ValueError) as exc:
+            app.logger.warning("首页缓存读取失败 sid=%s path=%s error=%s", sid, path, exc)
+        value = {"last_msg_count": -1, "global_word_counter": collections.Counter(), "homepage": {}, "merges": {}}
+        self.cache[sid] = value
+        return value
 
     def _save_cache(self, sid):
         path = self._cache_file(sid)
@@ -792,6 +827,15 @@ def admin_level(user_id):
 def get_download_quota(user_id):
     row = get_portal_db().execute("SELECT quota FROM server_download_quota WHERE user_id=?", (str(user_id),)).fetchone()
     return int(row["quota"]) if row else 1
+
+
+def _parse_clamped_int(value, default, lower, upper):
+    if value is None or value == "":
+        return default
+    try:
+        return max(lower, min(upper, int(value)))
+    except (TypeError, ValueError):
+        return None
 
 
 def sync_server_users_to_portal(server_id):
@@ -1443,14 +1487,17 @@ def upload_json():
         get_portal_db().execute("INSERT OR IGNORE INTO user_server_access(user_id,server_id,granted_by,created_at) VALUES(?,?,?,?)", (uid, sid, uid, datetime.now(timezone.utc).isoformat()))
         get_portal_db().commit()
         sync_server_users_to_portal(sid)
-        os.remove(temp)
         session["server_id"] = sid
         return redirect(url_for("index"))
     except Exception as e:
-        if os.path.exists(temp):
-            os.remove(temp)
         app.logger.exception("JSON import failed")
         return render_template("welcome.html", can_upload=True, current_user=session["user"], error=f"导入失败: {e}"), 400
+    finally:
+        if os.path.exists(temp):
+            try:
+                os.remove(temp)
+            except OSError as exc:
+                app.logger.warning("清理 JSON 临时文件失败 path=%s error=%s", temp, exc)
 
 
 @app.route("/servers")
@@ -1709,7 +1756,8 @@ def admin_whitelist_add():
     # 先用 ID 占位，不阻断白名单添加。
     try:
         info = fetch_discord_user(uid)
-    except requests.RequestException:
+    except requests.RequestException as exc:
+        app.logger.warning("查询白名单用户信息失败 user_id=%s，使用 ID 占位 error=%s", uid, exc)
         info = None
     name = info["username"] if info else uid
     portal.execute("INSERT OR IGNORE INTO whitelist_users(user_id,username,added_by,created_at) VALUES(?,?,?,?)", (uid, name, session["user"]["id"], datetime.now(timezone.utc).isoformat()))
@@ -1727,7 +1775,8 @@ def admin_whitelist_delete(user_id):
 @login_required
 @level1_required
 def admin_quota():
-    uid=str(request.form.get("user_id","")); quota=max(1,min(100,int(request.form.get("quota","1"))))
+    uid=str(request.form.get("user_id","")); quota=_parse_clamped_int(request.form.get("quota","1"), 1, 1, 100)
+    if quota is None: return "配额必须是数字", 400
     portal=get_portal_db(); portal.execute("INSERT INTO server_download_quota(user_id,quota) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET quota=excluded.quota",(uid,quota)); portal.commit(); return redirect(url_for("admin_panel"))
 
 @app.route("/admin/access", methods=["POST"])
@@ -1780,8 +1829,10 @@ def admin_download_server():
     p=get_portal_db(); uid=str(session["user"]["id"])
     guild=str(request.form.get("guild_id","")).strip(); forum=str(request.form.get("forum_channel_id","")).strip()
     bot_ids=[str(x) for x in request.form.getlist("bot_ids") if str(x).isdigit()]; use_default=request.form.get("use_default_bot")=="1"
-    scheduler_interval=max(50,min(60000,int(request.form.get("scheduler_interval") or 250)))
-    download_interval_ms=max(0,min(60000,int(request.form.get("download_interval_ms") or 0)))
+    scheduler_interval=_parse_clamped_int(request.form.get("scheduler_interval"), 250, 50, 60000)
+    download_interval_ms=_parse_clamped_int(request.form.get("download_interval_ms"), 0, 0, 60000)
+    if scheduler_interval is None: return "调度间隔必须是数字", 400
+    if download_interval_ms is None: return "下载间隔必须是数字", 400
     update_enabled=1 if request.form.get("update_enabled")=="1" else 0
     if not guild.isdigit() or not forum.isdigit(): return "Guild ID 和 Forum Channel ID 必须是数字",400
     if admin_level(uid)==2:
@@ -1810,7 +1861,8 @@ def admin_download_server():
                 ch=next((x for x in resp.json() if str(x.get("id"))==forum),None)
                 if ch: forum_name=ch.get("name") or forum
                 break
-    except requests.RequestException: pass
+    except requests.RequestException as exc:
+        app.logger.warning("查询 Forum 名称失败 guild_id=%s forum_id=%s，使用 ID 占位 error=%s", guild, forum, exc)
     server_key=f"{guild}:{forum}"
     p.execute("INSERT INTO download_configs(server_id,owner_user_id,guild_id,forum_channel_id,guild_name,forum_name,enabled,use_default_bot,scheduler_interval,download_interval_ms,update_enabled,updated_at) VALUES(?,?,?,?,?,?,1,?,?,?,?,?) ON CONFLICT(guild_id,forum_channel_id) DO UPDATE SET owner_user_id=excluded.owner_user_id,server_id=excluded.server_id,guild_name=excluded.guild_name,forum_name=excluded.forum_name,enabled=1,use_default_bot=excluded.use_default_bot,scheduler_interval=excluded.scheduler_interval,download_interval_ms=excluded.download_interval_ms,update_enabled=excluded.update_enabled,updated_at=excluded.updated_at",(server_key,uid,guild,forum,guild_name,forum_name,1 if use_default else 0,scheduler_interval,download_interval_ms,update_enabled,datetime.now(timezone.utc).isoformat()))
     cfg=p.execute("SELECT id FROM download_configs WHERE guild_id=? AND forum_channel_id=?",(guild,forum)).fetchone(); cfg_id=int(cfg["id"])
@@ -2018,8 +2070,10 @@ def _delete_task_data_from_server(p, task_id, guild_id):
     try:
         p.execute(f"DELETE FROM thread_scan_state WHERE guild_id=? AND thread_id IN ({ph})",(str(guild_id),*remove))
         p.commit()
-    except sqlite3.OperationalError:
-        pass
+    except sqlite3.OperationalError as exc:
+        if not _is_missing_table_error(exc):
+            raise
+        app.logger.warning("删除任务扫描缓存时表不存在 task_id=%s guild_id=%s", task_id, guild_id)
     try:
         rebuild_user_stats(db_path)
     except Exception as exc:
@@ -2058,12 +2112,15 @@ def admin_download_task_delete(task_id):
         p.execute("DELETE FROM user_server_access WHERE server_id=?",(guild_id,)); p.execute("DELETE FROM user_server_presence WHERE server_id=?",(guild_id,)); p.execute("DELETE FROM servers WHERE server_id=?",(guild_id,))
         try:
             p.execute("DELETE FROM thread_scan_state WHERE guild_id=?",(guild_id,))
-        except sqlite3.OperationalError:
-            pass
+        except sqlite3.OperationalError as exc:
+            if not _is_missing_table_error(exc):
+                raise
+            app.logger.warning("删除服务器扫描缓存时表不存在 guild_id=%s", guild_id)
     p.commit()
     if remaining==0 and server_db and os.path.exists(server_db):
         try: os.remove(server_db)
-        except OSError: pass
+        except OSError as exc:
+            app.logger.warning("删除服务器数据库失败 path=%s error=%s", server_db, exc)
     # Unix 下删除仍被 DCE 打开的文件是安全的；这样运行中删除也不会
     # 遗留 raw 目录。后台线程随后会因任务行不存在而停止处理。
     if os.path.exists(task_root):
@@ -2083,8 +2140,8 @@ def admin_download_tasks_status():
             try:
                 started_dt=datetime.fromisoformat(str(d["started_at"]).replace("Z", "+00:00"))
                 d["elapsed_seconds"]=max(int(d.get("elapsed_seconds") or 0), int((datetime.now(timezone.utc)-started_dt).total_seconds()))
-            except Exception:
-                pass
+            except (TypeError, ValueError) as exc:
+                app.logger.warning("解析下载任务开始时间失败 task_id=%s started_at=%s error=%s", x["id"], d.get("started_at"), exc)
         item=p.execute("SELECT COUNT(*) total_items,SUM(CASE WHEN status='downloaded' THEN 1 ELSE 0 END) downloaded_items,SUM(CASE WHEN status='failed' THEN 1 ELSE 0 END) failed_items,SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) pending_items FROM download_task_items WHERE task_id=?",(x["id"],)).fetchone()
         d.update({k:int(v or 0) for k,v in dict(item).items()})
         bots=p.execute("SELECT bot_name,COUNT(*) count FROM download_task_items WHERE task_id=? AND bot_name IS NOT NULL GROUP BY bot_name ORDER BY count DESC",(x["id"],)).fetchall()
@@ -2099,8 +2156,8 @@ def inject_globals():
     if sid and os.path.exists(PORTAL_DB):
         try:
             server = get_portal_db().execute("SELECT * FROM servers WHERE server_id=?", (sid,)).fetchone()
-        except Exception:
-            pass
+        except Exception as exc:
+            app.logger.warning("注入服务器全局变量失败 sid=%s error=%s", sid, exc, exc_info=True)
     user = session.get("user")
     return {
         "current_server": server,
@@ -2134,23 +2191,23 @@ def _start_child(command, name):
     try:
         proc = subprocess.Popen(command, **kwargs)
         _service_processes.append((name, proc))
-        print(f"[service] {name} started pid={proc.pid}")
+        app.logger.info("服务启动成功 name=%s pid=%s", name, proc.pid)
         return proc
     except Exception as exc:
-        print(f"[service] {name} start failed: {exc}")
+        app.logger.exception("服务启动失败 name=%s error=%s", name, exc)
         return None
 
 def start_background_services():
     if os.getenv("DISCORD_BOT_TOKEN", "").strip():
         _start_child([sys.executable, os.path.join(BASE_DIR, "Preparation_Before_Use", "whitelist_bot.py")], "whitelist_bot")
     else:
-        print("[service] whitelist_bot 未启动：DISCORD_BOT_TOKEN 为空")
+        app.logger.info("服务未启动 name=whitelist_bot：DISCORD_BOT_TOKEN 为空")
     try:
         conn=db_connect(PORTAL_DB); row=conn.execute("SELECT 1 FROM download_tasks WHERE status IN ('pending','running') AND delete_requested=0 LIMIT 1").fetchone(); conn.close()
         if row: ensure_downloader_process()
-        else: print("[service] 没有下载任务，discord_downloader 不启动")
+        else: app.logger.info("服务未启动 name=discord_downloader：没有下载任务")
     except Exception as exc:
-        print(f"[service] 下载任务状态检查失败：{exc}")
+        app.logger.exception("检查下载任务状态失败，无法启动 discord_downloader：%s", exc)
 
 def stop_background_services():
     _service_stop.set()
@@ -2159,11 +2216,12 @@ def stop_background_services():
             try:
                 proc.terminate()
                 proc.wait(timeout=8)
-            except Exception:
+            except Exception as exc:
+                app.logger.exception("停止服务失败 name=%s pid=%s，尝试强制终止：%s", name, proc.pid, exc)
                 try:
                     proc.kill()
-                except Exception:
-                    pass
+                except Exception as kill_exc:
+                    app.logger.exception("无法强制停止服务 name=%s pid=%s：%s", name, proc.pid, kill_exc)
     _service_processes.clear()
 
 

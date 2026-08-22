@@ -1,5 +1,4 @@
 import sqlite3
-import ijson  # 需要 pip install ijson
 import os
 import time
 
@@ -48,14 +47,21 @@ def create_indexes(cursor):
 
 
 def process_data():
-    if not os.path.exists(JSON_FILENAME): return print(f"错误: 找不到文件 {JSON_FILENAME}")
+    try:
+        import ijson  # 需要 pip install ijson
+    except ImportError:
+        raise
+    if not os.path.exists(JSON_FILENAME):
+        raise FileNotFoundError(f"错误: 找不到文件 {JSON_FILENAME}")
 
     # 重建数据库
     if os.path.exists(DB_FILENAME):
         try:
             os.remove(DB_FILENAME)
-        except:
-            pass
+        except OSError as exc:
+            raise RuntimeError(
+                f"错误: 无法删除旧数据库 {DB_FILENAME}，请关闭占用该文件的程序后重试"
+            ) from exc
 
     conn = sqlite3.connect(DB_FILENAME)
     cursor = conn.cursor()
@@ -206,8 +212,10 @@ if __name__ == "__main__":
         process_data()
     except ImportError:
         print("错误: 缺少 ijson 库。请运行: pip install ijson")
+        raise SystemExit(1)
     except Exception as e:
         print(f"\n❌ 发生错误: {e}")
         import traceback
 
         traceback.print_exc()
+        raise SystemExit(1)

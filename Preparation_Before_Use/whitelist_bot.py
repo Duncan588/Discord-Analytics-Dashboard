@@ -147,7 +147,8 @@ def upsert_member(guild_id, member):
     avatar = None
     try:
         avatar = member.display_avatar.url if member.display_avatar else None
-    except Exception:
+    except Exception as exc:
+        log.warning("读取成员头像失败 guild=%s user=%s error=%s", guild_id, member.id, exc)
         avatar = None
     c = db()
     c.execute('''INSERT INTO portal_users(user_id,username,nickname,avatar_url,last_login)
@@ -177,20 +178,20 @@ async def sync_guild_members(guild, request_id=None):
             upsert_member(guild.id, member)
             count += 1
             if count % 500 == 0:
-                print(f'[members] guild={guild.id} synced={count}')
+                log.info("成员同步中 guild=%s synced=%s", guild.id, count)
                 await asyncio.sleep(0)
         if request_id:
             c = db()
             c.execute("UPDATE member_sync_requests SET status='completed',finished_at=? WHERE id=?", (datetime.now(timezone.utc).isoformat(), request_id))
             c.commit(); c.close()
-        print(f'[members] guild={guild.id} sync completed count={count}')
+        log.info("成员同步完成 guild=%s count=%s", guild.id, count)
         return count
     except Exception as exc:
         if request_id:
             c = db()
             c.execute("UPDATE member_sync_requests SET status='failed',finished_at=?,error=? WHERE id=?", (datetime.now(timezone.utc).isoformat(), str(exc), request_id))
             c.commit(); c.close()
-        print(f'[members] guild={guild.id} sync failed: {exc}')
+        log.exception("成员同步失败 guild=%s error=%s", guild.id, exc)
         raise
 
 
@@ -316,8 +317,8 @@ async def is_forum_thread(message: discord.Message) -> bool:
 
                 if parent_channel is not None:
                     return parent_channel.type == discord.ChannelType.forum
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                pass
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
+                log.debug("获取 Forum 父频道失败 guild=%s channel=%s error=%s", message.guild.id, parent_id, exc)
 
         if message.guild is not None:
             try:
@@ -342,8 +343,8 @@ async def is_forum_thread(message: discord.Message) -> bool:
                             parent_channel is not None
                             and parent_channel.type == discord.ChannelType.forum
                         )
-            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
-                pass
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
+                log.debug("刷新 Forum 帖子频道失败 guild=%s channel=%s error=%s", message.guild.id, channel.id, exc)
 
     return False
 
@@ -419,8 +420,8 @@ class Bot(discord.Client):
                 retry_after = None
                 try:
                     retry_after = exc.response.headers.get("Retry-After")
-                except Exception:
-                    pass
+                except Exception as retry_exc:
+                    log.debug("读取命令同步限流响应头失败 error=%s", retry_exc)
                 log.warning(
                     "Discord API 当前受到速率限制，命令同步暂时跳过。Retry-After=%s。"
                     "Bot 不会因此退出。",
@@ -521,15 +522,15 @@ class Bot(discord.Client):
     async def on_member_join(self, member):
         try:
             upsert_member(member.guild.id, member)
-            print(f'[members] new member guild={member.guild.id} user={member.id}')
+            log.info("新增成员已同步 guild=%s user=%s", member.guild.id, member.id)
         except Exception as exc:
-            print(f'[members] on_member_join failed: {exc}')
+            log.exception("新增成员同步失败 guild=%s user=%s error=%s", member.guild.id, member.id, exc)
 
     async def on_member_update(self, before, after):
         try:
             upsert_member(after.guild.id, after)
         except Exception as exc:
-            print(f'[members] on_member_update failed: {exc}')
+            log.exception("成员更新同步失败 guild=%s user=%s error=%s", after.guild.id, after.id, exc)
 
     async def close(self):
         if self.db is not None:
@@ -548,8 +549,8 @@ class Bot(discord.Client):
                 continue
             try:
                 await sync_guild_members(guild, int(row['id']))
-            except Exception:
-                pass
+            except Exception as exc:
+                log.exception("成员同步失败 guild=%s request_id=%s：%s", guild.id, row["id"], exc)
 
     @tasks.loop(seconds=5)
     async def download_notifications(self):
@@ -566,7 +567,7 @@ class Bot(discord.Client):
                 c.execute("UPDATE download_tasks SET notified_at=? WHERE id=?", (datetime.now(timezone.utc).isoformat(), r['id']))
             except Exception as exc:
                 c.execute("UPDATE download_tasks SET notified_at=? WHERE id=?", (datetime.now(timezone.utc).isoformat(), r['id']))
-                print(f'[notify] task {r["id"]} failed: {exc}')
+                log.exception("下载任务通知失败 task_id=%s error=%s", r["id"], exc)
         c.commit(); c.close()
 
 
@@ -647,8 +648,8 @@ async def restart(interaction: discord.Interaction):
             log.exception('通知主应用完整重启失败，将回退为仅重启机器人')
     try:
         os.execv(sys.executable, [sys.executable, os.path.abspath(__file__)])
-    except Exception:
-        log.exception('主机器人重启失败')
+    except Exception as exc:
+        log.exception('主机器人重启失败 user_id=%s：%s', interaction.user.id, exc)
         await interaction.followup.send('重启失败，请查看机器人日志。', ephemeral=True)
 
 
@@ -1200,8 +1201,8 @@ async def on_app_command_error(
                 "❌ 操作失败，请稍后再试。",
                 ephemeral=is_private_context(interaction),
             )
-    except discord.HTTPException:
-        pass
+    except discord.HTTPException as exc:
+        log.debug("发送应用命令错误提示失败 user_id=%s error=%s", interaction.user.id, exc)
 
 
 if __name__ == '__main__':

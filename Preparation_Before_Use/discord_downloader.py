@@ -85,6 +85,21 @@ def db():
     return conn
 
 
+def add_column_if_missing(conn, table, column, definition):
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column in columns:
+        return
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+    except sqlite3.OperationalError as exc:
+        if "duplicate column name" not in str(exc).lower():
+            raise
+
+
+def is_missing_table_error(exc):
+    return "no such table" in str(exc).lower()
+
+
 def ensure_schema(conn):
     conn.executescript("""
     CREATE TABLE IF NOT EXISTS download_servers (
@@ -152,19 +167,9 @@ def ensure_schema(conn):
         "last_active_at": "TEXT"
     }
     for col, typ in migrations.items():
-        try:
-            conn.execute(f"ALTER TABLE download_tasks ADD COLUMN {col} {typ}")
-        except sqlite3.OperationalError:
-            pass
-    for col, typ in {"last_active_at":"TEXT"}.items():
-        try:
-            conn.execute(f"ALTER TABLE download_task_items ADD COLUMN {col} {typ}")
-        except sqlite3.OperationalError:
-            pass
-    try:
-        conn.execute("ALTER TABLE servers ADD COLUMN source_task_id INTEGER")
-    except sqlite3.OperationalError:
-        pass
+        add_column_if_missing(conn, "download_tasks", col, typ)
+    add_column_if_missing(conn, "download_task_items", "last_active_at", "TEXT")
+    add_column_if_missing(conn, "servers", "source_task_id", "INTEGER")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_download_tasks_status_created ON download_tasks(status, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_download_tasks_guild_status ON download_tasks(guild_id, status)")
     conn.commit()
@@ -668,8 +673,8 @@ def _set_scan_progress(task_id, discovered_delta=0, processed_delta=0, active_bo
         try:
             elapsed = max(1.0, (datetime.now(timezone.utc) - datetime.fromisoformat(started)).total_seconds())
             speed = processed / elapsed * 60.0
-        except Exception:
-            pass
+        except (TypeError, ValueError) as exc:
+            log_step("任务 #%s | 计算扫描速度失败 | started_at=%s | error=%s", task_id, started, exc)
     values = [discovered, processed, speed, now(), task_id]
     sql = "UPDATE download_tasks SET scan_discovered=?,scan_processed=?,speed=?,heartbeat_at=?"
     if active_bots is not None:
@@ -761,15 +766,17 @@ def finalize_delete_if_requested(task_id, task_root=None):
         conn.execute("DELETE FROM servers WHERE server_id=?", (str(guild_id),))
         try:
             conn.execute("DELETE FROM thread_scan_state WHERE guild_id=?", (str(guild_id),))
-        except sqlite3.OperationalError:
-            pass
+        except sqlite3.OperationalError as exc:
+            if not is_missing_table_error(exc):
+                raise
+            log_step("任务 #%s | 删除服务器扫描缓存时表不存在 | guild=%s", task_id, guild_id)
     conn.commit(); conn.close()
     if remaining == 0:
         db_path = server["db_path"] if server and server["db_path"] else str(server_db_for(guild_id))
         try:
             Path(db_path).unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as exc:
+            log_step("任务 #%s | 删除服务器数据库失败 | path=%s | error=%s", task_id, db_path, exc)
     if task_root:
         import shutil
         shutil.rmtree(task_root, ignore_errors=True)
@@ -820,8 +827,10 @@ def delete_task_server_data(task_id, guild_id):
         conn.execute(f"DELETE FROM thread_scan_state WHERE guild_id=? AND thread_id IN ({placeholders})", (str(guild_id), *remove))
         conn.commit()
         conn.close()
-    except sqlite3.OperationalError:
-        pass
+    except sqlite3.OperationalError as exc:
+        if not is_missing_table_error(exc):
+            raise
+        log_step("任务 #%s | 删除扫描缓存时表不存在 | guild=%s", task_id, guild_id)
 
 
 def _remove_thread_from_server_db(db_path, thread_id):
@@ -848,10 +857,7 @@ def import_one_json(path, guild_id, thread_id, last_active_at):
     result = import_json_incremental(str(path), str(db_path), server_id=guild_id)
     conn = sqlite3.connect(db_path, timeout=120)
     try:
-        try:
-            conn.execute("ALTER TABLE threads ADD COLUMN last_active_at TEXT")
-        except sqlite3.OperationalError:
-            pass
+        add_column_if_missing(conn, "threads", "last_active_at", "TEXT")
         conn.execute("UPDATE threads SET last_active_at=? WHERE thread_id=?", (last_active_at, str(thread_id)))
         conn.commit()
     finally:
@@ -870,8 +876,8 @@ def existing_thread_active(guild_id, thread_id):
             conn.close()
             if row and row[0]:
                 return row[0]
-        except sqlite3.Error:
-            pass
+        except sqlite3.Error as exc:
+            log_step("扫描数据库读取帖子活跃时间失败 | guild=%s thread=%s | error=%s；回退扫描缓存", guild_id, thread_id, exc)
     conn = db()
     try:
         conn.execute("CREATE TABLE IF NOT EXISTS thread_scan_state (guild_id TEXT NOT NULL, thread_id TEXT NOT NULL, name TEXT, last_active_at TEXT, scanned_at TEXT, PRIMARY KEY(guild_id, thread_id))")
@@ -1271,14 +1277,19 @@ def main_once():
             return False
         active_intervals=[]
         for _tid in active:
+            c=db()
             try:
-                c=db(); rr=c.execute("SELECT scheduler_interval FROM download_tasks WHERE id=?",(_tid,)).fetchone(); c.close()
-                if rr:
+                rr=c.execute("SELECT scheduler_interval FROM download_tasks WHERE id=?",(_tid,)).fetchone()
+            finally:
+                c.close()
+            if rr:
+                try:
                     raw=int(rr["scheduler_interval"] or 1000)
                     # 兼容旧版以秒保存的 1~49 值；新版最小单位为毫秒。
                     interval_ms = raw * 1000 if raw < 50 else raw
                     active_intervals.append(max(50,min(60000,interval_ms)))
-            except Exception: pass
+                except (TypeError, ValueError) as exc:
+                    log_step("任务 #%s | 解析调度间隔失败 | value=%s | error=%s", _tid, rr["scheduler_interval"], exc)
         time.sleep((min(active_intervals) if active_intervals else 1000) / 1000.0)
 
 
