@@ -14,7 +14,6 @@ import time
 import threading
 import shutil
 import asyncio
-import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 from queue import Queue, Empty
@@ -24,22 +23,18 @@ from pathlib import Path
 
 # 该脚本位于 Preparation_Before_Use，确保可以导入根目录项目模块/配置。
 BASE_DIR = Path(__file__).resolve().parent.parent
-def load_local_env(path):
-    if not path.exists():
-        return
-    for raw in path.read_text(encoding="utf-8").splitlines():
-        line = raw.strip()
-        if line and not line.startswith("#") and "=" in line:
-            key, value = line.split("=", 1)
-            os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
-
-
-load_local_env(BASE_DIR / ".env")
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import discord
 from Preparation_Before_Use.discordDB import import_json_incremental, rebuild_user_stats
+from shared.discord_api import default_downloader_token, send_direct_message
+from shared.env import load_local_env
+from shared.portal import touch_user_presence, upsert_portal_user
+from shared.sqlite_utils import add_columns, connect_sqlite
+from shared.timeutil import utc_now_iso as now
+
+load_local_env(BASE_DIR / ".env")
 
 PORTAL_DB = Path(os.getenv("PORTAL_DB", "data/portal.db"))
 if not PORTAL_DB.is_absolute():
@@ -71,18 +66,10 @@ class TaskCancelled(Exception):
     pass
 
 
-def now():
-    return datetime.now(timezone.utc).isoformat()
-
-
 def db():
     if not PORTAL_DB.exists():
         raise FileNotFoundError(f"找不到 {PORTAL_DB}")
-    conn = sqlite3.connect(PORTAL_DB, timeout=60)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout=60000")
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
+    return connect_sqlite(PORTAL_DB, synchronous=None)
 
 
 def ensure_schema(conn):
@@ -151,20 +138,9 @@ def ensure_schema(conn):
         "mode": "TEXT DEFAULT 'initial'",
         "last_active_at": "TEXT"
     }
-    for col, typ in migrations.items():
-        try:
-            conn.execute(f"ALTER TABLE download_tasks ADD COLUMN {col} {typ}")
-        except sqlite3.OperationalError:
-            pass
-    for col, typ in {"last_active_at":"TEXT"}.items():
-        try:
-            conn.execute(f"ALTER TABLE download_task_items ADD COLUMN {col} {typ}")
-        except sqlite3.OperationalError:
-            pass
-    try:
-        conn.execute("ALTER TABLE servers ADD COLUMN source_task_id INTEGER")
-    except sqlite3.OperationalError:
-        pass
+    add_columns(conn, "download_tasks", migrations)
+    add_columns(conn, "download_task_items", {"last_active_at": "TEXT"})
+    add_columns(conn, "servers", {"source_task_id": "INTEGER"})
     conn.execute("CREATE INDEX IF NOT EXISTS idx_download_tasks_status_created ON download_tasks(status, created_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_download_tasks_guild_status ON download_tasks(guild_id, status)")
     conn.commit()
@@ -175,7 +151,7 @@ def get_token(bot_id=None):
     row = None
     if bot_id:
         row = conn.execute("SELECT name,token FROM download_bots WHERE id=?", (bot_id,)).fetchone()
-    default_token = (os.getenv("DISCORD_DOWNLOADER_TOKEN") or os.getenv("DISCORD_DOWNLOADER") or "").strip()
+    default_token = default_downloader_token()
     conn.close()
     if row and row["token"]:
         return {"name": row["name"], "token": row["token"]}
@@ -254,23 +230,8 @@ def notify_task_started(task, bot_count, resumed):
         f"下载机器人：{bot_count} 个\n"
         f"扫描状态：{'已完成，恢复未完成帖子' if resumed else '扫描中，扫描完成后全部机器人加入下载池'}"
     )
-    headers = {"Authorization": f"Bot {token}", "Content-Type": "application/json"}
     try:
-        channel_response = requests.post(
-            "https://discord.com/api/v10/users/@me/channels",
-            headers=headers, json={"recipient_id": user_id}, timeout=15,
-        )
-        if channel_response.status_code not in (200, 201):
-            raise RuntimeError(f"创建私信频道失败 HTTP {channel_response.status_code}")
-        channel_id = channel_response.json().get("id")
-        if not channel_id:
-            raise RuntimeError("Discord 没有返回私信频道 ID")
-        message_response = requests.post(
-            f"https://discord.com/api/v10/channels/{channel_id}/messages",
-            headers=headers, json={"content": text}, timeout=15,
-        )
-        if message_response.status_code not in (200, 201):
-            raise RuntimeError(f"发送开始通知失败 HTTP {message_response.status_code}")
+        send_direct_message(token, user_id, text)
         log_step("任务 #%s | 主程序机器人已发送开始通知 | user=%s", task["id"], user_id)
     except Exception as exc:
         # 通知失败不能阻断下载任务本身。
@@ -612,21 +573,8 @@ def sync_portal_users(guild_id, db_path, task_id):
     rows.close()
     timestamp = now()
     for u in users:
-        uid = str(u["user_id"])
-        conn.execute(
-            """INSERT INTO portal_users(user_id,username,nickname,avatar_url,last_login)
-               VALUES(?,?,?,?,NULL)
-               ON CONFLICT(user_id) DO UPDATE SET
-               username=CASE WHEN excluded.username!='' THEN excluded.username ELSE portal_users.username END,
-               nickname=CASE WHEN excluded.nickname!='' THEN excluded.nickname ELSE portal_users.nickname END,
-               avatar_url=CASE WHEN excluded.avatar_url!='' THEN excluded.avatar_url ELSE portal_users.avatar_url END""",
-            (uid, u["username"] or uid, u["nickname"] or u["username"] or uid, u["avatar_url"])
-        )
-        conn.execute(
-            """INSERT INTO user_server_presence(user_id,server_id,first_seen,last_seen)
-               VALUES(?,?,?,?) ON CONFLICT(user_id,server_id) DO UPDATE SET last_seen=excluded.last_seen""",
-            (uid, str(guild_id), timestamp, timestamp)
-        )
+        upsert_portal_user(conn, u["user_id"], u["username"], u["nickname"], u["avatar_url"])
+        touch_user_presence(conn, u["user_id"], guild_id, timestamp)
     conn.commit()
     conn.close()
 
@@ -848,10 +796,7 @@ def import_one_json(path, guild_id, thread_id, last_active_at):
     result = import_json_incremental(str(path), str(db_path), server_id=guild_id)
     conn = sqlite3.connect(db_path, timeout=120)
     try:
-        try:
-            conn.execute("ALTER TABLE threads ADD COLUMN last_active_at TEXT")
-        except sqlite3.OperationalError:
-            pass
+        add_columns(conn, "threads", {"last_active_at": "TEXT"})
         conn.execute("UPDATE threads SET last_active_at=? WHERE thread_id=?", (last_active_at, str(thread_id)))
         conn.commit()
     finally:

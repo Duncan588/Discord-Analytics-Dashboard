@@ -21,7 +21,6 @@ discord_favorites.db 文件，避免维护两份数据库连接配置。
 """
 import os
 import sys
-import sqlite3
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
@@ -33,19 +32,15 @@ from discord import app_commands
 from discord.ext import tasks
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
 
+from shared.env import load_local_env
+from shared.portal import touch_user_presence, upsert_portal_user
+from shared.sqlite_utils import connect_sqlite
+from shared.timeutil import parse_utc_datetime, utc_now_iso
 
-def load_env():
-    p = os.path.join(BASE_DIR, '.env')
-    if os.path.exists(p):
-        for raw in open(p, encoding='utf-8'):
-            line = raw.strip()
-            if line and not line.startswith('#') and '=' in line:
-                k, v = line.split('=', 1)
-                os.environ.setdefault(k.strip(), v.strip().strip('"\''))
-
-
-load_env()
+load_local_env(os.path.join(BASE_DIR, '.env'))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -71,10 +66,7 @@ intents.members = True
 # ---------------------------------------------------------------------------
 
 def db():
-    c = sqlite3.connect(DB, timeout=60)
-    c.row_factory = sqlite3.Row
-    c.execute('PRAGMA busy_timeout=60000')
-    c.execute('PRAGMA journal_mode=WAL')
+    c = connect_sqlite(DB, synchronous=None)
     c.executescript('''
     CREATE TABLE IF NOT EXISTS whitelist_users(
         user_id TEXT PRIMARY KEY, username TEXT, added_by TEXT, created_at DATETIME NOT NULL
@@ -141,7 +133,7 @@ def can_sync(uid, guild_id):
 
 
 def upsert_member(guild_id, member):
-    now = datetime.now(timezone.utc).isoformat()
+    now = utc_now_iso()
     username = str(member.name or member.id)
     nickname = str(member.display_name or member.name or member.id)
     avatar = None
@@ -150,17 +142,8 @@ def upsert_member(guild_id, member):
     except Exception:
         avatar = None
     c = db()
-    c.execute('''INSERT INTO portal_users(user_id,username,nickname,avatar_url,last_login)
-                 VALUES(?,?,?,?,NULL)
-                 ON CONFLICT(user_id) DO UPDATE SET
-                 username=excluded.username,
-                 nickname=excluded.nickname,
-                 avatar_url=COALESCE(excluded.avatar_url,portal_users.avatar_url)''',
-              (str(member.id), username, nickname, avatar))
-    c.execute('''INSERT INTO user_server_presence(user_id,server_id,first_seen,last_seen)
-                 VALUES(?,?,?,?)
-                 ON CONFLICT(user_id,server_id) DO UPDATE SET last_seen=excluded.last_seen''',
-              (str(member.id), str(guild_id), now, now))
+    upsert_portal_user(c, member.id, username, nickname, avatar)
+    touch_user_presence(c, member.id, guild_id, now)
     c.commit()
     c.close()
 
@@ -181,14 +164,14 @@ async def sync_guild_members(guild, request_id=None):
                 await asyncio.sleep(0)
         if request_id:
             c = db()
-            c.execute("UPDATE member_sync_requests SET status='completed',finished_at=? WHERE id=?", (datetime.now(timezone.utc).isoformat(), request_id))
+            c.execute("UPDATE member_sync_requests SET status='completed',finished_at=? WHERE id=?", (utc_now_iso(), request_id))
             c.commit(); c.close()
         print(f'[members] guild={guild.id} sync completed count={count}')
         return count
     except Exception as exc:
         if request_id:
             c = db()
-            c.execute("UPDATE member_sync_requests SET status='failed',finished_at=?,error=? WHERE id=?", (datetime.now(timezone.utc).isoformat(), str(exc), request_id))
+            c.execute("UPDATE member_sync_requests SET status='failed',finished_at=?,error=? WHERE id=?", (utc_now_iso(), str(exc), request_id))
             c.commit(); c.close()
         print(f'[members] guild={guild.id} sync failed: {exc}')
         raise
@@ -544,7 +527,7 @@ class Bot(discord.Client):
         for row in rows:
             guild = self.get_guild(int(row['guild_id']))
             if guild is None:
-                c = db(); c.execute("UPDATE member_sync_requests SET status='failed',finished_at=?,error=? WHERE id=?", (datetime.now(timezone.utc).isoformat(), '白名单机器人未加入该服务器', row['id'])); c.commit(); c.close()
+                c = db(); c.execute("UPDATE member_sync_requests SET status='failed',finished_at=?,error=? WHERE id=?", (utc_now_iso(), '白名单机器人未加入该服务器', row['id'])); c.commit(); c.close()
                 continue
             try:
                 await sync_guild_members(guild, int(row['id']))
@@ -563,9 +546,9 @@ class Bot(discord.Client):
                 else:
                     text = f"Discord 数据下载任务 #{r['id']} 下载失败。\n服务器：{r['guild_id']}\n原因：{r['error'] or '未知错误'}"
                 await user.send(text)
-                c.execute("UPDATE download_tasks SET notified_at=? WHERE id=?", (datetime.now(timezone.utc).isoformat(), r['id']))
+                c.execute("UPDATE download_tasks SET notified_at=? WHERE id=?", (utc_now_iso(), r['id']))
             except Exception as exc:
-                c.execute("UPDATE download_tasks SET notified_at=? WHERE id=?", (datetime.now(timezone.utc).isoformat(), r['id']))
+                c.execute("UPDATE download_tasks SET notified_at=? WHERE id=?", (utc_now_iso(), r['id']))
                 print(f'[notify] task {r["id"]} failed: {exc}')
         c.commit(); c.close()
 
@@ -582,7 +565,7 @@ async def whitelist_add(interaction: discord.Interaction, user: discord.User):
     if not admin(interaction.user.id):
         return await interaction.response.send_message('无权限', ephemeral=True)
     c = db()
-    c.execute('INSERT OR REPLACE INTO whitelist_users(user_id,username,added_by,created_at) VALUES(?,?,?,?)', (str(user.id), str(user), str(interaction.user.id), datetime.now(timezone.utc).isoformat()))
+    c.execute('INSERT OR REPLACE INTO whitelist_users(user_id,username,added_by,created_at) VALUES(?,?,?,?)', (str(user.id), str(user), str(interaction.user.id), utc_now_iso()))
     c.execute('INSERT OR IGNORE INTO server_download_quota(user_id,quota) VALUES(?,1)', (str(user.id),))
     c.commit(); c.close()
     await interaction.response.send_message(f'已加入白名单 {user}，默认服务器配额 1', ephemeral=True)
@@ -615,7 +598,7 @@ async def server_access(interaction: discord.Interaction, user: discord.User, se
     c = db()
     if not c.execute('SELECT 1 FROM whitelist_users WHERE user_id=?', (str(user.id),)).fetchone():
         c.close(); return await interaction.response.send_message('该用户不在白名单，请先执行 /whitelist_add', ephemeral=True)
-    c.execute('INSERT OR REPLACE INTO user_server_access(user_id,server_id,granted_by,created_at) VALUES(?,?,?,?)', (str(user.id), server_id, str(interaction.user.id), datetime.now(timezone.utc).isoformat()))
+    c.execute('INSERT OR REPLACE INTO user_server_access(user_id,server_id,granted_by,created_at) VALUES(?,?,?,?)', (str(user.id), server_id, str(interaction.user.id), utc_now_iso()))
     c.commit(); c.close()
     await interaction.response.send_message(f'已授权 {user} 使用已导入服务器 {server_id}', ephemeral=True)
 
@@ -666,7 +649,7 @@ async def members_sync(interaction: discord.Interaction, server_id: str):
     active = c.execute("SELECT id FROM member_sync_requests WHERE guild_id=? AND status IN ('pending','running') LIMIT 1", (server_id,)).fetchone()
     if active:
         c.close(); return await interaction.response.send_message(f'该服务器已有成员更新任务 #{active["id"]} 正在执行。', ephemeral=True)
-    c.execute("INSERT INTO member_sync_requests(guild_id,requested_by,status,created_at) VALUES(?,?, 'pending', ?)", (server_id, str(interaction.user.id), datetime.now(timezone.utc).isoformat()))
+    c.execute("INSERT INTO member_sync_requests(guild_id,requested_by,status,created_at) VALUES(?,?, 'pending', ?)", (server_id, str(interaction.user.id), utc_now_iso()))
     c.commit(); c.close()
     await interaction.response.send_message(f'服务器 {guild.name} 的成员名单更新已加入队列。', ephemeral=True)
 
@@ -1007,26 +990,7 @@ def favorites_embed(
 
 def _parse_db_datetime(value) -> datetime:
     """把 SQLite 中保存的时间字符串转换成带时区的 datetime。"""
-    if isinstance(value, datetime):
-        if value.tzinfo is None:
-            return value.replace(tzinfo=timezone.utc)
-        return value
-
-    if not value:
-        return datetime.now(timezone.utc)
-
-    text = str(value).strip()
-    try:
-        result = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        # 兼容 SQLite CURRENT_TIMESTAMP 产生的旧格式
-        result = datetime.strptime(text, "%Y-%m-%d %H:%M:%S").replace(
-            tzinfo=timezone.utc
-        )
-
-    if result.tzinfo is None:
-        result = result.replace(tzinfo=timezone.utc)
-    return result
+    return parse_utc_datetime(value) or datetime.now(timezone.utc)
 
 
 @bot.tree.command(
