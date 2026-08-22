@@ -12,7 +12,9 @@ import threading
 import signal
 import stat
 import hashlib
+import hmac
 import logging
+import secrets
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -78,7 +80,7 @@ if not os.path.isabs(PORTAL_DB):
     PORTAL_DB = os.path.join(BASE_DIR, PORTAL_DB)
 LEGACY_DB = os.path.join(BASE_DIR, "discord_data.db")
 ITEMS_PER_PAGE = 100
-ADMIN_IDS = {x.strip() for x in os.getenv("ADMIN_IDS", "891196284998930522").split(",") if x.strip()}
+ADMIN_IDS = {x.strip() for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip()}
 DISCORD_CLIENT_ID = os.getenv("DISCORD_CLIENT_ID", "").strip()
 DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET", "").strip()
 API_BASE_URL = "https://discord.com/api/v10"
@@ -92,7 +94,6 @@ if not SECRET_KEY:
     except OSError:
         SECRET_KEY = ""
     if not SECRET_KEY:
-        import secrets
         SECRET_KEY = secrets.token_urlsafe(48)
         with open(secret_file, "w", encoding="utf-8") as f:
             f.write(SECRET_KEY)
@@ -184,6 +185,51 @@ def log_request_start():
         request.headers.get("X-Forwarded-For", request.remote_addr or "-"),
         (request.user_agent.string or "-")[:160],
     )
+
+
+# Activity 登录握手由 Discord 客户端跨站发起，没有页面上下文可携带 CSRF Token；
+# 这些接口不修改已登录用户的数据，因此单独豁免。
+CSRF_EXEMPT_ENDPOINTS = {"activity_token", "activity_log"}
+
+
+def request_page(default=1):
+    """读取分页参数；非法输入回退到首页而不是 500。"""
+    raw = request.args.get("page", default)
+    try:
+        return max(1, min(10 ** 6, int(raw)))
+    except (TypeError, ValueError):
+        return default
+
+
+def csrf_token():
+    token = session.get("_csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["_csrf_token"] = token
+    return token
+
+
+@app.before_request
+def csrf_protect():
+    """所有写操作都必须带上会话内的 CSRF Token。
+
+    Activity 模式下会话 Cookie 是 SameSite=None，浏览器会在跨站请求里携带它，
+    因此仅靠 Cookie 无法区分请求来源。
+    """
+    if request.method in ("GET", "HEAD", "OPTIONS", "TRACE"):
+        return None
+    if request.endpoint in CSRF_EXEMPT_ENDPOINTS:
+        return None
+    expected = session.get("_csrf_token", "")
+    supplied = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token", "")
+    if not expected or not hmac.compare_digest(str(supplied), str(expected)):
+        app.logger.warning(
+            "csrf.reject request_id=%s endpoint=%s", _request_id(), request.endpoint or "-"
+        )
+        if request.path.startswith("/api/") or request.accept_mimetypes.best == "application/json":
+            return jsonify({"ok": False, "error": "CSRF 校验失败，请刷新页面后重试"}), 400
+        return "CSRF 校验失败，请刷新页面后重试", 400
+    return None
 
 
 @app.after_request
@@ -1431,6 +1477,9 @@ def upload_json():
         file.save(temp)
         meta = inspect_json(temp)
         sid = str(meta["server_id"])
+        # server_id 来自上传文件内容，会被拼进数据目录路径，必须限制为纯数字 ID。
+        if not sid.isdigit():
+            return "JSON 中的 server_id 无效", 400
         target = server_db_path(sid)
         # 权限 2 用户只能新建/管理自己拥有访问权的服务器，且下载服务器数量受 quota 限制。
         existing = get_portal_db().execute("SELECT 1 FROM servers WHERE server_id=?", (sid,)).fetchone()
@@ -1512,7 +1561,7 @@ def index():
 @app.route("/api/leaderboard")
 @server_required
 def api_leaderboard():
-    page = max(1, int(request.args.get("page", 1)))
+    page = request_page()
     offset = (page - 1) * 50
     conn = get_db()
     users = []
@@ -1556,7 +1605,7 @@ def user_profile(user_id):
     msg_count = conn.execute(f"SELECT count(DISTINCT message_id) FROM messages WHERE author_id IN ({ph})", merged_ids).fetchone()[0]
     reaction_received_count = conn.execute(f"SELECT count(*) FROM reactions r JOIN messages m ON r.message_id=m.message_id WHERE m.author_id IN ({ph})", merged_ids).fetchone()[0]
     sort_by = request.args.get("sort", "hot")
-    page = max(1, int(request.args.get("page", 1)))
+    page = request_page()
     offset = (page - 1) * ITEMS_PER_PAGE
     order = "ORDER BY total_reactions DESC,m.timestamp DESC" if sort_by == "hot" else "ORDER BY m.timestamp DESC"
     messages = process_messages(conn, conn.execute(f"SELECT m.*,t.name thread_name,(SELECT count(*) FROM reactions WHERE message_id=m.message_id) total_reactions FROM messages m JOIN threads t ON m.thread_id=t.thread_id WHERE m.author_id IN ({ph}) {order} LIMIT ? OFFSET ?", (*merged_ids, ITEMS_PER_PAGE, offset)).fetchall())
@@ -1660,7 +1709,7 @@ def _admin_server_scope():
     return sid
 
 
-@app.route("/admin/approve/<int:req_id>")
+@app.route("/admin/approve/<int:req_id>", methods=["POST"])
 @login_required
 @admin_required
 def admin_approve(req_id):
@@ -1677,7 +1726,7 @@ def admin_approve(req_id):
     return redirect(url_for("admin_panel"))
 
 
-@app.route("/admin/unmerge/<target_id>")
+@app.route("/admin/unmerge/<target_id>", methods=["POST"])
 @login_required
 @admin_required
 def admin_unmerge(target_id):
@@ -1687,7 +1736,7 @@ def admin_unmerge(target_id):
     conn = get_db(); conn.execute("DELETE FROM user_merges WHERE target_id=?", (target_id,)); conn.commit(); return redirect(url_for("admin_panel"))
 
 
-@app.route("/admin/reset_all_claims")
+@app.route("/admin/reset_all_claims", methods=["POST"])
 @login_required
 @admin_required
 def admin_reset_all():
@@ -1727,7 +1776,11 @@ def admin_whitelist_delete(user_id):
 @login_required
 @level1_required
 def admin_quota():
-    uid=str(request.form.get("user_id","")); quota=max(1,min(100,int(request.form.get("quota","1"))))
+    uid=str(request.form.get("user_id",""))
+    try:
+        quota=max(1,min(100,int(request.form.get("quota","1"))))
+    except (TypeError, ValueError):
+        return "配额必须是数字",400
     portal=get_portal_db(); portal.execute("INSERT INTO server_download_quota(user_id,quota) VALUES(?,?) ON CONFLICT(user_id) DO UPDATE SET quota=excluded.quota",(uid,quota)); portal.commit(); return redirect(url_for("admin_panel"))
 
 @app.route("/admin/access", methods=["POST"])
@@ -1780,8 +1833,11 @@ def admin_download_server():
     p=get_portal_db(); uid=str(session["user"]["id"])
     guild=str(request.form.get("guild_id","")).strip(); forum=str(request.form.get("forum_channel_id","")).strip()
     bot_ids=[str(x) for x in request.form.getlist("bot_ids") if str(x).isdigit()]; use_default=request.form.get("use_default_bot")=="1"
-    scheduler_interval=max(50,min(60000,int(request.form.get("scheduler_interval") or 250)))
-    download_interval_ms=max(0,min(60000,int(request.form.get("download_interval_ms") or 0)))
+    try:
+        scheduler_interval=max(50,min(60000,int(request.form.get("scheduler_interval") or 250)))
+        download_interval_ms=max(0,min(60000,int(request.form.get("download_interval_ms") or 0)))
+    except (TypeError,ValueError):
+        return "调度间隔和下载间隔必须是数字",400
     update_enabled=1 if request.form.get("update_enabled")=="1" else 0
     if not guild.isdigit() or not forum.isdigit(): return "Guild ID 和 Forum Channel ID 必须是数字",400
     if admin_level(uid)==2:
@@ -1834,7 +1890,8 @@ def downloader_config():
     uid=str(session["user"]["id"]); level=admin_level(uid); p=get_portal_db()
     if level==1: rows=p.execute("SELECT * FROM download_configs WHERE enabled=1 ORDER BY id").fetchall()
     else: rows=p.execute("SELECT * FROM download_configs WHERE enabled=1 AND owner_user_id=? ORDER BY id",(uid,)).fetchall()
-    return jsonify({"servers":[dict(r) for r in rows],"bots":[dict(r) for r in p.execute("SELECT id,name FROM download_bots WHERE owner_user_id=? ORDER BY id",(uid,)).fetchall()],"default_token":os.getenv("DISCORD_DOWNLOADER_TOKEN","") if level==1 else ""})
+    # 机器人 Token 只在服务端使用；不要通过 HTTP 接口回传给浏览器。
+    return jsonify({"servers":[dict(r) for r in rows],"bots":[dict(r) for r in p.execute("SELECT id,name FROM download_bots WHERE owner_user_id=? ORDER BY id",(uid,)).fetchall()]})
 
 @app.route("/api/managed-discord-resources")
 @login_required
@@ -2109,6 +2166,7 @@ def inject_globals():
         # Client ID 不是敏感信息（会出现在 OAuth 授权链接里），可以放心暴露给前端，
         # Discord 活动模式的 discord-activity.js 需要用它初始化 Embedded App SDK。
         "discord_client_id": DISCORD_CLIENT_ID,
+        "csrf_token": csrf_token,
     }
 
 

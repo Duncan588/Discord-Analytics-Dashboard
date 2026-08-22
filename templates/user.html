@@ -59,6 +59,7 @@
             <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto sm:justify-end">
                 {% if current_user and current_user.id != user.user_id %}
                 <form action="/claim_account" method="post" onsubmit="return confirm('确认申请认领此账号？需管理员审核。');">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <input type="hidden" name="target_id" value="{{ user.user_id }}">
                     <button type="submit" class="bg-[#2f3136] border border-gray-600 hover:bg-gray-700 text-gray-300 px-3 py-2 rounded-xl text-sm transition">
                         🔗 认领此账号
