@@ -1308,9 +1308,12 @@ def get_servers_for_user(user_id):
                 (uid, demo_id, "demo-fallback", utc_now_iso()),
             )
             _assign_demo_identity(portal, uid, demo_id)
-            if not any(str(s["server_id"]) == demo_id for s in result):
-                result.append(demo)
-            app.logger.info("用户 %s 无真实服务器数据，已引导至演示服务器 %s", uid, demo_id)
+    elif level >= 1:
+        # admin 切换到 demo 浏览时也分配假身份（不写 user_server_access，
+        # 不影响其 admin 权限与真实服务器可见性）。
+        demo = portal.execute("SELECT * FROM servers WHERE server_id=?", (demo_id,)).fetchone()
+        if demo is not None and os.path.exists(demo["db_path"]):
+            _assign_demo_identity(portal, uid, demo_id)
     elif has_real_data and level == 0:
         changed2 = False
         for row in portal.execute(
@@ -1384,10 +1387,10 @@ def get_display_user():
     u = session.get("user")
     if not u:
         return None
-    servers = get_servers_for_user(u["id"])
     demo_id = str(os.getenv("DEMO_SERVER_ID", "900000000000000001"))
-    only_demo = servers and all(str(s["server_id"]) == demo_id for s in servers)
-    if not only_demo:
+    # 按当前选中的服务器判断：只要正浏览的是演示服务器，就用假身份展示
+    # （admin 切到 demo 时同样生效；真实服务器中仍用本人身份）。
+    if str(current_server_id() or "") != demo_id:
         return u
     _ensure_demo_identity_table()
     portal = get_portal_db()
