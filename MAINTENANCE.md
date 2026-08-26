@@ -125,7 +125,17 @@ venv\Scripts\python Preparation_Before_Use\discord_downloader.py
 - 页面空白 / ModuleNotFoundError flask → 未用 venv Python 启动 app.py。
 - 下载卡住 → 看 `data/logs/` 与下载器日志；确认 DCE 可执行文件在 `DiscordChatExporter.Cli.win-x64/`。
 
-## 8. 维护注意事项
+## 10. Demo 兜底机制（2026-08-26 加入）
+
+无任何真实服务器数据的普通用户（`admin_level=0`）登录后：
+
+1. 自动获得演示服务器（`DEMO_SERVER_ID`，默认 `900000000000000001`）的访问权（`granted_by='demo-fallback'` 标记）
+2. 由 `_assign_demo_identity()` 从演示库 `users` 表随机绑定一个假成员，持久化到 portal.db 的 `demo_identities` 表——同一用户每次登录看到同一个身份
+3. `get_display_user()` 在 callback/index/me/report 中把会话身份替换为假成员，看板、个人主页、年度报告全部以假用户视角完整呈现
+4. 一旦该用户在真实服务器出现数据，demo 授权与身份绑定自动清除
+
+Admin/白名单用户不走兜底。清除某用户的 demo 身份：删 `demo_identities` 对应行即可。
+
 
 - 所有时间处理统一走 `shared/timeutil.py`。
 - 日志自动轮转保留 5 份，禁止向日志写入任何 token。
