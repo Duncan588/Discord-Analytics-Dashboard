@@ -1296,6 +1296,8 @@ def get_servers_for_user(user_id):
     # 用户在任何真实服务器中都没有数据时，将其引入演示服务器以便体验；
     # 演示服务器绝不授予 admin/whitelist 权限，且一旦用户在真实服务器出现数据，
     # 就从可见列表中移除演示服务器。
+    # 无数据的用户会被分配一个演示库中的假身份（demo_identities 表），
+    # 这样看板/个人主页/年度报告都能以该假用户的视角完整体验。
     demo_id = str(os.getenv("DEMO_SERVER_ID", "900000000000000001"))
     has_real_data = any(str(s["server_id"]) != demo_id for s in result)
     if not has_real_data and level == 0:
@@ -1305,7 +1307,7 @@ def get_servers_for_user(user_id):
                 "INSERT OR IGNORE INTO user_server_access(user_id,server_id,granted_by,created_at) VALUES(?,?,?,?)",
                 (uid, demo_id, "demo-fallback", utc_now_iso()),
             )
-            portal.commit()
+            _assign_demo_identity(portal, uid, demo_id)
             if not any(str(s["server_id"]) == demo_id for s in result):
                 result.append(demo)
             app.logger.info("用户 %s 无真实服务器数据，已引导至演示服务器 %s", uid, demo_id)
@@ -1322,8 +1324,89 @@ def get_servers_for_user(user_id):
                 changed2 = True
         if changed2:
             portal.commit()
+            session.pop("demo_identity", None)
             result = [s for s in result if str(s["server_id"]) != demo_id]
     return result
+
+
+def _assign_demo_identity(portal, uid, demo_id):
+    """为无数据用户随机绑定一个演示库中的假成员，结果持久化，保证每次登录看到同一个身份。"""
+    existing = portal.execute(
+        "SELECT demo_user_id FROM demo_identities WHERE real_user_id=?", (str(uid),)
+    ).fetchone()
+    if existing:
+        return str(existing["demo_user_id"])
+    conn = db_connect(server_db_path(demo_id))
+    try:
+        candidates = [r[0] for r in conn.execute(
+            "SELECT user_id FROM users WHERE is_bot=0 AND user_id NOT IN "
+            "(SELECT target_id FROM user_merges) ORDER BY RANDOM() LIMIT 5"
+        )]
+    finally:
+        conn.close()
+    if not candidates:
+        return None
+    chosen = candidates[0]
+    portal.execute(
+        "INSERT INTO demo_identities(real_user_id,demo_user_id,demo_server_id,created_at) VALUES(?,?,?,?)",
+        (str(uid), str(chosen), str(demo_id), utc_now_iso()),
+    )
+    portal.commit()
+    app.logger.info("为用户 %s 分配演示身份 %s（服务器 %s）", uid, chosen, demo_id)
+    return str(chosen)
+
+
+DEMO_IDENTITY_TABLE_READY = False
+
+def _ensure_demo_identity_table():
+    global DEMO_IDENTITY_TABLE_READY
+    if DEMO_IDENTITY_TABLE_READY:
+        return
+    portal = get_portal_db()
+    portal.execute("""
+    CREATE TABLE IF NOT EXISTS demo_identities(
+        real_user_id TEXT PRIMARY KEY,
+        demo_user_id TEXT NOT NULL,
+        demo_server_id TEXT NOT NULL,
+        created_at DATETIME NOT NULL
+    );
+    """)
+    portal.commit()
+    DEMO_IDENTITY_TABLE_READY = True
+
+
+def get_display_user():
+    """返回当前会话用于展示的身份。
+
+    - 有真实数据的用户：返回其 Discord 身份本身
+    - 无数据的 demo 用户：返回被分配的假成员身份（并同步进 session）
+    """
+    u = session.get("user")
+    if not u:
+        return None
+    servers = get_servers_for_user(u["id"])
+    demo_id = str(os.getenv("DEMO_SERVER_ID", "900000000000000001"))
+    only_demo = servers and all(str(s["server_id"]) == demo_id for s in servers)
+    if not only_demo:
+        return u
+    _ensure_demo_identity_table()
+    portal = get_portal_db()
+    row = portal.execute(
+        "SELECT d.demo_user_id, p.username, p.nickname, p.avatar_url FROM demo_identities d "
+        "LEFT JOIN portal_users p ON p.user_id=d.demo_user_id WHERE d.real_user_id=?",
+        (str(u["id"]),),
+    ).fetchone()
+    if not row:
+        return u
+    display = {
+        "id": str(row["demo_user_id"]),
+        "username": row["username"] or f"demo_{row['demo_user_id'][-4:]}",
+        "avatar": row["avatar_url"] or u.get("avatar"),
+        "nickname": row["nickname"],
+        "_is_demo_identity": True,
+    }
+    session["display_user"] = display
+    return display
 
 def user_has_server_data(user_id):
     return get_servers_for_user(user_id)
@@ -1735,12 +1818,14 @@ def callback():
         return render_template("login.html", error=payload["error"], current_user=None), 429 if payload.get("rate_limited") else 400
 
     servers = get_servers_for_user(payload["user"]["id"])
+    if servers:
+        get_display_user()  # demo 用户在此分配假身份并写入 session
     if len(servers) == 1:
         session["server_id"] = servers[0]["server_id"]
         return redirect(url_for("index"))
     if len(servers) > 1:
         return redirect(url_for("servers"))
-    return redirect(url_for("my_profile"))
+    return redirect(url_for("welcome"))
 
 
 @app.route("/api/activity/token", methods=["POST"])
@@ -1835,9 +1920,13 @@ def activity_log():
 @login_required
 def my_profile():
     servers = get_servers_for_user(session["user"]["id"])
+    if servers:
+        display_user = get_display_user() or session["user"]
+    else:
+        return render_template("welcome.html", can_upload=whitelist_allowed(session["user"]["id"]), current_user=session["user"], no_data=True)
     if len(servers) == 1:
         session["server_id"] = servers[0]["server_id"]
-        return redirect(url_for("user_profile", user_id=session["user"]["id"]))
+        return redirect(url_for("user_profile", user_id=display_user["id"]))
     if len(servers) > 1:
         return redirect(url_for("servers"))
     return render_template("welcome.html", can_upload=whitelist_allowed(session["user"]["id"]), current_user=session["user"], no_data=True)
@@ -1931,6 +2020,7 @@ def index():
         if is_discord_activity_request():
             return redirect(url_for("login", **request.args.to_dict()))
         return redirect(url_for("welcome"))
+    display_user = get_display_user() or session["user"]
     servers = get_servers_for_user(session["user"]["id"])
     if not current_server_id():
         if len(servers) == 1:
@@ -1949,9 +2039,9 @@ def index():
             return redirect(url_for("welcome"))
     sid = current_server_id()
     conn = get_db()
-    u = session["user"]
+    u = display_user
     now = utc_now_iso()
-    conn.execute("INSERT INTO web_visitors(user_id,username,nickname,avatar_url,last_visit) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET username=excluded.username,nickname=excluded.nickname,avatar_url=excluded.avatar_url,last_visit=excluded.last_visit", (u["id"], u["username"], u["username"], u["avatar"], now))
+    conn.execute("INSERT INTO web_visitors(user_id,username,nickname,avatar_url,last_visit) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET username=excluded.username,nickname=excluded.nickname,avatar_url=excluded.avatar_url,last_visit=excluded.last_visit", (u["id"], u["username"], u.get("nickname") or u["username"], u.get("avatar"), now))
     conn.commit()
     data = data_engine.load_or_compute(sid)
     visitors = conn.execute("SELECT * FROM web_visitors ORDER BY last_visit DESC").fetchall()
@@ -2457,7 +2547,9 @@ def managed_discord_resources():
 @app.route("/report")
 @server_required
 def report():
-    sid = current_server_id(); conn = get_db(); uid = str(session["user"]["id"])
+    sid = current_server_id(); conn = get_db()
+    u = get_display_user() or session["user"]
+    uid = str(u["id"])
     db_user = conn.execute("SELECT * FROM users WHERE user_id=?", (uid,)).fetchone()
     if not db_user:
         return redirect(url_for("welcome"))
