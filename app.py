@@ -2017,6 +2017,17 @@ def select_server(server_id):
     return redirect(url_for("index"))
 
 
+@app.after_request
+def _no_cache_html(response):
+    # 动态页面禁止启发式缓存，防止切换服务器后浏览器/CDN 仍展示旧服务器内容。
+    ct = response.headers.get("Content-Type", "")
+    if ct.startswith("text/html"):
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Vary"] = "Cookie"
+    return response
+
+
 @app.route("/")
 def index():
     if "user" not in session:
