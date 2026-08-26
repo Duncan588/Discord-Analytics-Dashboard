@@ -1,0 +1,27 @@
+# 敏感信息 —— 绝对不能上传
+.env
+
+# 数据与日志
+data/
+raw/
+*.log
+*.log.*
+*.db
+*.db-shm
+*.db-wal
+
+# 外部依赖（体积大，使用者自行下载）
+DiscordChatExporter.Cli.win-x64/
+DiscordChatExporter.Cli.linux-x64/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# IDE / 系统
+.idea/
+.vscode/
+Thumbs.db
+.DS_Store
