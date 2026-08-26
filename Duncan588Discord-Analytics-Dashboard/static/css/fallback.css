@@ -1,0 +1,125 @@
+
+/* Discord Analytics Dashboard compatibility layer.
+   Core Tailwind utilities are served from tailwind-static.css; this file
+   keeps Activity-specific and offline-safe rules independent of JavaScript. */
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+html.discord-activity body{padding-top:max(3.5rem,env(safe-area-inset-top))!important}
+html.discord-activity .activity-user-menu{margin-left:auto!important;order:999}
+html.discord-activity .activity-user-controls{justify-content:flex-end!important}
+html.discord-activity body,html.discord-activity #scroller{width:100%;max-width:100%;overflow-x:hidden}
+html.discord-activity .flex-1,html.discord-activity .homepage-main-grid>*,html.discord-activity .homepage-bottom-grid>*{min-width:0}
+html.discord-activity .truncate,html.discord-activity h2,html.discord-activity h3,html.discord-activity p{max-width:100%;overflow-wrap:anywhere}
+html.discord-activity .homepage-main-grid,html.discord-activity .homepage-bottom-grid{max-width:100%;min-width:0}
+@media(max-width:767px){html.discord-activity body{padding-top:max(4rem,env(safe-area-inset-top))!important}}
+body{font-family:Arial,"Microsoft YaHei",sans-serif}
+a{color:inherit;text-decoration:none}
+button,input,select,textarea{font:inherit}
+img{max-width:100%}
+.hidden{display:none!important}.block{display:block}.inline-block{display:inline-block}
+.flex{display:flex}.inline-flex{display:inline-flex}.grid{display:grid}
+.flex-col{flex-direction:column}.flex-row{flex-direction:row}
+.flex-wrap{flex-wrap:wrap}.flex-1{flex:1 1 0%}.shrink-0{flex-shrink:0}
+.items-center{align-items:center}.items-start{align-items:flex-start}.items-end{align-items:flex-end}
+.justify-center{justify-content:center}.justify-between{justify-content:space-between}
+.self-end{align-self:flex-end}.self-auto{align-self:auto}
+.w-full{width:100%}.h-full{height:100%}.w-auto{width:auto}
+.h-screen{height:100vh}.min-h-screen{min-height:100vh}
+.w-3{width:.75rem}.h-3{height:.75rem}.w-5{width:1.25rem}.h-5{height:1.25rem}
+.w-10{width:2.5rem}.h-10{height:2.5rem}.w-16{width:4rem}.h-16{height:4rem}
+.w-24{width:6rem}.h-24{height:6rem}.w-32{width:8rem}.h-32{height:8rem}
+.w-40{width:10rem}.w-48{width:12rem}.h-40{height:10rem}.h-48{height:12rem}
+.max-w-xl{max-width:36rem}.max-w-3xl{max-width:48rem}.max-w-4xl{max-width:56rem}
+.max-w-5xl{max-width:64rem}.max-w-6xl{max-width:72rem}
+.mx-auto{margin-left:auto;margin-right:auto}.ml-2{margin-left:.5rem}
+.mt-1{margin-top:.25rem}.mt-2{margin-top:.5rem}.mt-3{margin-top:.75rem}.mt-4{margin-top:1rem}.mt-5{margin-top:1.25rem}
+.mb-0\.5{margin-bottom:.125rem}.mb-1{margin-bottom:.25rem}.mb-2{margin-bottom:.5rem}.mb-3{margin-bottom:.75rem}
+.mb-4{margin-bottom:1rem}.mb-5{margin-bottom:1.25rem}.mb-6{margin-bottom:1.5rem}.mb-8{margin-bottom:2rem}
+.mb-10{margin-bottom:2.5rem}.mb-12{margin-bottom:3rem}.mb-16{margin-bottom:4rem}
+.p-2{padding:.5rem}.p-3{padding:.75rem}.p-4{padding:1rem}.p-5{padding:1.25rem}.p-6{padding:1.5rem}
+.p-8{padding:2rem}.p-10{padding:2.5rem}.p-12{padding:3rem}
+.px-2{padding-left:.5rem;padding-right:.5rem}.px-3{padding-left:.75rem;padding-right:.75rem}
+.px-4{padding-left:1rem;padding-right:1rem}.px-5{padding-left:1.25rem;padding-right:1.25rem}
+.px-6{padding-left:1.5rem;padding-right:1.5rem}.px-7{padding-left:1.75rem;padding-right:1.75rem}
+.px-8{padding-left:2rem;padding-right:2rem}.px-10{padding-left:2.5rem;padding-right:2.5rem}
+.px-12{padding-left:3rem;padding-right:3rem}.py-0\.5{padding-top:.125rem;padding-bottom:.125rem}
+.py-1{padding-top:.25rem;padding-bottom:.25rem}.py-2{padding-top:.5rem;padding-bottom:.5rem}
+.py-3{padding-top:.75rem;padding-bottom:.75rem}.py-4{padding-top:1rem;padding-bottom:1rem}
+.py-6{padding-top:1.5rem;padding-bottom:1.5rem}.pb-24{padding-bottom:6rem}
+.gap-1{gap:.25rem}.gap-2{gap:.5rem}.gap-3{gap:.75rem}.gap-4{gap:1rem}.gap-5{gap:1.25rem}.gap-6{gap:1.5rem}.gap-8{gap:2rem}
+.space-y-2>*+*{margin-top:.5rem}.space-y-3>*+*{margin-top:.75rem}.space-y-4>*+*{margin-top:1rem}
+.space-y-8>*+*{margin-top:2rem}
+.grid-cols-1{grid-template-columns:repeat(1,minmax(0,1fr))}
+.grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}
+.grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}
+.rounded{border-radius:.25rem}.rounded-lg{border-radius:.5rem}.rounded-xl{border-radius:.75rem}
+.rounded-2xl{border-radius:1rem}.rounded-3xl{border-radius:1.5rem}.rounded-full{border-radius:9999px}
+.border{border-width:1px;border-style:solid}.border-2{border-width:2px;border-style:solid}.border-4{border-width:4px;border-style:solid}
+.border-gray-700{border-color:#4b5563}.border-\[\#202225\]{border-color:#202225}
+.border-\[\#5865f2\]{border-color:#5865f2}.border-white\/10{border-color:rgba(255,255,255,.1)}
+.border-red-500{border-color:#ef4444}.border-green-500{border-color:#22c55e}
+.border-blue-400{border-color:#60a5fa}.border-pink-400{border-color:#f472b6}
+.border-\[\#faa61a\]{border-color:#faa61a}.border-\[\#eb459e\]{border-color:#eb459e}
+.border-l-4{border-left-width:4px}.border-l-8{border-left-width:8px}
+.text-white{color:#fff}.text-black{color:#000}.text-gray-200{color:#e5e7eb}.text-gray-300{color:#d1d5db}
+.text-gray-400{color:#9ca3af}.text-gray-500{color:#6b7280}.text-gray-600{color:#4b5563}
+.text-red-300{color:#fca5a5}.text-green-300{color:#86efac}.text-green-400{color:#4ade80}
+.text-blue-300{color:#93c5fd}.text-pink-300{color:#f9a8d4}.text-\[\#5865f2\]{color:#5865f2}
+.text-\[\#3ba55c\]{color:#3ba55c}.text-\[\#8ea1ff\]{color:#8ea1ff}.text-\[\#00b0f4\]{color:#00b0f4}
+.text-\[\#faa61a\]{color:#faa61a}.text-\[\#eb459e\]{color:#eb459e}
+.bg-white{background:#fff}.bg-black{background:#000}.bg-\[\#36393f\]{background:#36393f}
+.bg-\[\#2f3136\]{background:#2f3136}.bg-\[\#202225\]{background:#202225}.bg-\[\#40444b\]{background:#40444b}
+.bg-\[\#5865f2\]{background:#5865f2}.bg-blue-500\/20{background:rgba(59,130,246,.2)}
+.bg-pink-500\/20{background:rgba(236,72,153,.2)}.bg-black\/70{background:rgba(0,0,0,.7)}
+.bg-\[\#2f3136\]\/50{background:rgba(47,49,54,.5)}
+.bg-gradient-1,.bg-gradient-2,.bg-gradient-3,.bg-gradient-4{background:#2f3136}
+.shadow-xl{box-shadow:0 20px 25px rgba(0,0,0,.25)}.shadow-2xl{box-shadow:0 25px 50px rgba(0,0,0,.35)}
+.text-center{text-align:center}.text-right{text-align:right}.font-bold{font-weight:700}.font-extrabold{font-weight:800}
+.font-mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}.text-xs{font-size:.75rem;line-height:1rem}
+.text-sm{font-size:.875rem;line-height:1.25rem}.text-base{font-size:1rem;line-height:1.5rem}
+.text-lg{font-size:1.125rem;line-height:1.75rem}.text-xl{font-size:1.25rem;line-height:1.75rem}
+.text-2xl{font-size:1.5rem;line-height:2rem}.text-3xl{font-size:1.875rem;line-height:2.25rem}
+.text-4xl{font-size:2.25rem;line-height:2.5rem}.text-5xl{font-size:3rem;line-height:1}
+.text-6xl{font-size:3.75rem;line-height:1}.text-8xl{font-size:6rem;line-height:1}
+.leading-tight{line-height:1.25}.leading-relaxed{line-height:1.625}.tracking-widest{letter-spacing:.1em}
+.uppercase{text-transform:uppercase}.truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.whitespace-nowrap{white-space:nowrap}.whitespace-pre-line{white-space:pre-line}.break-all{word-break:break-all}
+.overflow-hidden{overflow:hidden}.overflow-x-hidden{overflow-x:hidden}.overflow-x-auto{overflow-x:auto}
+.cursor-pointer{cursor:pointer}.cursor-default{cursor:default}.relative{position:relative}.absolute{position:absolute}
+.fixed{position:fixed}.inset-0{top:0;right:0;bottom:0;left:0}.z-10{z-index:10}.z-50{z-index:50}.z-\[200px\]{z-index:200}
+.top-0{top:0}.right-0{right:0}.bottom-20{bottom:5rem}.opacity-70{opacity:.7}
+.backdrop-blur-sm{backdrop-filter:blur(4px)}.backdrop-blur-md{backdrop-filter:blur(12px)}
+.transition{transition:all .15s ease}.hover\:bg-\[\#4752c4\]:hover{background:#4752c4}
+.hover\:bg-\[\#40444b\]:hover{background:#40444b}.hover\:bg-\[\#36393f\]:hover{background:#36393f}
+.hover\:text-white:hover{color:#fff}.hover\:scale-105:hover{transform:scale(1.05)}.hover\:scale-110:hover{transform:scale(1.1)}
+.inline-flex{display:inline-flex}.list-none{list-style:none}.overflow-x-hidden{overflow-x:hidden}
+.justify-start{justify-content:flex-start}.justify-end{justify-content:flex-end}
+@media(min-width:640px){
+ .sm\:flex-row{flex-direction:row}.sm\:justify-between{justify-content:space-between}.sm\:items-center{align-items:center}
+ .sm\:items-start{align-items:flex-start}.sm\:items-end{align-items:flex-end}.sm\:w-auto{width:auto}
+ .sm\:p-4{padding:1rem}.sm\:p-5{padding:1.25rem}.sm\:p-6{padding:1.5rem}
+ .sm\:px-6{padding-left:1.5rem;padding-right:1.5rem}.sm\:py-8{padding-top:2rem;padding-bottom:2rem}
+ .sm\:text-lg{font-size:1.125rem;line-height:1.75rem}.sm\:text-2xl{font-size:1.5rem;line-height:2rem}
+ .sm\:w-auto{width:auto}
+}
+@media(min-width:768px){
+ .md\:grid-cols-2{grid-template-columns:repeat(2,minmax(0,1fr))}.md\:grid-cols-3{grid-template-columns:repeat(3,minmax(0,1fr))}
+ .md\:flex-row{flex-direction:row}.md\:p-10{padding:2.5rem}.md\:p-12{padding:3rem}
+ .md\:px-10{padding-left:2.5rem;padding-right:2.5rem}.md\:px-12{padding-left:3rem;padding-right:3rem}
+ .md\:py-6{padding-top:1.5rem;padding-bottom:1.5rem}.md\:pb-0{padding-bottom:0}
+ .md\:mb-3{margin-bottom:.75rem}.md\:mb-4{margin-bottom:1rem}.md\:mb-6{margin-bottom:1.5rem}
+ .md\:mb-8{margin-bottom:2rem}.md\:mb-10{margin-bottom:2.5rem}.md\:mb-12{margin-bottom:3rem}.md\:mb-16{margin-bottom:4rem}
+ .md\:text-2xl{font-size:1.5rem;line-height:2rem}.md\:text-3xl{font-size:1.875rem;line-height:2.25rem}
+ .md\:text-4xl{font-size:2.25rem;line-height:2.5rem}.md\:text-5xl{font-size:3rem;line-height:1}
+ .md\:text-6xl{font-size:3.75rem;line-height:1}.md\:text-8xl{font-size:6rem;line-height:1}
+ .md\:w-16{width:4rem}.md\:h-16{height:4rem}.md\:w-40{width:10rem}.md\:h-40{height:10rem}
+ .md\:w-48{width:12rem}.md\:h-48{height:12rem}.md\:gap-12{gap:3rem}.md\:gap-6{gap:1.5rem}
+ .md\:p-8{padding:2rem}.md\:rounded-3xl{border-radius:1.5rem}.md\:rounded-\[2rem\]{border-radius:2rem}
+ .md\:line-clamp-1{display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
+ .md\:line-clamp-2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+ .md\:bottom-10{bottom:2.5rem}
+}
+@media(max-width:639px){
+ .sm\:hidden{display:none}.sm\:w-auto{width:100%}
+ .sm\:grid-cols-2{grid-template-columns:1fr}
+}

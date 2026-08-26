@@ -1,0 +1,178 @@
+import EventEmitter from './_virtual/index.mjs';
+import bigInt from './_virtual/BigInteger.mjs';
+import transform from './_virtual/index2.mjs';
+import { Platform } from './Constants.mjs';
+import getDefaultSdkConfiguration from './utils/getDefaultSdkConfiguration.mjs';
+import { ChannelTypesObject } from './schema/common.mjs';
+
+class DiscordSDKMock {
+    constructor(clientId, guildId, channelId, locationId) {
+        this.platform = Platform.DESKTOP;
+        this.instanceId = '123456789012345678';
+        this.configuration = getDefaultSdkConfiguration();
+        this.source = null;
+        this.sourceOrigin = '';
+        this.sdkVersion = 'mock';
+        this.mobileAppVersion = 'unknown';
+        this.frameId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+        this.eventBus = new EventEmitter();
+        this.clientId = clientId;
+        this.commands = this._updateCommandMocks({});
+        this.guildId = guildId;
+        this.channelId = channelId;
+        this.locationId = locationId;
+        this.customId = null;
+        this.referrerId = null;
+    }
+    _updateCommandMocks(newCommands) {
+        // Wrap all the command functions with logging
+        this.commands = transform(Object.assign({}, commandsMockDefault, newCommands), (mock, func, name) => {
+            mock[name] = async (...args) => {
+                console.info(`DiscordSDKMock: ${String(name)}(${JSON.stringify(args)})`);
+                return await func(...args);
+            };
+        });
+        // redundant return here to satisfy the constructor defining commands
+        return this.commands;
+    }
+    emitReady() {
+        this.emitEvent('READY', undefined);
+    }
+    close(...args) {
+        console.info(`DiscordSDKMock: close(${JSON.stringify(args)})`);
+    }
+    ready() {
+        return Promise.resolve();
+    }
+    async subscribe(event, listener, ..._subscribeArgs) {
+        return await this.eventBus.on(event, listener);
+    }
+    async unsubscribe(event, listener, ..._unsubscribeArgs) {
+        return await this.eventBus.off(event, listener);
+    }
+    emitEvent(event, data) {
+        this.eventBus.emit(event, data);
+    }
+}
+/** Default return values for all discord SDK commands */
+const commandsMockDefault = {
+    authorize: () => Promise.resolve({ code: 'mock_code' }),
+    setActivity: () => Promise.resolve({
+        name: 'mock_activity_name',
+        type: 0,
+    }),
+    getChannel: () => Promise.resolve({
+        id: 'mock_channel_id',
+        name: 'mock_channel_name',
+        type: ChannelTypesObject.GUILD_TEXT,
+        voice_states: [],
+        messages: [],
+    }),
+    getSkus: () => Promise.resolve({ skus: [] }),
+    getEntitlements: () => Promise.resolve({ entitlements: [] }),
+    startPurchase: () => Promise.resolve([]),
+    setConfig: () => Promise.resolve({ use_interactive_pip: false }),
+    userSettingsGetLocale: () => Promise.resolve({ locale: '' }),
+    openExternalLink: () => Promise.resolve({ opened: false }),
+    encourageHardwareAcceleration: () => Promise.resolve({ enabled: true }),
+    captureLog: () => Promise.resolve(null),
+    setOrientationLockState: () => Promise.resolve(null),
+    openInviteDialog: () => Promise.resolve(null),
+    getPlatformBehaviors: () => Promise.resolve({
+        iosKeyboardResizesView: true,
+    }),
+    getChannelPermissions: () => Promise.resolve({ permissions: bigInt(1234567890) }),
+    getInstanceConnectedParticipants: () => Promise.resolve({ participants: [] }),
+    // START-GENERATED-SECTION
+    openShareMomentDialog: () => Promise.resolve(null),
+    authenticate: () => Promise.resolve({
+        access_token: 'mock_token',
+        user: {
+            username: 'mock_user_username',
+            discriminator: 'mock_user_discriminator',
+            id: 'mock_user_id',
+            avatar: null,
+            public_flags: 1,
+        },
+        scopes: [],
+        expires: new Date(2121, 1, 1).toString(),
+        application: {
+            description: 'mock_app_description',
+            icon: 'mock_app_icon',
+            id: 'mock_app_id',
+            name: 'mock_app_name',
+        },
+    }),
+    shareLink: () => Promise.resolve({ success: false, didSendMessage: false, didCopyLink: false }),
+    initiateImageUpload: () => Promise.resolve({
+        image_url: 'https://assets-global.website-files.com/6257adef93867e50d84d30e2/636e0b52aa9e99b832574a53_full_logo_blurple_RGB.png',
+    }),
+    getRelationships: () => Promise.resolve({
+        relationships: [
+            {
+                type: 1,
+                user: {
+                    username: 'mock_friend_username',
+                    flags: 0,
+                    bot: false,
+                    discriminator: 'mock_friend_discriminator',
+                    id: 'mock_friend_id_1',
+                    avatar: null,
+                },
+            },
+            {
+                type: 1,
+                user: {
+                    username: 'mock_friend_username_with_nickname',
+                    flags: 0,
+                    bot: false,
+                    discriminator: 'mock_friend_discriminator_with_nickname',
+                    id: 'mock_friend_id_2',
+                    avatar: null,
+                },
+                nickname: 'mock_friend_nickname_for_user',
+            },
+            {
+                type: 1,
+                user: {
+                    username: 'mock_friend_username_with_since',
+                    flags: 0,
+                    bot: false,
+                    discriminator: 'mock_friend_discriminator_with_since',
+                    id: 'mock_friend_id_3',
+                    avatar: null,
+                },
+                since: '2021-06-29T00:32:37.180813+00:00',
+            },
+        ],
+    }),
+    inviteUserEmbedded: () => Promise.resolve(null),
+    getUser: () => {
+        return Promise.resolve({
+            username: 'mock_friend_username',
+            flags: 0,
+            bot: false,
+            discriminator: 'mock_friend_discriminator',
+            id: 'mock_friend_id_1',
+            avatar: null,
+        });
+    },
+    getQuestEnrollmentStatus: () => Promise.resolve({
+        quest_id: 'mock_quest_id',
+        is_enrolled: false,
+        enrolled_at: null,
+    }),
+    questStartTimer: () => Promise.resolve({ success: true }),
+    getActivityInstanceConnectedParticipants: () => Promise.resolve({ participants: [] }),
+    shareInteraction: () => Promise.resolve({ success: false }),
+    requestProxyTicketRefresh: () => Promise.resolve({ ticket: 'mock_ticket' }),
+    getQuest: () => Promise.resolve({
+        quest_id: 'mock_quest_id',
+        external_cta_url: 'mock_external_cta_url',
+        enrolled_at: null,
+        completed_at: null,
+    }),
+    // END-GENERATED-SECTION
+};
+
+export { DiscordSDKMock, commandsMockDefault };

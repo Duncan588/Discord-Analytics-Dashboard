@@ -1,0 +1,11 @@
+data/
+raw/
+DiscordChatExporter.Cli.win-x64/
+*.log*
+*.db
+*.db-shm
+*.db-wal
+__pycache__/
+venv/
+*.pyc
+.env

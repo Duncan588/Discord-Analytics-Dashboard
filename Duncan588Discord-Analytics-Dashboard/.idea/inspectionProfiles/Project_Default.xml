@@ -1,0 +1,41 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="false" level="WARNING" enabled_by_default="false">
+      <option name="ignoredPackages">
+        <list>
+          <option value="httpx" />
+          <option value="Pillow" />
+          <option value="playwright" />
+          <option value="tenacity" />
+          <option value="typer" />
+          <option value="opencv-python" />
+          <option value="aiomysql" />
+          <option value="redis" />
+          <option value="pydantic" />
+          <option value="aiofiles" />
+          <option value="fastapi" />
+          <option value="uvicorn" />
+          <option value="python-dotenv" />
+          <option value="jieba" />
+          <option value="wordcloud" />
+          <option value="matplotlib" />
+          <option value="requests" />
+          <option value="parsel" />
+          <option value="pyexecjs" />
+          <option value="pandas" />
+          <option value="aiosqlite" />
+          <option value="pyhumps" />
+          <option value="cryptography" />
+          <option value="alembic" />
+          <option value="asyncmy" />
+          <option value="sqlalchemy" />
+          <option value="motor" />
+          <option value="openpyxl" />
+          <option value="pytest" />
+          <option value="pytest-asyncio" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>

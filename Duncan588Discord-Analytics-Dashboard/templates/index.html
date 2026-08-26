@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Discord 档案馆</title>
+    <meta name="discord-client-id" content="{{ discord_client_id }}">
+    <script src="/static/js/discord-activity.js?v=20260821-9" defer></script>
+    <script src="/static/js/i18n.js?v=20260821-3" defer></script>
+    <link rel="stylesheet" href="/static/css/fallback.css?v=20260821-1">
+    <link rel="stylesheet" href="/static/css/tailwind-static.css?v=20260821-1">
+    <script defer src="/static/vendor/ui/chart/chart.umd.min.js?v=4.5.1"></script>
+    <script defer src="/static/vendor/ui/tagcloud/TagCloud.min.js?v=2.5.0"></script>
+    <script defer src="/static/vendor/ui/alpine/cdn.min.js?v=3.16.2"></script>
+    <style>
+        body { background-color: #36393f; color: #dcddde; font-family: "Microsoft YaHei", sans-serif; }
+        .card { background-color: #2f3136; border-radius: 1rem; }
+        .emoji-tag { background: #202225; padding: 2px 5px; border-radius: 4px; border: 1px solid #2f3136; font-size: 10px; color: #b9bbbe; display: flex; align-items: center; gap: 3px; }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .tagcloud--item { color: #fff; padding: 5px; cursor: pointer; }
+        .tagcloud--item:hover { color: #5865f2; }
+        .modal-bg { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); backdrop-filter: blur(5px); z-index: 100; display: flex; justify-content: center; align-items: center; }
+        .modal-content { background: #2f3136; padding: 20px; border-radius: 16px; width: 90%; max-width: 600px; max-height: 80vh; overflow-y: auto; border: 1px solid #202225; }
+        @media (min-width: 1024px) {
+            .homepage-main-grid { align-items: end; }
+            .homepage-bottom-grid { align-items: stretch; grid-auto-rows: 1fr; }
+        }
+        .homepage-feature-panel { min-width: 0; height: 100%; display: flex; flex-direction: column; }
+        .homepage-feature-list { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 1rem; }
+        .homepage-post-card { flex: 0 0 176px; height: 176px; min-width: 0; overflow: hidden; }
+        .homepage-post-content { min-width: 0; max-width: 100%; min-height: 0; overflow: hidden; }
+        .homepage-post-title { min-width: 0; max-width: 100%; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 1; overflow: hidden; overflow-wrap: anywhere; }
+        .homepage-post-author { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .homepage-post-text { max-width: 100%; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; line-height: 1.4; max-height: 2.8em; }
+        .homepage-post-footer { min-height: 24px; max-width: 100%; overflow: hidden; }
+        .homepage-bottom-grid h3,
+        .homepage-bottom-grid p,
+        .homepage-bottom-grid .truncate,
+        .homepage-bottom-grid .text-gray-400 { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+    </style>
+</head>
+<body class="p-2 sm:p-4 md:p-8 min-h-screen overflow-x-hidden" x-data="{ mode: 'daily', showSiteViews: false, showLeaderboard: false, users: [], page: 1, loading: false, showUserMenu: false }">
+    <div class="w-full max-w-[1400px] mx-auto">
+        <div class="activity-topbar flex flex-col md:flex-row md:justify-between md:items-center gap-4 mb-8">
+            <h1 class="text-3xl md:text-4xl font-extrabold text-white flex items-center gap-3 min-w-0">
+                {% if current_server %}<img src="{{ current_server.icon_url or 'https://cdn.discordapp.com/embed/avatars/0.png' }}" class="w-9 h-9 md:w-10 md:h-10 rounded-xl object-cover shrink-0" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'">{% else %}<img src="https://cdn.discordapp.com/embed/avatars/0.png" class="w-9 h-9 md:w-10 md:h-10 rounded-xl object-cover shrink-0">{% endif %}
+                <span class="truncate">{{ current_server.name if current_server else "Discord" }}</span><span class="text-gray-500 text-xl md:text-2xl font-normal border-l border-gray-600 pl-3 shrink-0">档案馆</span>
+            </h1>
+            <div class="activity-user-controls flex flex-wrap items-center justify-end gap-2 md:gap-3 w-full md:w-auto">
+                <a href="/servers" class="bg-[#202225] text-gray-300 px-4 py-2 rounded-xl font-bold hover:text-white transition">切换服务器</a>
+                <div class="bg-[#202225] px-3 py-2 rounded-full border border-gray-700 flex items-center gap-2 cursor-pointer" @click="showSiteViews=true">
+                    <span class="text-xs text-gray-400">历史访客</span>
+                    <span class="text-sm font-bold text-[#5865f2]">{{ site_visitors | length }}</span>
+                </div>
+                <div class="activity-user-menu relative shrink-0 ml-auto" @click.away="showUserMenu=false">
+                    <button @click="showUserMenu=!showUserMenu" class="w-10 h-10 rounded-full overflow-hidden border-2 border-[#5865f2] shadow-lg bg-[#2f3136] block"><img src="{{ current_user.avatar if current_user else 'https://cdn.discordapp.com/embed/avatars/0.png' }}" class="w-full h-full object-cover"></button>
+                    <div x-show="showUserMenu" x-transition class="absolute right-0 mt-2 w-44 bg-[#2f3136] border border-gray-700 rounded-xl shadow-2xl p-2 z-[100]" style="display:none">
+                        <a href="/me" class="block px-3 py-2 rounded-lg text-sm text-gray-200 hover:bg-[#40444b]">我的界面</a>
+                        {% if admin_level %}<a href="/admin" class="block px-3 py-2 rounded-lg text-sm text-gray-200 hover:bg-[#40444b]">管理员</a>{% endif %}
+                        <button type="button" data-language-toggle class="block w-full text-left px-3 py-2 rounded-lg text-sm text-gray-200 hover:bg-[#40444b]">English</button>
+                        <a href="/logout" class="block px-3 py-2 rounded-lg text-sm text-red-300 hover:bg-[#40444b]">退出登录</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <form action="/search" method="get" class="mb-8 relative">
+            <input type="text" name="q" placeholder="搜索用户名、昵称或 User ID..." value="{{ query|default('') }}" class="w-full pl-4 p-4 rounded-2xl bg-[#202225] text-white border border-transparent focus:border-[#5865f2] outline-none shadow-lg">
+        </form>
+
+        {% if search_results %}
+        <div class="mb-10 animate-fade-in"><h2 class="text-xl font-bold mb-4 text-white border-l-4 border-[#5865f2] pl-3">搜索结果</h2><div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">{% for u in search_results %}<a href="/user/{{ u.user_id }}" class="flex items-center p-4 bg-[#2f3136] rounded-2xl hover:bg-[#40444b] transition group"><img src="{{ u.avatar_url }}" class="w-14 h-14 rounded-full mr-4 border-2 border-transparent group-hover:border-[#5865f2]" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'"><div><div class="font-bold text-white text-lg">{{ u.nickname if u.nickname else u.username }}</div><div class="text-sm text-gray-400">@{{ u.username }}</div></div></a>{% endfor %}</div></div>
+        {% endif %}
+
+        {% if not search_results %}
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6 mb-6">
+            <div class="p-6 bg-[#292b2f] rounded-2xl border-t-4 border-[#5865f2] shadow-lg"><div class="text-gray-400 text-xs font-bold tracking-widest uppercase mb-1">收录帖子</div><div class="text-3xl md:text-4xl font-extrabold text-white">{{ total_threads }}</div></div>
+            <div class="p-6 bg-[#292b2f] rounded-2xl border-t-4 border-[#faa61a] shadow-lg"><div class="text-gray-400 text-xs font-bold tracking-widest uppercase mb-1">收录消息</div><div class="text-3xl md:text-4xl font-extrabold text-white">{{ total_msgs }}</div></div>
+            <div class="p-6 bg-[#292b2f] rounded-2xl border-t-4 border-[#3ba55c] shadow-lg hover:bg-[#32353b] transition cursor-pointer" @click="showLeaderboard=true"><div class="flex justify-between items-start"><div><div class="text-gray-400 text-xs font-bold tracking-widest uppercase mb-1">活跃成员 (点击查看)</div><div class="text-3xl md:text-4xl font-extrabold text-white group-hover:text-[#3ba55c] transition">{{ total_users }}</div></div><svg class="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg></div></div>
+        </div>
+
+        <div class="homepage-main-grid grid grid-cols-1 lg:grid-cols-12 gap-6 mb-8">
+            <div class="lg:col-span-9 flex flex-col gap-8">
+                <div class="card p-4 md:p-6 bg-[#292b2f] shadow-lg h-64 relative flex flex-col">
+                    <div class="flex justify-between items-center mb-2 z-10">
+                        <h3 class="text-xs font-bold text-gray-400 uppercase tracking-widest">活跃度趋势</h3>
+                        <div class="flex bg-[#202225] rounded-lg p-1">
+                            <button @click="mode = 'daily'" :class="{'bg-[#40444b] text-white shadow': mode === 'daily', 'text-gray-500 hover:text-gray-300': mode !== 'daily'}" class="text-xs px-3 py-1 rounded-md transition font-medium">📅 日期</button>
+                            <button @click="mode = 'hourly'" :class="{'bg-[#40444b] text-white shadow': mode === 'hourly', 'text-gray-500 hover:text-gray-300': mode !== 'hourly'}" class="text-xs px-3 py-1 rounded-md transition font-medium">⏰ 24h</button>
+                        </div>
+                    </div>
+                    <div class="flex-1 relative w-full">
+                        <canvas id="globalChartDaily" x-show="mode === 'daily'"></canvas>
+                        <canvas id="globalChartHourly" x-show="mode === 'hourly'" style="display: none;"></canvas>
+                    </div>
+                </div>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6 h-[450px]">
+                    <div class="card p-6 bg-[#2f3136] shadow-lg md:col-span-2 flex items-center justify-center relative overflow-hidden">
+                        <h3 class="absolute top-6 left-6 text-xs font-bold text-gray-400 uppercase">服务器热门词汇 (纯汉字)</h3>
+                        <span id="server-word-cloud"></span>
+                    </div>
+                    <div class="card p-4 bg-[#202225] shadow-lg h-full overflow-y-auto no-scrollbar">
+                        <h3 class="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4 border-b border-gray-700 pb-2">热门词汇 Top 15</h3>
+                        <ul class="space-y-2">
+                            {% for word in server_word_rank %}
+                            <li class="flex justify-between items-center p-2 hover:bg-[#36393f] rounded-xl transition">
+                                <span class="text-white font-bold text-sm">{{ word.text }}</span>
+                                <span class="text-xs text-[#5865f2] bg-[#5865f2]/10 px-2 py-1 rounded">{{ word.weight }}</span>
+                            </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="lg:col-span-3 bg-[#2f3136] p-4 rounded-2xl shadow-lg h-full overflow-y-auto no-scrollbar max-h-screen">
+                <h2 class="text-lg font-bold text-white mb-4">🏆 活跃榜单</h2>
+                <ul class="space-y-3">
+                    {% for u in top_users[:10] %}
+                    <li class="flex items-center justify-between p-2 hover:bg-[#36393f] rounded-xl transition">
+                        <div class="flex items-center gap-3 overflow-hidden">
+                            <span class="text-gray-600 w-4 font-mono font-bold">{{ loop.index }}</span>
+                            <a href="/user/{{ u.user_id }}"><img src="{{ u.avatar_url }}" class="w-8 h-8 rounded-full" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'"></a>
+                            <div class="truncate">
+                                <a href="/user/{{ u.user_id }}" class="text-white text-sm font-bold block truncate">{{ u.nickname or u.username }}</a>
+                                <div class="flex flex-wrap gap-1 mt-1">
+                                    {% for e in u.top_emojis[:3] %}
+                                    <div class="emoji-tag" title="{{ e.emoji_name }}">
+                                        <img src="{{ e.emoji_url }}" class="w-3 h-3">
+                                        <span class="text-[9px] text-gray-400">{{ e.c }}</span>
+                                    </div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        </div>
+                        <span class="text-gray-500 text-xs font-mono">{{ u.msg_count }}</span>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+
+        <div class="homepage-bottom-grid grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
+            <div class="homepage-feature-panel bg-[#2f3136] p-4 md:p-6 rounded-2xl shadow-lg">
+                <div class="flex items-center justify-between mb-6 pb-4 border-b border-gray-700 shrink-0"><h2 class="text-xl font-bold text-white flex items-center gap-2"><span class="text-[#5865f2]">⭐</span> 热门回复</h2></div>
+                <div class="homepage-feature-list">
+                    {% for msg in top_hot_msgs %}
+                    <a href="https://discord.com/channels/{{ server_id }}/{{ msg.thread_id }}/{{ msg.message_id }}" target="_blank" class="homepage-post-card block bg-[#36393f] p-4 rounded-xl hover:bg-[#202225] transition group">
+                        <div class="flex gap-3 h-full min-w-0">
+                            <img src="{{ msg.author.avatar_url }}" class="w-10 h-10 rounded-full shrink-0" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'">
+                            <div class="homepage-post-content flex-1 flex flex-col">
+                                <div class="flex items-start justify-between gap-2 mb-1 min-w-0"><span class="homepage-post-title text-xs bg-[#202225] px-2 py-0.5 rounded text-gray-400"># {{ msg.thread_name }}</span><span class="text-[10px] text-gray-500 shrink-0">{{ msg.timestamp | datetimeformat }}</span></div>
+                                <div class="homepage-post-author text-xs text-gray-400 mb-2">{{ msg.author.nickname or msg.author.username }}</div>
+                                <p class="homepage-post-text text-sm text-gray-300 flex-1">{{ msg.content }}</p>
+                                <div class="homepage-post-footer flex items-center gap-1 mt-2 pt-1">
+                                    {% for r in msg.detailed_reactions[:3] %}<span class="text-xs bg-[#202225] px-1 rounded text-gray-400 flex items-center shrink-0"><img src="{{ r.emoji_url }}" class="w-3 h-3 mr-1">{{ r.count }}</span>{% endfor %}
+                                </div>
+                            </div>
+                        </div>
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="homepage-feature-panel bg-[#2f3136] p-4 md:p-6 rounded-2xl shadow-lg">
+                <div class="flex items-center justify-between mb-6 pb-4 border-b border-gray-700 shrink-0"><h2 class="text-xl font-bold text-white flex items-center gap-2"><span class="text-red-400">🔥</span> 热门讨论区</h2></div>
+                <div class="homepage-feature-list">
+                    {% for t in top_threads %}
+                    <a href="https://discord.com/channels/{{ server_id }}/{{ t.thread_id }}" target="_blank" class="homepage-post-card block bg-[#36393f] p-4 rounded-xl hover:bg-[#202225] transition group">
+                        <div class="flex gap-3 h-full min-w-0">
+                            <img src="{{ t.op_user.avatar_url }}" class="w-10 h-10 rounded-full shrink-0" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'">
+                            <div class="homepage-post-content flex-1 flex flex-col">
+                                <div class="flex items-start justify-between gap-2 mb-1 min-w-0"><h3 class="homepage-post-title font-bold text-white">{{ t.name }}</h3><span class="text-[10px] text-gray-500 shrink-0">{{ t.created_at | datetimeformat }}</span></div>
+                                <div class="homepage-post-author text-xs text-gray-400 mb-2">{{ t.op_user.nickname or t.op_user.username }}</div>
+                                <p class="homepage-post-text text-sm text-gray-300 flex-1">{{ t.first_content }}</p>
+                                <div class="homepage-post-footer flex items-center gap-3 mt-2 pt-1">
+                                    <div class="bg-[#2f3136] px-2 py-1 rounded text-xs text-gray-400 shrink-0">💬 {{ t.msg_count }}</div>
+                                    {% if t.top_emoji_url %}<div class="bg-[#2f3136] px-2 py-1 rounded text-xs text-gray-400 flex items-center shrink-0"><img src="{{ t.top_emoji_url }}" class="w-3 h-3 mr-1">{{ t.top_emoji_count }}</div>{% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <div x-show="showSiteViews" class="modal-bg" style="display: none;" x-transition><div class="modal-content" @click.away="showSiteViews = false"><div class="flex justify-between items-center mb-4"><h3 class="text-lg font-bold text-white">历史访客记录</h3><button @click="showSiteViews = false" class="text-gray-400 hover:text-white">✕</button></div><div class="space-y-3 max-h-[60vh] overflow-y-auto">{% for v in site_visitors %}<div class="flex items-center gap-3 p-2 bg-[#202225] rounded-xl"><img src="{{ v.avatar_url }}" class="w-10 h-10 rounded-full" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'"><div><div class="text-sm font-bold text-white">{{ v.nickname or v.username }}</div><div class="text-xs text-gray-500">最近访问: {{ v.last_visit | raw_datetime }}</div></div></div>{% endfor %}</div></div></div>
+
+    <div x-show="showLeaderboard" class="modal-bg" style="display: none;" x-transition>
+        <div class="modal-content !max-w-2xl" @click.away="showLeaderboard = false">
+            <div class="flex justify-between items-center mb-4 pb-2 border-b border-gray-700">
+                <h3 class="text-xl font-bold text-white">🏆 完整活跃榜单</h3>
+                <button @click="showLeaderboard = false" class="text-gray-400 hover:text-white">✕</button>
+            </div>
+            <div class="overflow-y-auto h-[60vh] pr-2 space-y-2 no-scrollbar" @scroll="if($el.scrollTop + $el.clientHeight >= $el.scrollHeight - 50 && !loading) { loading=true; page++; fetch('/api/leaderboard?page='+page).then(r=>r.json()).then(d=>{ users=users.concat(d); loading=false; }); }">
+
+                {% for u in full_leaderboard %}
+                <div class="flex items-center justify-between p-3 bg-[#202225] rounded-xl hover:bg-[#292b2f] transition">
+                    <div class="flex items-center gap-4">
+                        <span class="text-gray-500 font-mono font-bold w-8 text-center">{{ loop.index }}</span>
+                        <a href="/user/{{ u.user_id }}"><img src="{{ u.avatar_url }}" class="w-10 h-10 rounded-full bg-gray-700" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'"></a>
+                        <div>
+                            <a href="/user/{{ u.user_id }}" class="text-white font-bold block">{{ u.nickname or u.username }}</a>
+                            <div class="flex gap-1 mt-1">
+                                {% for e in u.top_emojis[:3] %}
+                                <div class="emoji-tag"><img src="{{ e.emoji_url }}" class="w-3 h-3"><span class="text-[9px] text-gray-400">{{ e.c }}</span></div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                    <span class="text-[#00b0f4] font-mono font-bold text-lg">{{ u.msg_count }}</span>
+                </div>
+                {% endfor %}
+
+                <template x-for="u in users" :key="u.user_id">
+                    <div class="flex items-center justify-between p-3 bg-[#202225] rounded-xl hover:bg-[#292b2f] transition">
+                        <div class="flex items-center gap-4">
+                            <span class="text-gray-500 font-mono font-bold w-8 text-center" x-text="u.rank"></span>
+                            <a :href="'/user/'+u.user_id"><img :src="u.avatar_url" class="w-10 h-10 rounded-full bg-gray-700" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'"></a>
+                            <div>
+                                <a :href="'/user/'+u.user_id" class="text-white font-bold block" x-text="u.nickname || u.username"></a>
+                                <div class="flex gap-1 mt-1">
+                                    <template x-for="e in u.top_emojis.slice(0, 3)">
+                                        <div class="emoji-tag"><img :src="e.emoji_url" class="w-3 h-3"><span class="text-[9px] text-gray-400" x-text="e.c"></span></div>
+                                    </template>
+                                </div>
+                            </div>
+                        </div>
+                        <span class="text-[#00b0f4] font-mono font-bold text-lg" x-text="u.msg_count"></span>
+                    </div>
+                </template>
+                <div x-show="loading" class="text-center text-gray-500 py-4">加载更多...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        {% if not search_results %}
+        const initHomepageVisuals = () => {
+            const serverTexts = {{ server_word_cloud | map(attribute='text') | list | tojson }};
+            if (window.TagCloud && serverTexts.length > 0) {
+                TagCloud('#server-word-cloud', serverTexts, { radius: 180, maxSpeed: 'normal', initSpeed: 'normal', direction: 135, keep: true });
+            }
+
+            if (!window.Chart) return;
+            const chartOptions = { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, interaction: { intersect: false, mode: 'index' }, scales: { y: { beginAtZero: true, grid: { color: '#2f3136' }, ticks: { color: '#72767d', font: { size: 10, family: 'monospace' } } }, x: { grid: { display: false }, ticks: { color: '#72767d', font: { size: 10, family: 'monospace' } } } } };
+            const chartLanguage = (() => { try { return localStorage.getItem('portal-language') === 'en' ? 'en' : 'zh'; } catch (e) { return 'zh'; } })();
+            const rawDataDaily = {{ chart_daily | tojson }};
+            const dailyCanvas = document.getElementById('globalChartDaily');
+            if (dailyCanvas) new Chart(dailyCanvas.getContext('2d'), { type: 'line', data: { labels: rawDataDaily.map(d => d.day.substr(5)), datasets: [{ label: chartLanguage === 'en' ? 'Activity' : '活跃度', data: rawDataDaily.map(d => d.c), borderColor: '#5865f2', backgroundColor: 'rgba(88, 101, 242, 0.1)', borderWidth: 2, tension: 0.3, pointRadius: 0, hitRadius: 10, fill: true }] }, options: chartOptions });
+
+            const dataGlobalHourly = {{ chart_hourly | tojson }};
+            const hourlyCanvas = document.getElementById('globalChartHourly');
+            if (hourlyCanvas) new Chart(hourlyCanvas.getContext('2d'), { type: 'bar', data: { labels: dataGlobalHourly.map(d => d.hour), datasets: [{ label: chartLanguage === 'en' ? 'Activity' : '活跃度', data: dataGlobalHourly.map(d => d.c), backgroundColor: '#3ba55c', borderRadius: 3 }] }, options: chartOptions });
+        };
+        // defer 脚本要等 HTML 解析结束后才执行；页面末尾的内联脚本不能
+        // 在解析阶段直接读取 Chart/TagCloud，否则两个组件会被静默跳过。
+        const scheduleHomepageVisuals = (callback) => {
+            const run = () => {
+                const idle = window.requestIdleCallback || ((fn) => window.setTimeout(fn, 0));
+                idle(callback, { timeout: 1200 });
+            };
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', run, { once: true });
+            } else {
+                run();
+            }
+        };
+        scheduleHomepageVisuals(initHomepageVisuals);
+        {% endif %}
+    </script>
+</body>
+</html>

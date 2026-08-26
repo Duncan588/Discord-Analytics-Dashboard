@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Discord 档案馆</title>
+<meta name="discord-client-id" content="{{ discord_client_id }}">
+<script src="/static/js/discord-activity.js?v=20260821-9" defer></script>
+<script src="/static/js/i18n.js?v=20260821-3" defer></script>
+<link rel="stylesheet" href="/static/css/fallback.css?v=20260821-1">
+<link rel="stylesheet" href="/static/css/tailwind-static.css?v=20260821-1">
+</head>
+<body class="min-h-screen bg-[#36393f] text-white overflow-x-hidden" data-activity-landing="welcome">
+<div class="w-full max-w-5xl mx-auto px-3 sm:px-6 py-4 sm:py-8">
+  <header class="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-8 sm:mb-16">
+    <div class="min-w-0">
+      <h1 class="text-2xl sm:text-3xl font-bold">Discord 档案馆</h1>
+      <p class="text-gray-400 mt-2 text-sm sm:text-base">多服务器 Discord 数据分析平台</p>
+    </div>
+    {% if current_user %}
+      <details class="relative self-end sm:self-auto shrink-0">
+        <summary class="list-none cursor-pointer"><img src="{{ current_user.avatar }}" class="w-10 h-10 rounded-full border border-[#5865f2]" alt="个人菜单"></summary>
+        <div class="absolute right-0 mt-2 w-40 p-2 rounded-xl bg-[#202225] shadow-xl z-50">
+          <a href="/me" class="block p-2 hover:bg-[#36393f] rounded">个人主页</a>
+          {% if admin_level %}<a href="/admin" class="block p-2 hover:bg-[#36393f] rounded">Admin</a>{% endif %}
+          <button type="button" data-language-toggle class="block w-full text-left p-2 hover:bg-[#36393f] rounded">English</button>
+          <a href="/logout" class="block p-2 text-red-300 hover:bg-[#36393f] rounded">退出登录</a>
+        </div>
+      </details>
+    {% else %}
+      <a id="web-login-action" href="/auth/discord" class="inline-flex items-center justify-center w-full sm:w-auto px-5 py-3 rounded-xl bg-[#5865f2] hover:bg-[#4752c4] font-bold">使用 Discord 登录</a>
+    {% endif %}
+  </header>
+
+  <section class="bg-[#2f3136] rounded-2xl sm:rounded-3xl p-4 sm:p-8 md:p-12 shadow-2xl border border-[#202225]">
+    {% if no_data and current_user %}
+      <div class="max-w-3xl">
+        <div class="inline-flex px-3 py-1 rounded-full bg-[#faa61a]/10 text-[#faa61a] text-sm font-bold mb-4">账号已登录</div>
+        <h2 class="text-2xl sm:text-4xl font-extrabold leading-tight mb-4">暂时没有与你关联的服务器数据。</h2>
+        <p class="text-gray-400 leading-7 sm:leading-8 text-sm sm:text-lg mb-6">系统已经识别你的 Discord 账号。普通用户只要出现在已收录的服务器数据中，就会自动获得访问权限；如果你还没有被收录，请等待管理员导入对应服务器数据。</p>
+      </div>
+    {% else %}
+      <div class="max-w-3xl">
+        <div class="inline-flex px-3 py-1 rounded-full bg-[#5865f2]/10 text-[#8ea1ff] text-sm font-bold mb-4">Discord Analytics</div>
+        <h2 class="text-2xl sm:text-4xl md:text-5xl font-extrabold leading-tight mb-5">你的 Discord 数据，集中分析。</h2>
+        <p class="text-gray-400 leading-7 sm:leading-8 text-sm sm:text-lg mb-8">支持多个 Discord 服务器。登录后，系统会根据 Discord User ID 自动匹配你有权限访问的数据。</p>
+      </div>
+
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8">
+        <div class="bg-[#202225] rounded-2xl p-5"><div class="text-[#5865f2] font-bold">01</div><div class="font-bold mt-3">Discord 身份验证</div><div class="text-sm text-gray-500 mt-2">通过 Discord OAuth2 安全识别用户。</div></div>
+        <div class="bg-[#202225] rounded-2xl p-5"><div class="text-[#faa61a] font-bold">02</div><div class="font-bold mt-3">自动匹配服务器</div><div class="text-sm text-gray-500 mt-2">普通用户出现在服务器数据中即可自动获得访问权限。</div></div>
+        <div class="bg-[#202225] rounded-2xl p-5"><div class="text-[#3ba55c] font-bold">03</div><div class="font-bold mt-3">开始数据分析</div><div class="text-sm text-gray-500 mt-2">查看服务器概览、用户资料、消息统计和报告。</div></div>
+      </div>
+    {% endif %}
+
+    {% if error %}<div class="mb-6 bg-red-500/10 border border-red-500/30 text-red-300 rounded-xl p-4 break-words">{{ error }}</div>{% endif %}
+
+    {% if current_user %}
+      <div class="border border-gray-700 rounded-2xl p-4 sm:p-6">
+        {% if no_data %}
+          <h3 class="font-bold text-lg sm:text-xl mb-2">等待数据</h3>
+          <p class="text-gray-500 leading-7 mb-5">如果你是服务器普通成员，不需要加入白名单。管理员导入服务器数据后，系统会自动建立你的普通用户数据记录。</p>
+        {% else %}
+          <h3 class="font-bold text-lg sm:text-xl mb-2">当前账号没有服务器数据</h3>
+          <p class="text-gray-500 leading-7 mb-5">你的 Discord 账号已经登录成功，但暂时没有与你关联的服务器数据。</p>
+        {% endif %}
+        <div class="bg-[#202225] rounded-2xl p-4 sm:p-5 text-gray-400 text-sm leading-7">
+          <div class="font-bold text-white mb-2">关于演示网站</div>
+          这是一个用于展示 Discord Analytics Dashboard 核心体验的轻量演示版本，内置示例服务器、成员、消息和报告数据。进入演示即可体验页面之间的切换和数据浏览；正式版的数据导入、下载任务和管理功能不会出现在这里。
+        </div>
+      </div>
+    {% else %}
+      <div class="flex flex-col sm:flex-row gap-3 items-stretch sm:items-center">
+        <a id="web-login-action-secondary" href="/auth/discord" class="inline-flex justify-center bg-[#5865f2] hover:bg-[#4752c4] px-7 py-3 rounded-xl font-bold">登录后查看我的数据</a>
+        <span class="text-gray-500 text-sm">未登录也可以浏览介绍页面。</span>
+      </div>
+    {% endif %}
+  </section>
+</div>
+</body>
+</html>
