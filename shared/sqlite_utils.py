@@ -22,6 +22,10 @@ def connect_sqlite(path, timeout=60, row_factory=True, create_parents=True, sync
         conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout=60000")
     conn.execute("PRAGMA journal_mode=WAL")
+    # 大库 PRAGMA 默认：调大 cache + memory 临时表 + 16K 页，减少 I/O 次数
+    conn.execute("PRAGMA cache_size=-200000")        # 200 MB
+    conn.execute("PRAGMA temp_store=MEMORY")
+    conn.execute("PRAGMA page_size=16384")
     if synchronous is not None:
         conn.execute(f"PRAGMA synchronous={synchronous}")
     return conn
