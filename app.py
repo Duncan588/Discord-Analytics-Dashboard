@@ -463,6 +463,12 @@ def init_portal_db():
         last_visit DATETIME,
         PRIMARY KEY(server_id, user_id)
     );
+    CREATE TABLE IF NOT EXISTS demo_identities (
+        real_user_id TEXT PRIMARY KEY,
+        demo_user_id TEXT NOT NULL,
+        demo_server_id TEXT NOT NULL,
+        created_at DATETIME NOT NULL
+    );
     """)
     task_migrations = {
         "phase": "TEXT DEFAULT 'queued'",
@@ -762,25 +768,40 @@ class DataEngine:
         os.replace(tmp, path)
 
     def _refresh(self, sid):
-        """Rebuild one homepage snapshot outside the request thread."""
+        """Rebuild one homepage snapshot outside the request thread.
+
+        大库（4.6M+ 消息）冷启动时单次 SELECT content + Python 端分词
+        会跑几分钟。改为增量分批处理，每批 10 万条，多次 commit 缓存，
+        后续进程若被中断也能从已保存的快照继续（不会阻塞访问）。
+        """
         try:
             cache = self._load_cache(sid)
             db_path = server_db_path(sid)
             conn = db_connect(db_path)
             cur = conn.cursor()
-            count = cur.execute("SELECT count(*) FROM messages").fetchone()[0]
+            count = cur.execute("SELECT MAX(rowid) FROM messages").fetchone()[0]
             try:
                 db_mtime = os.path.getmtime(db_path)
             except OSError:
                 db_mtime = 0
-            texts = [
-                row[0]
-                for row in cur.execute(
-                    "SELECT content FROM messages WHERE content IS NOT NULL AND content != ''"
-                )
-            ]
-            cache["global_word_counter"] = get_word_cloud_counter(texts)
-            cache["homepage"] = self._homepage(cur, cache["global_word_counter"])
+            # 已经统计过的消息数（增量分批）
+            processed = cache.get("global_word_processed", 0)
+            counter = cache.get("global_word_counter") or collections.Counter()
+            BATCH = 100_000
+            for off in range(processed, count, BATCH):
+                texts = [
+                    row[0] for row in cur.execute(
+                        "SELECT content FROM messages WHERE content IS NOT NULL AND content != '' "
+                        "ORDER BY timestamp DESC LIMIT ? OFFSET ?",
+                        (BATCH, off),
+                    )
+                ]
+                counter.update(get_word_cloud_counter(texts))
+                processed += len(texts)
+                cache["global_word_counter"] = counter
+                cache["global_word_processed"] = processed
+                self._save_cache(sid)
+            cache["homepage"] = self._homepage(cur, counter)
             cache["last_msg_count"] = count
             cache["db_mtime"] = db_mtime
             cache["homepage_version"] = 5
@@ -816,7 +837,9 @@ class DataEngine:
         db_path = server_db_path(sid)
         conn = db_connect(db_path)
         cur = conn.cursor()
-        count = cur.execute("SELECT count(*) FROM messages").fetchone()[0]
+        # 用 MAX(rowid) 代替 count(*) —— 460 万行全表扫秒级 vs 10 秒。
+        # count(*) 必须全表扫描；rowid 是 btree 索引，最后一行秒级。
+        count = cur.execute("SELECT MAX(rowid) FROM messages").fetchone()[0]
         try:
             db_mtime = os.path.getmtime(db_path)
         except OSError:
@@ -834,12 +857,19 @@ class DataEngine:
         if cache_needs_refresh and cache.get("homepage"):
             self._schedule_refresh(sid)
         elif cache_needs_refresh:
-            # There is no usable first snapshot yet, so the first request must
-            # wait for one. Subsequent requests use the cheap stale-while-refresh
-            # path above.
-            conn.close()
-            self._refresh(sid)
-            cache = self._load_cache(sid)
+            # 冷启动 / 首次访问 / 数据库变化：永远在后台异步构建
+            # —— 避免首页一次 11 秒（4.6M 消息分词耗时）。
+            # 先给前端一个空快照占位，词云和榜单会随后台进度更新。
+            if not cache.get("homepage"):
+                cache["homepage"] = {
+                    "total_msgs": count, "total_threads": 0, "total_users": 0,
+                    "chart_daily": [], "word_cloud_data": [], "server_word_rank": [],
+                    "active_members": [], "popular_replies": [], "popular_discussions": [],
+                }
+                cache["last_msg_count"] = count
+                cache["homepage_version"] = 5
+                self._save_cache(sid)
+            self._schedule_refresh(sid)
         conn.close()
         return cache["homepage"]
 
@@ -1334,6 +1364,9 @@ def get_servers_for_user(user_id):
 
 def _assign_demo_identity(portal, uid, demo_id):
     """为无数据用户随机绑定一个演示库中的假成员，结果持久化，保证每次登录看到同一个身份。"""
+    # 该函数可能从 get_servers_for_user() 的演示服务器兜底分支直接调用，
+    # 不能依赖 get_display_user() 后面才执行的初始化逻辑。
+    _ensure_demo_identity_table()
     existing = portal.execute(
         "SELECT demo_user_id FROM demo_identities WHERE real_user_id=?", (str(uid),)
     ).fetchone()
@@ -1931,7 +1964,14 @@ def my_profile():
         session["server_id"] = servers[0]["server_id"]
         return redirect(url_for("user_profile", user_id=display_user["id"]))
     if len(servers) > 1:
-        return redirect(url_for("servers"))
+        # 管理员可以访问所有服务器；个人主页仍需绑定一个分析库。
+        # 优先沿用当前选择，避免从 Admin/服务器列表点击“个人主页”时循环回 /servers。
+        allowed = {str(server["server_id"]) for server in servers}
+        sid = current_server_id()
+        if sid not in allowed:
+            sid = str(servers[0]["server_id"])
+            session["server_id"] = sid
+        return redirect(url_for("user_profile", user_id=display_user["id"]))
     return render_template("welcome.html", can_upload=whitelist_allowed(session["user"]["id"]), current_user=session["user"], no_data=True)
 
 
@@ -2194,7 +2234,7 @@ def user_profile(user_id):
         if op_message_ids:
             message_ph = ",".join("?" for _ in op_message_ids)
             for emoji in conn.execute(
-                f"SELECT message_id,emoji_url,count(*) c FROM reactions WHERE message_id IN ({message_ph}) "
+                f"SELECT message_id,emoji_url,emoji_name,count(*) c FROM reactions WHERE message_id IN ({message_ph}) "
                 f"GROUP BY message_id,emoji_name ORDER BY message_id,c DESC", op_message_ids
             ):
                 emoji_map.setdefault(emoji["message_id"], emoji)
@@ -2203,6 +2243,7 @@ def user_profile(user_id):
             d["op_user"] = dict(user)
             emoji = emoji_map.get(row["op_msg_id"])
             d["top_emoji_url"] = emoji["emoji_url"] if emoji else None
+            d["top_emoji_name"] = emoji["emoji_name"] if emoji else None
             d["top_emoji_count"] = emoji["c"] if emoji else 0
             my_threads.append(d)
     msg_count = profile["msg_count"]
@@ -2581,7 +2622,7 @@ def report():
     result["most_active_topic"] = dict(row) if row else None
     row = conn.execute(f"SELECT m.*,t.name thread_name,count(r.id) rc FROM messages m JOIN threads t ON m.thread_id=t.thread_id LEFT JOIN reactions r ON r.message_id=m.message_id WHERE m.author_id IN ({ph}) GROUP BY m.message_id ORDER BY rc DESC LIMIT 1", ids).fetchone()
     if row:
-        d = dict(row); d["detailed_reactions"] = [dict(x) for x in conn.execute("SELECT emoji_url,count(*) count FROM reactions WHERE message_id=? GROUP BY emoji_name ORDER BY count DESC LIMIT 3", (d["message_id"],))]; result["most_liked_msg"] = d
+        d = dict(row); d["detailed_reactions"] = [dict(x) for x in conn.execute("SELECT emoji_url,emoji_name,count(*) count FROM reactions WHERE message_id=? GROUP BY emoji_name ORDER BY count DESC LIMIT 3", (d["message_id"],))]; result["most_liked_msg"] = d
     texts = [r[0] for r in conn.execute(f"SELECT content FROM messages WHERE author_id IN ({ph}) ORDER BY timestamp DESC LIMIT 2000", ids)]
     # 互动好友：双向统计 —— outgoing=我提及/回复的人；incoming=提及/回复我的人
     ph_ids = list(ids)
