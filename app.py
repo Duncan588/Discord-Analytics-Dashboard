@@ -2599,12 +2599,24 @@ def managed_discord_resources():
         _managed_resources_cache[cache_key] = {"created_at": time.monotonic(), "payload": payload}
     return jsonify(payload)
 
+# ---- 年度报告缓存（stale-while-revalidate）----
+# 单次 query 30+ 个 460 万行聚合，磁盘满时 5-10s。缓存 5 分钟供快速二次访问。
+_REPORT_CACHE = {}
+_REPORT_TTL = 300  # seconds
+
 @app.route("/report")
 @server_required
 def report():
     sid = current_server_id(); conn = get_db()
     u = get_display_user() or session["user"]
     uid = str(u["id"])
+    cache_key = f"{sid}:{uid}"
+    now_ts = time.time()
+    cached = _REPORT_CACHE.get(cache_key)
+    if cached and now_ts - cached["ts"] < _REPORT_TTL:
+        # 缓存命中，瞬时返回
+        return render_template("report.html", user=cached["db_user"], server_id=sid,
+                               word_cloud_data=cached["word_cloud_data"], percentile=95, **cached["result"])
     db_user = conn.execute("SELECT * FROM users WHERE user_id=?", (uid,)).fetchone()
     if not db_user:
         return redirect(url_for("welcome"))
@@ -2613,17 +2625,41 @@ def report():
     row = conn.execute(f"SELECT min(timestamp) joined FROM messages WHERE author_id IN ({ph})", ids).fetchone()
     if row and row["joined"]: result["join_date"] = datetimeformat_filter(row["joined"], "%Y-%m-%d")
     result["most_active_day"] = dict(conn.execute(f"SELECT substr(timestamp,1,10) day,count(*) c FROM messages WHERE author_id IN ({ph}) GROUP BY day ORDER BY c DESC LIMIT 1", ids).fetchone() or {}) or None
-    late = conn.execute(f"SELECT * FROM messages WHERE author_id IN ({ph}) AND strftime('%H',timestamp) IN ('16','17','18','19','20','21') ORDER BY timestamp DESC LIMIT 1", ids).fetchone()
+    # 之前: strftime('%H', timestamp) 走全表扫 (4s+)。改为：取最近 200 条消息后，在 Python 端按小时过滤 16-21 点
+    late = conn.execute(
+        f"SELECT * FROM messages WHERE author_id IN ({ph}) ORDER BY timestamp DESC LIMIT 200", ids
+    ).fetchall()
+    late = next((dict(m) for m in late if 16 <= int((m["timestamp"] or "T00:00:00")[11:13]) <= 21), None) if late else None
     if late:
-        d = dict(late); t = conn.execute("SELECT name FROM threads WHERE thread_id=?", (d["thread_id"],)).fetchone(); d["thread_name"] = t["name"] if t else "Unknown"; result["latest_msg"] = d
+        t = conn.execute("SELECT name FROM threads WHERE thread_id=?", (late["thread_id"],)).fetchone(); late["thread_name"] = t["name"] if t else "Unknown"; result["latest_msg"] = late
     row = conn.execute(f"SELECT t.thread_id,t.name,count(*) reply_count FROM threads t JOIN messages m ON t.thread_id=m.thread_id WHERE m.author_id IN ({ph}) GROUP BY t.thread_id ORDER BY reply_count DESC LIMIT 1", ids).fetchone()
     if row: result["most_replied_thread"] = dict(row); result["most_replied_thread"]["op_user"] = dict(db_user)
     row = conn.execute(f"SELECT t.thread_id,t.name,count(*) c FROM messages m JOIN threads t ON m.thread_id=t.thread_id WHERE m.author_id IN ({ph}) GROUP BY t.thread_id ORDER BY c DESC LIMIT 1", ids).fetchone()
     result["most_active_topic"] = dict(row) if row else None
-    row = conn.execute(f"SELECT m.*,t.name thread_name,count(r.id) rc FROM messages m JOIN threads t ON m.thread_id=t.thread_id LEFT JOIN reactions r ON r.message_id=m.message_id WHERE m.author_id IN ({ph}) GROUP BY m.message_id ORDER BY rc DESC LIMIT 1", ids).fetchone()
-    if row:
-        d = dict(row); d["detailed_reactions"] = [dict(x) for x in conn.execute("SELECT emoji_url,emoji_name,count(*) count FROM reactions WHERE message_id=? GROUP BY emoji_name ORDER BY count DESC LIMIT 3", (d["message_id"],))]; result["most_liked_msg"] = d
-    texts = [r[0] for r in conn.execute(f"SELECT content FROM messages WHERE author_id IN ({ph}) ORDER BY timestamp DESC LIMIT 2000", ids)]
+    # 之前: LEFT JOIN reactions r 全表扫。改为先按 author 索引取最近 N 条消息，再按 message_id 查反应
+    top_msg_row = conn.execute(
+        f"SELECT m.message_id, m.content, m.timestamp, m.thread_id, t.name AS thread_name "
+        f"FROM messages m LEFT JOIN threads t ON t.thread_id=m.thread_id "
+        f"WHERE m.author_id IN ({ph}) "
+        f"ORDER BY m.timestamp DESC LIMIT 2000", ids
+    ).fetchall()
+    if top_msg_row:
+        ids_msgs = tuple(m["message_id"] for m in top_msg_row)
+        ph_m = ",".join("?" * len(ids_msgs))
+        rx_rows = conn.execute(
+            f"SELECT message_id, count(*) rc FROM reactions WHERE message_id IN ({ph_m}) GROUP BY message_id",
+            ids_msgs
+        ).fetchall()
+        rx_map = {r["message_id"]: r["rc"] for r in rx_rows}
+        top_msg = max(top_msg_row, key=lambda m: rx_map.get(m["message_id"], 0))
+        d = dict(top_msg)
+        d["detailed_reactions"] = [dict(x) for x in conn.execute(
+            "SELECT emoji_url,emoji_name,count(*) count FROM reactions WHERE message_id=? GROUP BY emoji_name ORDER BY count DESC LIMIT 3",
+            (d["message_id"],))]
+        result["most_liked_msg"] = d
+        texts = [m["content"] for m in top_msg_row]
+    else:
+        texts = []
     # 互动好友：双向统计 —— outgoing=我提及/回复的人；incoming=提及/回复我的人
     ph_ids = list(ids)
     out_rows = conn.execute(
@@ -2665,6 +2701,11 @@ def report():
 
     result["top_friend_outgoing"] = _friend_row(out_rows)
     result["top_friend_incoming"] = _friend_row(in_rows)
+    _REPORT_CACHE[cache_key] = {
+        "ts": time.time(), "db_user": db_user,
+        "word_cloud_data": format_word_cloud(get_word_cloud_counter(texts), 50),
+        "result": result,
+    }
     return render_template("report.html", user=db_user, server_id=sid, word_cloud_data=format_word_cloud(get_word_cloud_counter(texts), 50), percentile=95, **result)
 
 

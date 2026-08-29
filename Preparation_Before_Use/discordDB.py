@@ -62,6 +62,9 @@ def create_tables(cur):
     CREATE INDEX IF NOT EXISTS idx_mentions_author ON mentions(author_id);
     CREATE INDEX IF NOT EXISTS idx_attach_msg ON attachments(message_id);
     CREATE INDEX IF NOT EXISTS idx_stats_count ON user_stats(msg_count);
+    CREATE INDEX IF NOT EXISTS idx_msg_hour ON messages(strftime('%H', timestamp));
+    CREATE INDEX IF NOT EXISTS idx_msg_day  ON messages(substr(timestamp, 1, 10));
+    CREATE INDEX IF NOT EXISTS idx_react_msg_id ON reactions(message_id, id);
     """)
 
 
