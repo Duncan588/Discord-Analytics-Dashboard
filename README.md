@@ -36,9 +36,9 @@ Discord Analytics Dashboard is a Flask-based web platform for collecting, import
 
 ## 在线演示 / Live Demo
 
-**中文：** 测试站点：**[https://dome.monster6324.me/](https://dome.monster6324.me/)**（仅供功能演示，数据可能随时重置）。
+**中文：** 测试站点：**[https://dome.monster6324.me/]([https://dome.monster6324.me/](https://discordanalytics.monster6324.me/))**（仅供功能演示，数据可能随时重置）。
 
-**English:** Test site: **[https://dome.monster6324.me/](https://dome.monster6324.me/)** (for demonstration purposes only — data may be reset at any time).
+**English:** Test site: **[https://dome.monster6324.me/]([https://dome.monster6324.me/](https://discordanalytics.monster6324.me/))** (for demonstration purposes only — data may be reset at any time).
 
 ---
 
