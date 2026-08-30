@@ -3,7 +3,7 @@
 > Discord 论坛数据分析、常规用户自动识别与下载管理平台
 > A Discord forum data analytics, regular-user auto-detection, and download-management platform.
 
-🔗 **在线演示 / Live Demo：** [https://dome.monster6324.me/](https://dome.monster6324.me/)
+🔗 **在线演示 / Live Demo：** [(https://discordanalytics.monster6324.me/)](https://discordanalytics.monster6324.me/))
 
 ---
 
