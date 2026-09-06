@@ -140,4 +140,5 @@ Admin/白名单用户不走兜底。清除某用户的 demo 身份：删 `demo_i
 - 所有时间处理统一走 `shared/timeutil.py`。
 - 日志自动轮转保留 5 份，禁止向日志写入任何 token。
 - 数据库 WAL 模式（portal.db-wal/shm 属正常现象，勿手工删）。
+- **绝对禁止删除服务器数据库**（本地或服务器上的 `data/portal.db`、`data/servers/*.db` 及其 -wal/-shm 文件）。任何调试、回退、重置操作只允许改代码和改配置，不允许 drop / rm / 清空任何 .db 文件。生产数据（25万+ 帖子、460万+ 消息）不可重建。
 - 修改下载逻辑前先阅读 `BOT_DOWNLOAD_LOGIC.md`，状态字段是持久化契约。
