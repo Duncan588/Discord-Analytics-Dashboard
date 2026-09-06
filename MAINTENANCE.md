@@ -144,6 +144,7 @@ Admin/白名单用户不走兜底。清除某用户的 demo 身份：删 `demo_i
 - **每次修改 whitelist_bot.py / app.py 后必须重启服务并验证命令**，流程固定为：
   1. `scp` 改动文件到服务器；
   2. `systemctl restart v20.service`（不要用 pkill，pkill 会和 systemd 自动重启互相打架，导致双进程抢登录 / 重启计数暴涨）；
-  3. `journalctl -u v20.service -n 30` 确认出现「Discord 应用命令同步完成」和 Gateway connected；
+  3. `journalctl -u v20.service -n 30` 确认出现「Discord 应用命令同步完成」（或 50240 分支的「单独 upsert 18/18 条普通命令」）和 Gateway connected；
   4. 用 bot token 调 `GET /applications/{app_id}/commands`（注意 app_id 用 `users/@me` 返回的 id）核对全部斜杠 / 右键命令都在，缺一个就回查代码。
+- **改 .env 后用 `/restart` 即可生效**：app.py 收到 SIGUSR1 后会先用 override 模式把 .env 强制刷进进程环境再 `os.execv`（2026-09-06 修复，之前 systemd EnvironmentFile 注入的旧值会挡住新值）。改完 .env 直接 `/restart`，不用 SSH。
 - 修改下载逻辑前先阅读 `BOT_DOWNLOAD_LOGIC.md`，状态字段是持久化契约。
