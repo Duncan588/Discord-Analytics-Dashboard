@@ -141,4 +141,9 @@ Admin/白名单用户不走兜底。清除某用户的 demo 身份：删 `demo_i
 - 日志自动轮转保留 5 份，禁止向日志写入任何 token。
 - 数据库 WAL 模式（portal.db-wal/shm 属正常现象，勿手工删）。
 - **绝对禁止删除服务器数据库**（本地或服务器上的 `data/portal.db`、`data/servers/*.db` 及其 -wal/-shm 文件）。任何调试、回退、重置操作只允许改代码和改配置，不允许 drop / rm / 清空任何 .db 文件。生产数据（25万+ 帖子、460万+ 消息）不可重建。
+- **每次修改 whitelist_bot.py / app.py 后必须重启服务并验证命令**，流程固定为：
+  1. `scp` 改动文件到服务器；
+  2. `systemctl restart v20.service`（不要用 pkill，pkill 会和 systemd 自动重启互相打架，导致双进程抢登录 / 重启计数暴涨）；
+  3. `journalctl -u v20.service -n 30` 确认出现「Discord 应用命令同步完成」和 Gateway connected；
+  4. 用 bot token 调 `GET /applications/{app_id}/commands`（注意 app_id 用 `users/@me` 返回的 id）核对全部斜杠 / 右键命令都在，缺一个就回查代码。
 - 修改下载逻辑前先阅读 `BOT_DOWNLOAD_LOGIC.md`，状态字段是持久化契约。
