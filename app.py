@@ -41,7 +41,7 @@ from shared.discord_api import (
     guild_icon_url,
     user_avatar_url,
 )
-from shared.env import env_keys, load_local_env
+from shared.env import apply_local_env, env_keys, load_local_env
 from shared.portal import touch_user_presence, upsert_portal_user
 from shared.sqlite_utils import add_columns, connect_sqlite, is_missing_table_error
 from shared.task_timing import calculate_task_timing
@@ -3145,6 +3145,14 @@ def restart_application(signum, frame):
     """由管理机器人触发，完整替换 Flask 主进程并重新拉起全部服务。"""
     app.logger.warning("收到完整应用重启信号 signum=%s，正在停止子服务并重启 app.py", signum)
     stop_background_services()
+    # 用户可能刚改过 .env。os.execv 原地替换进程不会触发 systemd 重新读取
+    # EnvironmentFile，而启动时的 load_local_env 只填充缺失 key，所以这里
+    # 必须用 override=True 把 .env 强制刷进进程环境，否则新配置不生效。
+    try:
+        apply_local_env(os.path.join(BASE_DIR, ".env"), override=True)
+        app.logger.warning("重启前已用 override 模式重新加载 .env")
+    except Exception:
+        app.logger.exception("重启前重新加载 .env 失败，沿用旧环境继续重启")
     # Werkzeug 的开发服务器监听 socket 可能在 execv 后继续被旧进程继承，
     # 导致新 app.py 报 Address already in use。仅关闭 POSIX socket，不碰
     # 日志和数据库文件描述符；生产环境由外部 WSGI/进程管理器接管时也安全。
