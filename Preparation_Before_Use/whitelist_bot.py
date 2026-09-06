@@ -1,7 +1,10 @@
-"""白名单管理机器人 + 服务器成员名单同步 + Forum 帖子收藏机器人。
+"""白名单管理机器人 + 服务器成员名单同步 + Forum 帖子收藏机器人 + 黑名单拦截机器人。
 
-单个 Discord Bot 进程，同一个 Token，同一个 CommandTree，合并了原来两个
-独立机器人的全部功能（原 favorite_bot.py 已合并进本文件，不再单独运行）：
+单个 Discord Bot 进程，同一个 Token，同一个 CommandTree，合并了原来多个
+独立机器人的全部功能：
+
+- 原 favorite_bot.py（收藏功能）：已合并进本文件，不再单独运行
+- 原 Blockbot.py（黑名单 / 双向拦截功能）：已合并进本文件，不再单独运行
 
 白名单 / 成员同步部分：
 - 创建下载任务后，网站写入 member_sync_requests，机器人自动同步目标服务器成员
@@ -16,8 +19,17 @@
 - /top /top30 查看收藏排行榜
 - /help 查看收藏机器人使用说明
 
-收藏数据与白名单数据共用同一个 portal.db（PORTAL_DB），不再使用单独的
-discord_favorites.db 文件，避免维护两份数据库连接配置。
+黑名单部分（原 Blockbot.py）：
+- /block /unblock 拉黑 / 解除用户
+- 右键消息 -> Apps -> 拉黑此发言者 / 解除拉黑此发言者
+- 双向拦截：被拉黑或回复被拉黑对象的消息会被自动删除，并通过 DM 通知发送者
+- 拦截次数会记录在 portal.db 中；/list 在展示黑名单的同时会显示每个用户
+  被本机器人拦截的消息次数
+- 同时支持「直接 Reply」和「Forum 帖子内的普通跟帖（默认目标 = 楼主）」两种
+  触发场景
+
+收藏、白名单、黑名单三类数据共用同一个 portal.db（PORTAL_DB），不再使用
+单独的 discord_favorites.db / blocklist.db 文件，避免维护多份数据库连接。
 """
 import os
 import sys
@@ -61,6 +73,9 @@ PER_PAGE = 10
 intents = discord.Intents.default()
 intents.guilds = True
 intents.members = True
+# 黑名单拦截功能需要读取消息内容来识别「引用回复 / Forum 跟帖」并把原文 DM
+# 回给发送者。原 Blockbot.py 也显式开启了此 Intent。
+intents.message_content = True
 
 
 # ---------------------------------------------------------------------------
@@ -419,21 +434,57 @@ class Bot(discord.Client):
         self.download_notifications.start()
 
     async def _upsert_restart_command_without_entry_point(self) -> None:
-        command = self.tree.get_command("restart")
-        if command is None or self.application_id is None:
+        """Discord 50240 时单独 upsert 一组命令。
+
+        当 Activity Entry Point 命令存在时，bulk sync() 会被 Discord 拒绝
+        （会尝试隐式删除 Entry Point）。但单个命令的 upsert 不会触碰 Entry Point，
+        因此这里把所有普通 slash/context 命令单独 upsert 一遍，保证新增的
+        `/block` `/unblock` `/list` 等不会被遗漏。
+        """
+        if self.application_id is None:
             return
-        try:
-            payload = (
-                await command.get_translated_payload(self.tree, self.tree.translator)
-                if self.tree.translator
-                else command.to_dict(self.tree)
-            )
-            await self.tree._http.upsert_global_command(
-                self.application_id, payload=payload
-            )
-            log.info("已单独注册 /restart（保留 Activity Entry Point）")
-        except discord.HTTPException:
-            log.exception("单独注册 /restart 失败")
+
+        # 使用 discord.py 内部的 _get_all_commands() 取得全部待注册命令
+        # （包括 context menus 和 Group 下的子命令），并跳过 Activity Entry Point
+        # （type=4 = AppCommandType.chat_input 但通过 _context_menus 注册的那一类）。
+        all_commands = self.tree._get_all_commands(guild=None)
+        # 排除 Activity Entry Point（PRIMARY_ENTRY_POINT）。Entry Point 在
+        # discord.py 中以 type=4 注册在 _context_menus 中，但 bot.tree.sync()
+        # 不负责维护它——它由 Activity SDK 维护。这里用 to_dict() 后看 type
+        # 字段来排除 type==4 的项。
+        commands = []
+        for cmd in all_commands:
+            try:
+                payload = cmd.to_dict(self.tree)
+            except Exception:
+                payload = None
+            if payload and payload.get("type") == 4:
+                continue
+            commands.append(cmd)
+
+        success = 0
+        for command in commands:
+            try:
+                cmd_payload = (
+                    await command.get_translated_payload(self.tree, self.tree.translator)
+                    if self.tree.translator
+                    else command.to_dict(self.tree)
+                )
+                await self.tree._http.upsert_global_command(
+                    self.application_id, payload=cmd_payload
+                )
+                success += 1
+            except discord.HTTPException as exc:
+                log.exception(
+                    "单独注册命令 %s 失败 error=%s",
+                    getattr(command, "name", "?"),
+                    exc,
+                )
+        log.info(
+            "已跳过 Activity Entry Point，单独 upsert %s/%s 条普通命令",
+            success,
+            len(commands),
+        )
 
     async def init_favorites_db(self) -> None:
         assert self.db is not None
@@ -468,7 +519,34 @@ class Bot(discord.Client):
             await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_favorites_guild_created ON favorites (guild_id, created_at DESC)"
             )
-        log.info("收藏数据表初始化完成")
+            # 黑名单功能（原 Blockbot.py 合并进来）：黑名单关系表 + 拦截次数计数。
+            # 使用 portal.db 同一文件，不再单独维护 blocklist.db。
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS user_blocks (
+                    blocker_id INTEGER NOT NULL,
+                    blocked_id INTEGER NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now')),
+                    PRIMARY KEY (blocker_id, blocked_id)
+                )
+                """
+            )
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS block_interception_counts (
+                    guild_id INTEGER NOT NULL,
+                    sender_id INTEGER NOT NULL,
+                    target_id INTEGER NOT NULL,
+                    count INTEGER NOT NULL DEFAULT 0,
+                    last_blocked_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now')),
+                    PRIMARY KEY (guild_id, sender_id, target_id)
+                )
+                """
+            )
+            await conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_user_blocks_blocker ON user_blocks (blocker_id)"
+            )
+        log.info("收藏数据表初始化完成（含黑名单表）")
 
     async def ensure_favorite_user(self, user: discord.abc.User) -> None:
         assert self.db is not None
@@ -570,6 +648,138 @@ class Bot(discord.Client):
             upsert_member(after.guild.id, after)
         except Exception as exc:
             log.exception("成员更新同步失败 guild=%s user=%s error=%s", after.guild.id, after.id, exc)
+
+    # ---- 黑名单拦截（原 Blockbot.py 合并进来）----
+
+    async def _increment_block_count(self, guild_id: int, sender_id: int, target_id: int) -> None:
+        """拦截触发后写入 / 自增计数，供 /list 展示。"""
+        if self.db is None:
+            return
+        try:
+            async with self.db.acquire() as conn:
+                await conn.execute(
+                    """
+                    INSERT INTO block_interception_counts (guild_id, sender_id, target_id, count, last_blocked_at)
+                    VALUES (?, ?, ?, 1, strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now'))
+                    ON CONFLICT (guild_id, sender_id, target_id) DO UPDATE SET
+                        count = count + 1,
+                        last_blocked_at = strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now')
+                    """,
+                    guild_id,
+                    sender_id,
+                    target_id,
+                )
+        except Exception as exc:
+            log.exception("写入黑名单拦截次数失败 guild=%s sender=%s target=%s error=%s",
+                          guild_id, sender_id, target_id, exc)
+
+    @staticmethod
+    def _check_block_relation(rows, sender_id: int, recipient_id: int):
+        """根据 user_blocks 查询结果判定双向拦截关系。
+
+        返回：
+          - 'sender_blocked_recipient': 发送者主动拉黑了接收者
+          - 'recipient_blocked_sender': 接收者拉黑了发送者
+          - 'mutual': 双方互为拉黑
+          - None: 无任何拉黑关系
+        """
+        if not rows:
+            return None
+        blockers = {row[0] for row in rows}
+        if sender_id in blockers and recipient_id in blockers:
+            return "mutual"
+        if sender_id in blockers:
+            return "sender_blocked_recipient"
+        return "recipient_blocked_sender"
+
+    async def on_message(self, message: discord.Message):
+        # 跳过机器人本人发送的消息 / 私信
+        if message.author.bot or not message.guild:
+            return
+
+        recipient_id: Optional[int] = None
+
+        # 1. 判定直接引用回复 (Reply)
+        if message.reference and message.reference.message_id:
+            try:
+                ref_msg = message.reference.resolved
+                if not isinstance(ref_msg, discord.Message):
+                    ref_msg = await message.channel.fetch_message(message.reference.message_id)
+                if ref_msg:
+                    recipient_id = ref_msg.author.id
+            except Exception:
+                pass
+
+        # 2. 判定 Forum Thread：帖内普通跟帖 -> 默认目标为发帖楼主（楼主非本人时）
+        if recipient_id is None and isinstance(message.channel, discord.Thread):
+            parent = message.channel.parent
+            if parent is not None and parent.type == discord.ChannelType.forum:
+                owner_id = message.channel.owner_id
+                if owner_id and owner_id != message.author.id:
+                    recipient_id = owner_id
+
+        if not recipient_id or recipient_id == message.author.id:
+            return
+
+        # 3. 双向拦截触发判定
+        if self.db is None:
+            return
+        try:
+            async with self.db.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT blocker_id FROM user_blocks
+                    WHERE (blocker_id = ? AND blocked_id = ?)
+                       OR (blocker_id = ? AND blocked_id = ?)
+                    """,
+                    message.author.id,
+                    recipient_id,
+                    recipient_id,
+                    message.author.id,
+                )
+        except Exception as exc:
+            log.exception("查询黑名单关系失败 guild=%s error=%s", message.guild.id, exc)
+            return
+
+        relation = self._check_block_relation(rows, message.author.id, recipient_id)
+        if not relation:
+            return
+
+        deleted_content = message.content
+        channel_mention = message.channel.mention
+
+        if relation == "sender_blocked_recipient":
+            reason = "你已将对方加入黑名单，无法对该用户进行回复。"
+        elif relation == "recipient_blocked_sender":
+            reason = "对方已将你拉黑，回复被自动拦截。"
+        else:
+            reason = "你与该用户处于相互拉黑状态，回复已被自动删除。"
+
+        try:
+            await message.delete()
+        except discord.Forbidden:
+            pass  # 机器人无删帖权限（频道权限不足）时不通知用户
+        except discord.HTTPException as exc:
+            log.warning("删除被拦截消息失败 guild=%s message=%s error=%s",
+                        message.guild.id, message.id, exc)
+
+        # 不论是否删成功，都把拦截次数 +1：哪怕是权限不足时也要让用户在 /list 里
+        # 看到「机器人尝试拦截但未删除成功」这一信息，便于排查权限。
+        await self._increment_block_count(message.guild.id, message.author.id, recipient_id)
+
+        try:
+            dm = await message.author.create_dm()
+            await dm.send(
+                f"⚠️ **消息发送已被拦截**\n"
+                f"你在频道 {channel_mention} 中的回复已被自动删除。\n"
+                f"**拦截原因：** {reason}\n\n"
+                f"**你的回复原文：**\n"
+                f"> {deleted_content if deleted_content else '[包含附件/多媒体/非纯文本内容]'}"
+            )
+        except discord.Forbidden:
+            pass  # 发言者关闭了服务器私信权限或机器人无 DM 权限
+        except discord.HTTPException as exc:
+            log.debug("向被拦截用户发送 DM 失败 user=%s error=%s", message.author.id, exc)
 
     async def close(self):
         if self.db is not None:
@@ -1218,6 +1428,248 @@ async def help_command(
         embed=help_embed(),
         ephemeral=is_private_context(interaction),
     )
+
+
+# ---------------------------------------------------------------------------
+# 黑名单功能（原 Blockbot.py）斜杠命令 / 右键 Apps
+# ---------------------------------------------------------------------------
+
+
+def _parse_block_target(input_val: str) -> Optional[int]:
+    """支持纯数字 ID 或 `@用户` 形式输入。"""
+    cleaned = (input_val or "").strip().strip("<@!> ")
+    return int(cleaned) if cleaned.isdigit() else None
+
+
+async def _block_user(blocker_id: int, blocked_id: int) -> bool:
+    """在 portal.db.user_blocks 中写入拉黑关系。blocker 与 blocked 不能相同。"""
+    if blocker_id == blocked_id:
+        return False
+    assert bot.db is not None
+    async with bot.db.acquire() as conn:
+        result = await conn.execute(
+            """
+            INSERT INTO user_blocks (blocker_id, blocked_id)
+            VALUES (?, ?)
+            ON CONFLICT (blocker_id, blocked_id) DO NOTHING
+            """,
+            blocker_id,
+            blocked_id,
+        )
+    return result.rowcount == 1
+
+
+async def _unblock_user(blocker_id: int, blocked_id: int) -> bool:
+    assert bot.db is not None
+    async with bot.db.acquire() as conn:
+        result = await conn.execute(
+            "DELETE FROM user_blocks WHERE blocker_id=? AND blocked_id=?",
+            blocker_id,
+            blocked_id,
+        )
+    return result.rowcount == 1
+
+
+async def _get_blocked_list_with_counts(blocker_id: int, guild_id: Optional[int]) -> list[dict]:
+    """返回当前用户的黑名单列表，每条附带：
+
+    - blocked_id:  被拉黑的用户 ID
+    - count:       本机器人在 guild_id 内拦截「blocker -> blocked」方向的消息次数
+                   若 guild_id 为 None（DM 中调用），则统计全服务器累计次数
+    - last_blocked_at: 最近一次拦截时间（UTC ISO 字符串）
+
+    按拦截次数降序排列，便于用户优先看到「被拦截最多的」目标。
+    """
+    assert bot.db is not None
+    async with bot.db.acquire() as conn:
+        if guild_id is None:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    b.blocked_id AS blocked_id,
+                    COALESCE(SUM(c.count), 0) AS total_count,
+                    MAX(c.last_blocked_at) AS last_blocked_at
+                FROM user_blocks b
+                LEFT JOIN block_interception_counts c
+                    ON c.sender_id = b.blocker_id AND c.target_id = b.blocked_id
+                WHERE b.blocker_id = ?
+                GROUP BY b.blocked_id
+                ORDER BY total_count DESC, b.created_at DESC
+                """,
+                blocker_id,
+            )
+        else:
+            rows = await conn.fetch(
+                """
+                SELECT
+                    b.blocked_id AS blocked_id,
+                    COALESCE(c.count, 0) AS total_count,
+                    c.last_blocked_at AS last_blocked_at
+                FROM user_blocks b
+                LEFT JOIN block_interception_counts c
+                    ON c.guild_id = ?
+                   AND c.sender_id = b.blocker_id
+                   AND c.target_id = b.blocked_id
+                WHERE b.blocker_id = ?
+                ORDER BY total_count DESC, b.created_at DESC
+                """,
+                guild_id,
+                blocker_id,
+            )
+    return [dict(r) for r in rows]
+
+
+@bot.tree.command(
+    name="block",
+    description="拉黑用户（双方将无法在任何频道/论坛中互相回复）",
+)
+@app_commands.describe(user_id="输入对方的 User ID，或直接 @提及 对方")
+async def block_command(interaction: discord.Interaction, user_id: str):
+    target_id = _parse_block_target(user_id)
+    if not target_id:
+        await interaction.response.send_message(
+            "❌ 请输入正确的纯数字 ID 或直接 @提及 用户。",
+            ephemeral=True,
+        )
+        return
+    if target_id == interaction.user.id:
+        await interaction.response.send_message("❌ 你不能拉黑你自己。", ephemeral=True)
+        return
+
+    success = await _block_user(interaction.user.id, target_id)
+    if success:
+        await interaction.response.send_message(
+            f"✅ 已成功拉黑用户 ID: `{target_id}`，双方互相回复均会被自动拦截。",
+            ephemeral=True,
+        )
+    else:
+        await interaction.response.send_message(
+            f"ℹ️ 该用户 (`{target_id}`) 已在你的黑名单中。",
+            ephemeral=True,
+        )
+
+
+@bot.tree.command(
+    name="unblock",
+    description="解除对指定用户的拉黑",
+)
+@app_commands.describe(user_id="输入要解除的 User ID，或直接 @提及 对方")
+async def unblock_command(interaction: discord.Interaction, user_id: str):
+    target_id = _parse_block_target(user_id)
+    if not target_id:
+        await interaction.response.send_message(
+            "❌ 请输入正确的纯数字 ID 或直接 @提及 用户。",
+            ephemeral=True,
+        )
+        return
+
+    success = await _unblock_user(interaction.user.id, target_id)
+    if success:
+        await interaction.response.send_message(
+            f"✅ 已解除对用户 ID: `{target_id}` 的拉黑限制。",
+            ephemeral=True,
+        )
+    else:
+        await interaction.response.send_message(
+            f"ℹ️ 用户 ID (`{target_id}`) 不在你的黑名单中。",
+            ephemeral=True,
+        )
+
+
+@bot.tree.command(
+    name="list",
+    description="查看你拉黑的用户列表，以及本机器人替你拦截消息的次数",
+)
+async def list_command(interaction: discord.Interaction):
+    """黑名单列表 + 拦截次数。
+
+    - 在服务器内调用时，仅统计本服务器内的拦截次数
+    - 在私聊中调用时，统计所有服务器的累计拦截次数
+    """
+    guild_id = interaction.guild.id if interaction.guild else None
+    rows = await _get_blocked_list_with_counts(interaction.user.id, guild_id)
+
+    if not rows:
+        await interaction.response.send_message(
+            "📋 你的黑名单目前为空。\n使用 `/block <用户>` 可以拉黑一个用户。",
+            ephemeral=True,
+        )
+        return
+
+    scope_text = "当前服务器" if guild_id else "全部服务器"
+
+    lines: list[str] = []
+    total_intercepted = 0
+    for index, row in enumerate(rows, start=1):
+        target_id = row["blocked_id"]
+        count = int(row["total_count"] or 0)
+        total_intercepted += count
+
+        user = bot.get_user(target_id)
+        name_str = f"**{user.name}**" if user else "已离线/未缓存用户"
+        last_blocked = row["last_blocked_at"]
+        last_blocked_text = ""
+        if last_blocked:
+            parsed = parse_utc_datetime(last_blocked)
+            if parsed:
+                last_blocked_text = parsed.astimezone(
+                    timezone(timedelta(hours=8))
+                ).strftime("%Y-%m-%d %H:%M CST")
+
+        line = (
+            f"**{index}.** {name_str} (`{target_id}`)\n"
+            f"　　🛡️ 机器人替你拦截消息：**{count}** 次"
+        )
+        if last_blocked_text:
+            line += f"\n　　⏱️ 最近拦截：`{last_blocked_text}`"
+        lines.append(line)
+
+    header = (
+        f"**黑名单列表（{scope_text}）**\n"
+        f"共 **{len(rows)}** 个用户，累计拦截 **{total_intercepted}** 条消息。\n\n"
+    )
+    content = header + "\n\n".join(lines)
+
+    if len(content) > 2000:
+        # 单条消息上限 2000 字符；超出时截断并保留尾部提示。
+        content = content[:1990] + "\n…（内容过长已截断）"
+
+    await interaction.response.send_message(content, ephemeral=True)
+
+
+@app_commands.context_menu(name="拉黑此发言者")
+async def context_block(interaction: discord.Interaction, message: discord.Message):
+    target = message.author
+    if target.id == interaction.user.id:
+        await interaction.response.send_message("❌ 不能拉黑自己。", ephemeral=True)
+        return
+    if target.bot:
+        await interaction.response.send_message("❌ 无法拉黑机器人。", ephemeral=True)
+        return
+
+    success = await _block_user(interaction.user.id, target.id)
+    msg = (
+        f"✅ 已将 **{target.name}** 加入黑名单（双方均不可互相回复）。"
+        if success
+        else f"ℹ️ **{target.name}** 已在黑名单中。"
+    )
+    await interaction.response.send_message(msg, ephemeral=True)
+
+
+@app_commands.context_menu(name="解除拉黑此发言者")
+async def context_unblock(interaction: discord.Interaction, message: discord.Message):
+    target = message.author
+    success = await _unblock_user(interaction.user.id, target.id)
+    msg = (
+        f"✅ 已解除对 **{target.name}** 的拉黑限制。"
+        if success
+        else f"ℹ️ **{target.name}** 不在黑名单中。"
+    )
+    await interaction.response.send_message(msg, ephemeral=True)
+
+
+bot.tree.add_command(context_block)
+bot.tree.add_command(context_unblock)
 
 
 @bot.tree.error

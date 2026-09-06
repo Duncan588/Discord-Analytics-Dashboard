@@ -11,7 +11,7 @@
 - Flask Web 看板（服务器概览、排行榜、用户主页、词云等）
 - 多机器人并发下载器（调用外部工具 **DiscordChatExporter / DCE** 抓取 Forum 帖子）
 - SQLite 存储（`data/portal.db` 主库 + `data/servers/` 每服务器独立库）
-- 白名单机器人（兼收藏指令 `/favorites` `/top` `/top30`）
+- 白名单机器人（兼收藏指令 `/favorites` `/top` `/top30` + 黑名单拦截 `/block` `/unblock` `/list`）
 - Discord OAuth2 登录 + 常规用户自动授权（ID 出现在已采集数据即自动放行）
 - 可选 Discord Activity 内嵌模式
 
@@ -33,7 +33,7 @@ V30 - 副本/
 │   ├── timeutil.py                    #   时间处理（统一入口）
 │   └── task_timing.py                 #   任务耗时统计
 ├── Preparation_Before_Use/
-│   ├── whitelist_bot.py               # 白名单+收藏机器人（discord.py，~1200行，app.py 自动拉起）
+│   ├── whitelist_bot.py               # 白名单+收藏+黑名单机器人（discord.py，约1600行，app.py 自动拉起）
 │   ├── discord_downloader.py          # 多机器人下载器 Worker（~1550行，有任务时自动拉起）
 │   ├── all_threads.py                 # 旧版脚本
 │   ├── clean_json.py                  # 旧版脚本
