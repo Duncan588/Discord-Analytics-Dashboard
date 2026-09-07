@@ -22,7 +22,8 @@
 黑名单部分（原 Blockbot.py）：
 - /block /unblock 拉黑 / 解除用户
 - 右键消息 -> Apps -> 拉黑此发言者 / 解除拉黑此发言者
-- 双向拦截：被拉黑或回复被拉黑对象的消息会被自动删除，并通过 DM 通知发送者
+- 双向拦截：被拉黑后双方不能互相回复、@提及，或在 Forum 跟帖中互动，
+  触发的消息会被自动删除，并通过 DM 通知发送者
 - 拦截次数会记录在 portal.db 中；/list 在展示黑名单的同时会显示每个用户
   被本机器人拦截的消息次数
 - 同时支持「直接 Reply」和「Forum 帖子内的普通跟帖（默认目标 = 楼主）」两种
@@ -718,10 +719,17 @@ class Bot(discord.Client):
                 if owner_id and owner_id != message.author.id:
                     recipient_id = owner_id
 
+        # 3. 判定 @提及：消息中 @ 了唯一一位用户且不是自己 -> 目标为该用户。
+        #    拉黑后双方不能互相 @，拦截逻辑与回复一致，用户无需额外操作。
+        if recipient_id is None and message.mentions:
+            mentioned = [u for u in message.mentions if u.id != message.author.id]
+            if len(mentioned) == 1:
+                recipient_id = mentioned[0].id
+
         if not recipient_id or recipient_id == message.author.id:
             return
 
-        # 3. 双向拦截触发判定
+        # 4. 双向拦截触发判定
         if self.db is None:
             return
         try:
