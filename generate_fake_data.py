@@ -411,11 +411,19 @@ portal.executemany(
 )
 
 # 拉黑：随机不重复的有向关系（不拉黑自己），并生成对应的拦截次数
-# 幂等性：先清掉本脚本此前生成的假拉黑/拦截数据（仅限至少一端是
-# 900000000000000000+ 假成员的关系与假 guild，绝不触碰生产成员间的关系），
-# 保证重复运行结果稳定。
-portal.execute("DELETE FROM user_blocks WHERE blocker_id>=900000000000000000 OR blocked_id>=900000000000000000")
-portal.execute("DELETE FROM block_interception_counts WHERE guild_id=900000000000000001 AND (sender_id>=900000000000000000 OR target_id>=900000000000000000)")
+# 幂等性：先清掉本脚本此前生成的假拉黑/拦截数据。注意：绝不能用
+# "ID >= 9e17" 之类的幅度条件区分假用户——2022 年后注册的真实 Discord
+# 用户 ID 同样超过 9e17（雪花 ID 随时间增长），会误删真实数据！
+# 必须用精确的假 ID 段（900000000000000101-119，保留段，真实用户不会命中）。
+FAKE_LO, FAKE_HI = 900000000000000101, 900000000000000119
+portal.execute(
+    f"DELETE FROM user_blocks WHERE blocker_id BETWEEN {FAKE_LO} AND {FAKE_HI} "
+    f"OR blocked_id BETWEEN {FAKE_LO} AND {FAKE_HI}"
+)
+portal.execute(
+    f"DELETE FROM block_interception_counts WHERE guild_id={GUILD_ID} AND "
+    f"(sender_id BETWEEN {FAKE_LO} AND {FAKE_HI} OR target_id BETWEEN {FAKE_LO} AND {FAKE_HI})"
+)
 pairs = set()
 while len(pairs) < BLOCK_PAIRS:
     a, b = random.sample(MEMBER_IDS, 2)
