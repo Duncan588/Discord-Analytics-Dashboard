@@ -150,4 +150,6 @@ Admin/白名单用户不走兜底。清除某用户的 demo 身份：删 `demo_i
 - **重启 discord_downloader 后必须清理孤儿 DCE 进程**：pkill downloader 时，它拉起的 DiscordChatExporter 子进程不会被连带杀死（ppid 变 1），会继续用同样 token 导出并与新 downloader 抢限流，导致下载速度骤降（实测 38 帖/分掉到 6 帖/分）。检查：`ps -eo pid,ppid,etime | grep DiscordChatExporter`，凡 ppid=1 的直接 `kill <pid>`。预防：重启 downloader 尽量用 `systemctl restart v20.service` 而非 pkill。
 - **下载吞吐调优**：DCE 并发由 `DCE_PARALLEL_LIMIT` 控制（当前 6，上限 10），批次由 `DCE_BATCH_SIZE`（当前 20）。实测：parallel=4 时 33-40 帖/分；**parallel=10 会导致批次卡死 10 分钟以上、吞吐反降到 13-25 帖/分（单 token 限流打满），不要用 10**。吞吐随队列里帖子的消息量波动（13-35 帖/分正常）。要再提速：加下载 bot token（每个 token 独立限流桶，线性提速）。
 - **ETA 显示**：`shared/task_timing.py` 优先用 `recent_speed`（downloader 每批维护的 5 分钟滑动窗口速率）算 ETA，事故停机不再污染预估值；recent_speed=0 时回退全程平均。
+- **OAuth 登录 502 教训**（2026-09-16）：session 是客户端签名字符串 Cookie，OAuth 时曾把 25 个完整 guild 对象写入 → 302 响应头几十 KB → nginx `upstream sent too big header` 502。已改为只存 id/name/icon/owner/permissions，nginx 侧也放大了 proxy_buffer_size 16k。新增 session 字段时注意体积。
+- **Web 面板同步约定**：机器人用户功能数据在 `/admin/bot-features`（管理版）和 `/user/<uid>` 个人主页卡片（用户版，仅本人可见）双端展示；portal.db 新增用户功能表时两处都要补。
 - 修改下载逻辑前先阅读 `BOT_DOWNLOAD_LOGIC.md`，状态字段是持久化契约。
