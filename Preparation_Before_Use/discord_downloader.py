@@ -645,6 +645,9 @@ def _export_batch(dce, token, tids, output_template, task_id, bot_name=""):
         task_id, bot_name, len(tids), tids[0], tids[-1],
     )
     cmd = [dce, "export", "-t", token, "-c", *tids, "-f", "Json", "-o", str(output_template)]
+    parallel = dce_parallel_limit()
+    if parallel > 1:
+        cmd.extend(["--parallel", str(parallel)])
     if os.getenv("DCE_MARKDOWN", "false").strip().lower() not in ("1", "true", "yes", "on"):
         cmd.extend(["--markdown", "false"])
     safe_cmd = list(cmd)
@@ -1017,6 +1020,20 @@ def dce_batch_size():
     except (TypeError, ValueError):
         value = 5
     return max(1, min(50, value))
+
+
+def dce_parallel_limit():
+    """返回单个 DCE 进程内并发导出的帖子数（--parallel-limit）。
+
+    DCE 默认串行导出（=1），是整体吞吐的瓶颈：每个 token 同一时刻只导 1 帖。
+    适当提高并发（4~6）可成倍提速，且仍在单 token 限流桶的安全范围内。
+    通过 DCE_PARALLEL_LIMIT 环境变量配置，默认 4，上限 10。
+    """
+    try:
+        value = int(os.getenv("DCE_PARALLEL_LIMIT", "4"))
+    except (TypeError, ValueError):
+        value = 4
+    return max(1, min(10, value))
 
 
 def run_task(task, dce):
