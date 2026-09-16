@@ -142,6 +142,7 @@ def ensure_schema(conn):
         "active_bots": "INTEGER DEFAULT 0",
         "failed_count": "INTEGER DEFAULT 0",
         "speed": "REAL DEFAULT 0",
+        "recent_speed": "REAL DEFAULT 0",
         "heartbeat_at": "DATETIME",
         "delete_requested": "INTEGER DEFAULT 0",
         "download_interval_ms": "INTEGER DEFAULT 0",
@@ -1095,6 +1096,34 @@ def run_task(task, dce):
         try: return int(c.execute("SELECT COUNT(*) FROM download_task_items WHERE task_id=? AND status IN ('downloaded','skipped')",(task_id,)).fetchone()[0] or 0)
         finally: c.close()
 
+    # ---- 滑动窗口速率（ETA 用）----
+    # 全程平均速率会被事故停机时间污染（崩溃循环/重启/孤儿进程），导致 ETA 虚高。
+    # 这里维护最近 5 分钟的 (时间戳, 完成数) 样本，用窗口首尾差计算真实吞吐，
+    # 对多 worker 并发完成和批次突发都稳健，写入 recent_speed 供 UI 计算 ETA。
+    rate_lock = threading.Lock()
+    rate_samples = []  # [(ts, done), ...] 按时间升序
+
+    def bump_recent_speed(done):
+        """每完成一帖调用：更新 5 分钟滑动窗口并返回窗口吞吐（帖/分钟）。"""
+        now_ts = time.time()
+        with rate_lock:
+            samples = rate_samples
+            samples.append((now_ts, done))
+            # 保留窗口内样本 + 1 个窗口外基线点
+            cutoff = now_ts - 300.0
+            while len(samples) > 1 and samples[1][0] < cutoff:
+                samples.pop(0)
+            if len(samples) < 2:
+                return 0.0
+            dt = samples[-1][0] - samples[0][0]
+            if dt <= 0:
+                return 0.0
+            rate = (samples[-1][1] - samples[0][1]) / dt * 60.0
+            # 保护：窗口内几乎没有进度时速率应为 0 而非残留旧值
+            if rate < 0:
+                return 0.0
+            return round(min(rate, 500.0), 3)
+
     def upsert_scan_row(row,status='pending'):
         c=db()
         c.execute('''INSERT INTO download_task_items(task_id,thread_id,thread_name,status,filename,last_active_at)
@@ -1175,7 +1204,7 @@ def run_task(task, dce):
         out.unlink(missing_ok=True)
         mark_item(task_id,tid,status='downloaded',bot_name=bot['name'],downloaded_at=now(),last_active_at=str(row.get('last_active_at') or row.get('created_at') or ''),error=None)
         done=done_items(); total=total_items()
-        update_task(task_id,phase='downloading',completed=done,total=total,active_bots=active_worker_count(),message=f'实时写入数据库：{tid} · {done}/{total} · {bot["name"]}')
+        update_task(task_id,phase='downloading',completed=done,total=total,active_bots=active_worker_count(),recent_speed=bump_recent_speed(done),message=f'实时写入数据库：{tid} · {done}/{total} · {bot["name"]}')
         log_step("任务 #%s | 机器人=%s | 帖子完成 | %s/%s", task_id, bot["name"], done, total)
 
     def worker(bot):

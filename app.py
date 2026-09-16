@@ -492,7 +492,8 @@ def init_portal_db():
         "update_enabled": "INTEGER DEFAULT 0",
         "mode": "TEXT DEFAULT 'initial'",
         "scan_bot_name": "TEXT",
-        "active_started_at": "DATETIME"
+        "active_started_at": "DATETIME",
+        "recent_speed": "REAL DEFAULT 0"
     }
     add_columns(conn, "download_tasks", task_migrations)
     add_columns(conn, "download_servers", {"use_default_bot": "INTEGER DEFAULT 0"})
