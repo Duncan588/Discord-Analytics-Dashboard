@@ -148,5 +148,6 @@ Admin/白名单用户不走兜底。清除某用户的 demo 身份：删 `demo_i
   4. 用 bot token 调 `GET /applications/{app_id}/commands`（注意 app_id 用 `users/@me` 返回的 id）核对全部斜杠 / 右键命令都在，缺一个就回查代码。
 - **改 .env 后用 `/restart` 即可生效**：app.py 收到 SIGUSR1 后会先用 override 模式把 .env 强制刷进进程环境再 `os.execv`（2026-09-06 修复，之前 systemd EnvironmentFile 注入的旧值会挡住新值）。改完 .env 直接 `/restart`，不用 SSH。
 - **重启 discord_downloader 后必须清理孤儿 DCE 进程**：pkill downloader 时，它拉起的 DiscordChatExporter 子进程不会被连带杀死（ppid 变 1），会继续用同样 token 导出并与新 downloader 抢限流，导致下载速度骤降（实测 38 帖/分掉到 6 帖/分）。检查：`ps -eo pid,ppid,etime | grep DiscordChatExporter`，凡 ppid=1 的直接 `kill <pid>`。预防：重启 downloader 尽量用 `systemctl restart v20.service` 而非 pkill。
-- **下载吞吐调优**：DCE 并发由 `DCE_PARALLEL_LIMIT` 控制（默认 4，上限 10），批次由 `DCE_BATCH_SIZE`（当前 20）。实测 parallel=4、5 token 约 38-40 帖/分，无 429。要再提速：加 `DCE_PARALLEL_LIMIT=6` 或在 UI 增加下载 bot token（每个 token 独立限流桶，线性提速）。
+- **下载吞吐调优**：DCE 并发由 `DCE_PARALLEL_LIMIT` 控制（当前 6，上限 10），批次由 `DCE_BATCH_SIZE`（当前 20）。实测：parallel=4 时 33-40 帖/分；**parallel=10 会导致批次卡死 10 分钟以上、吞吐反降到 13-25 帖/分（单 token 限流打满），不要用 10**。吞吐随队列里帖子的消息量波动（13-35 帖/分正常）。要再提速：加下载 bot token（每个 token 独立限流桶，线性提速）。
+- **ETA 显示**：`shared/task_timing.py` 优先用 `recent_speed`（downloader 每批维护的 5 分钟滑动窗口速率）算 ETA，事故停机不再污染预估值；recent_speed=0 时回退全程平均。
 - 修改下载逻辑前先阅读 `BOT_DOWNLOAD_LOGIC.md`，状态字段是持久化契约。
