@@ -693,9 +693,106 @@ class Bot(discord.Client):
             return "sender_blocked_recipient"
         return "recipient_blocked_sender"
 
+    async def _block_relation_ids(self, user_a: int, user_b: int):
+        """查询 user_a 与 user_b 之间任意方向的拉黑关系。
+
+        返回 'sender_blocked_recipient' / 'recipient_blocked_sender' / 'mutual' / None。
+        """
+        if self.db is None:
+            return None
+        try:
+            async with self.db.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT blocker_id FROM user_blocks
+                    WHERE (blocker_id = ? AND blocked_id = ?)
+                       OR (blocker_id = ? AND blocked_id = ?)
+                    """,
+                    user_a,
+                    user_b,
+                    user_b,
+                    user_a,
+                )
+        except Exception as exc:
+            log.exception("查询黑名单关系失败 error=%s", exc)
+            return None
+        return self._check_block_relation(rows, user_a, user_b)
+
+    async def _handle_third_party_bot_message(self, message: discord.Message) -> None:
+        """处理第三方机器人消息：若由与帖子楼主存在拉黑关系的用户触发，删除该回复。
+
+        Discord 上 slash 命令调用本身不是消息、无法拦截；但第三方 bot 的
+        （非 ephemeral）回复消息带有 interaction 元数据，可以定位到触发者。
+        这里利用它实现「被拉黑者在楼主帖内调用其他机器人时，bot 回复被自动删除」。
+        """
+        # 我们自己的消息（拦截通知等）永不删除，避免自删循环
+        if message.author.id == self.user.id:
+            return
+        if not isinstance(message.channel, discord.Thread):
+            return
+        parent = message.channel.parent
+        if parent is None or parent.type != discord.ChannelType.forum:
+            return
+
+        # 定位触发命令的用户
+        invoker = None
+        meta = getattr(message, "interaction_metadata", None)
+        if meta is not None:
+            invoker = getattr(meta, "user", None)
+        if invoker is None:
+            legacy = getattr(message, "interaction", None)  # 旧版字段兜底
+            if legacy is not None:
+                invoker = getattr(legacy, "user", None)
+        if invoker is None or invoker.bot:
+            return
+
+        owner_id = message.channel.owner_id
+        if not owner_id or owner_id == invoker.id:
+            return
+
+        relation = await self._block_relation_ids(invoker.id, owner_id)
+        if not relation:
+            return
+
+        channel_mention = message.channel.mention
+        if relation == "sender_blocked_recipient":
+            reason = "你已将帖子楼主拉黑，机器人命令的执行结果被自动删除。"
+        elif relation == "recipient_blocked_sender":
+            reason = "帖子楼主已将你拉黑，机器人命令的执行结果被自动删除。"
+        else:
+            reason = "你与帖子楼主处于相互拉黑状态，机器人命令的执行结果被自动删除。"
+
+        try:
+            await message.delete()
+        except discord.Forbidden:
+            pass  # 无删帖权限时静默
+        except discord.HTTPException as exc:
+            log.warning("删除第三方 bot 被拦截回复失败 guild=%s message=%s error=%s",
+                        message.guild.id if message.guild else 0, message.id, exc)
+
+        if message.guild:
+            await self._increment_block_count(message.guild.id, invoker.id, owner_id)
+
+        try:
+            dm = await invoker.create_dm()
+            await dm.send(
+                f"⚠️ **机器人命令执行结果已被拦截**\n"
+                f"你在帖子 {channel_mention} 中调用的机器人命令，其回复已被自动删除。\n"
+                f"**拦截原因：** {reason}"
+            )
+        except discord.Forbidden:
+            pass
+        except discord.HTTPException as exc:
+            log.debug("向第三方 bot 触发者发送 DM 失败 user=%s error=%s", invoker.id, exc)
+
     async def on_message(self, message: discord.Message):
-        # 跳过机器人本人发送的消息 / 私信
-        if message.author.bot or not message.guild:
+        # 私信不走拦截
+        if not message.guild:
+            return
+
+        # 第三方 bot 消息：检查是否由被拉黑用户触发（在楼主帖内调用其他机器人）
+        if message.author.bot:
+            await self._handle_third_party_bot_message(message)
             return
 
         recipient_id: Optional[int] = None
@@ -982,6 +1079,18 @@ async def favorite_message(
             ephemeral=True,
         )
         return
+
+    # 拉黑拦截：与帖子楼主存在任意方向拉黑关系时，禁止收藏该帖子。
+    # （解除收藏不受限，允许用户随时清掉历史收藏。）
+    owner_id = getattr(message.channel, "owner_id", None)
+    if owner_id and owner_id != interaction.user.id:
+        relation = await bot._block_relation_ids(interaction.user.id, owner_id)
+        if relation:
+            await interaction.followup.send(
+                "❌ 你与帖子楼主存在拉黑关系，无法收藏该帖子。",
+                ephemeral=True,
+            )
+            return
 
     assert bot.db is not None
     guild_id = interaction.guild.id
