@@ -1,9 +1,11 @@
-# Discord Analytics Dashboard
+# Dixo
 
 > Discord 论坛数据分析、常规用户自动识别与下载管理平台
 > A Discord forum data analytics, regular-user auto-detection, and download-management platform.
 
-🔗 **在线演示 / Live Demo：** [(https://discordanalytics.monster6324.me/)](https://discordanalytics.monster6324.me/))
+🔗 **在线演示 / Live Demo：** [https://discordanalytics.monster6324.me/](https://discordanalytics.monster6324.me/)
+
+🤖 **添加机器人 / Add Bot：** [邀请 Dixo Bot / Invite Dixo Bot](https://discord.com/oauth2/authorize?client_id=1460293619616317607)
 
 ---
 
@@ -11,6 +13,7 @@
 
 - [项目简介 / Overview](#项目简介--overview)
 - [在线演示 / Live Demo](#在线演示--live-demo)
+- [添加机器人 / Add Bot](#添加机器人--add-bot)
 - [核心功能 / Features](#核心功能--features)
 - [技术栈 / Tech Stack](#技术栈--tech-stack)
 - [项目结构 / Project Structure](#项目结构--project-structure)
@@ -27,18 +30,28 @@
 ## 项目简介 / Overview
 
 **中文：**
-Discord Analytics Dashboard 是一个基于 Flask 的 Web 平台，用于对 Discord 论坛（Forum）频道的数据进行采集、导入与可视化分析。项目内置多机器人并发下载器（基于 [DiscordChatExporter](https://github.com/Tyrrrz/DiscordChatExporter)）、SQLite 数据存储、Discord OAuth2 登录、常规用户自动授权，以及可直接在 Discord 客户端内运行的 Activity（内嵌应用）模式。
+Dixo 是一个基于 Flask 的 Web 平台，用于对 Discord 论坛（Forum）频道的数据进行采集、导入与可视化分析。项目内置多机器人并发下载器（基于 [DiscordChatExporter](https://github.com/Tyrrrz/DiscordChatExporter)）、SQLite 数据存储、Discord OAuth2 登录、常规用户自动授权，以及可直接在 Discord 客户端内运行的 Activity（内嵌应用）模式。
 
 **English:**
-Discord Analytics Dashboard is a Flask-based web platform for collecting, importing, and visualizing data from Discord Forum channels. It includes a concurrent multi-bot downloader (built on [DiscordChatExporter](https://github.com/Tyrrrz/DiscordChatExporter)), SQLite-based storage, Discord OAuth2 login, automatic access provisioning for regular members, and a Discord Activity (embedded app) mode that runs directly inside the Discord client.
+Dixo is a Flask-based web platform for collecting, importing, and visualizing data from Discord Forum channels. It includes a concurrent multi-bot downloader (built on [DiscordChatExporter](https://github.com/Tyrrrz/DiscordChatExporter)), SQLite-based storage, Discord OAuth2 login, automatic access provisioning for regular members, and a Discord Activity (embedded app) mode that runs directly inside the Discord client.
 
 ---
 
 ## 在线演示 / Live Demo
 
-**中文：** 测试站点：**[测试站点]([https://dome.monster6324.me/](https://discordanalytics.monster6324.me/))**（仅供功能演示，数据可能随时重置）。
+**中文：** 测试站点：**[测试站点](https://discordanalytics.monster6324.me/)**（仅供功能演示，数据可能随时重置）。
 
-**English:** Test site: **[ Test site]([https://dome.monster6324.me/](https://discordanalytics.monster6324.me/))** (for demonstration purposes only — data may be reset at any time).
+**English:** Test site: **[Test site](https://discordanalytics.monster6324.me/)** (for demonstration purposes only — data may be reset at any time).
+
+---
+
+## 添加机器人 / Add Bot
+
+**中文：** 点击下方链接，将 Dixo Bot 添加到你的 Discord 服务器：
+
+**English:** Use the link below to add Dixo Bot to your Discord server:
+
+**[🤖 邀请 Dixo Bot / Invite Dixo Bot](https://discord.com/oauth2/authorize?client_id=1460293619616317607)**
 
 ---
 
@@ -49,7 +62,7 @@ Discord Analytics Dashboard is a Flask-based web platform for collecting, import
 - Forum 帖子多机器人并发扫描与下载，支持断点续传、暂停/继续/取消/删除；任务运行期间可以继续加入下载账号
 - 单服务器支持最多 5 个自定义下载机器人 + 1 个默认机器人，最多 6 个并发
 - 常规用户自动识别：只要 Discord User ID 出现在已采集服务器数据中即可自动获得访问权限，无需手动白名单
-- 白名单机器人内置 Forum 帖子收藏功能（`/favorites`、`/top`、`/top30` 等指令）
+- Dixo Bot 内置 Forum 帖子收藏功能（`/favorites`、`/top`、`/top30` 等指令）
 - Discord Activity（内嵌应用）模式，可直接在 Discord 客户端语音频道“火箭图标”中打开
 - 前端依赖（Tailwind、Chart.js、Alpine.js、TagCloud、Discord Embedded App SDK）全部本地托管，避免 CDN 不可用问题
 - 移动端自适应布局
@@ -60,7 +73,7 @@ Discord Analytics Dashboard is a Flask-based web platform for collecting, import
 - Multi-bot concurrent Forum scanning and downloading, with resumable, pause/resume/cancel/delete task controls
 - Up to 5 custom download bots + 1 default bot per server (up to 6 concurrent workers)
 - Automatic regular-user access: any Discord User ID found in an already-collected server dataset is granted access automatically, no manual whitelisting required
-- The whitelist bot doubles as a Forum-post favorites bot (`/favorites`, `/top`, `/top30`, etc.)
+- Dixo Bot includes Forum-post favorites features (`/favorites`, `/top`, `/top30`, etc.)
 - Discord Activity (embedded app) mode, launchable directly from the voice-channel "rocket" activity menu inside Discord
 - Frontend dependencies (Tailwind, Chart.js, Alpine.js, TagCloud, Discord Embedded App SDK) are all hosted locally to avoid CDN failures
 - Mobile-responsive layouts
@@ -86,15 +99,15 @@ Discord Analytics Dashboard is a Flask-based web platform for collecting, import
 ## 项目结构 / Project Structure
 
 ```text
-Discord-Analytics-Dashboard-main/
+Dixo/
 ├── app.py                     # 主应用入口 / Main application entry point
 ├── requirements.txt
 ├── .env.example
 ├── shared/                    # 通用工具模块 / Shared utility modules
 ├── templates/                 # Flask 网页模板 / Web templates
 ├── static/                    # 前端静态资源 / Frontend static assets
-├── Preparation_Before_Use/    # 下载器、白名单机器人、旧版处理脚本
-│                               # Downloader, whitelist bot, legacy scripts
+├── Preparation_Before_Use/    # 下载器、机器人、旧版处理脚本
+│                               # Downloader, bot, legacy scripts
 ├── tests/ / test/             # 测试用例 / Test suites
 ├── data/                      # 运行时生成的数据（数据库、日志）
 │                               # Runtime-generated data (DB, logs)
@@ -121,7 +134,7 @@ Discord-Analytics-Dashboard-main/
    venv/bin/python app.py
    ```
 
-   下载器与白名单机器人默认由 `app.py` 自动拉起，通常无需单独运行。如需单独调试：
+   下载器与机器人默认由 `app.py` 自动拉起，通常无需单独运行。如需单独调试：
 
    ```bash
    venv/bin/python Preparation_Before_Use/discord_downloader.py
@@ -148,7 +161,7 @@ Discord-Analytics-Dashboard-main/
    venv/bin/python app.py
    ```
 
-   The downloader and whitelist bot are normally started automatically by `app.py`, so you don't need to run them manually. For standalone debugging:
+   The downloader and bot are normally started automatically by `app.py`, so you don't need to run them manually. For standalone debugging:
 
    ```bash
    venv/bin/python Preparation_Before_Use/discord_downloader.py
@@ -169,7 +182,7 @@ Discord-Analytics-Dashboard-main/
 | --- | --- |
 | `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | Discord OAuth2 应用凭据 |
 | `ADMIN_IDS` | 管理员 Discord User ID，逗号分隔 |
-| `DISCORD_BOT_TOKEN` | 主程序/白名单机器人令牌 |
+| `DISCORD_BOT_TOKEN` | 主程序/机器人令牌 |
 | `DISCORD_DOWNLOADER_TOKEN` | 默认下载机器人令牌 |
 | `PUBLIC_BASE_URL` | 生产环境访问域名（HTTPS，Activity 模式必需） |
 | `DOWNLOAD_MAX_CONCURRENT_TASKS` | 同时运行的独立下载任务数量 |
@@ -183,7 +196,7 @@ Discord-Analytics-Dashboard-main/
 | --- | --- |
 | `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | Discord OAuth2 application credentials |
 | `ADMIN_IDS` | Comma-separated admin Discord User IDs |
-| `DISCORD_BOT_TOKEN` | Main app / whitelist bot token |
+| `DISCORD_BOT_TOKEN` | Main app / bot token |
 | `DISCORD_DOWNLOADER_TOKEN` | Default download bot token |
 | `PUBLIC_BASE_URL` | Production HTTPS base URL (required for Activity mode) |
 | `DOWNLOAD_MAX_CONCURRENT_TASKS` | Number of concurrent independent download tasks |
@@ -217,32 +230,16 @@ The website can run as a Discord Activity, opening directly inside the Discord c
 本项目的数据下载功能构建于开源工具 **[DiscordChatExporter](https://github.com/Tyrrrz/DiscordChatExporter)**（作者：[Tyrrrz](https://github.com/Tyrrrz)，许可证：GPL-3.0-only）之上。DiscordChatExporter 本身**未包含**在本仓库中，请前往其 [Releases 页面](https://github.com/Tyrrrz/DiscordChatExporter/releases) 自行下载对应平台的可执行文件，并遵守其许可证条款与项目仓库中声明的使用条件（包括 Discord 官方服务条款关于自动化用户账号的限制——建议使用机器人令牌而非用户令牌进行导出）。
 
 **English:**
-This project's data-download functionality is built on top of the open-source tool **[DiscordChatExporter](https://github.com/Tyrrrz/DiscordChatExporter)** (author: [Tyrrrz](https://github.com/Tyrrrz), licensed under GPL-3.0-only). DiscordChatExporter itself is **not bundled** in this repository — please download the appropriate executable for your platform from its [Releases page](https://github.com/Tyrrrz/DiscordChatExporter/releases) and comply with its license terms and the usage conditions stated in its repository (including Discord's Terms of Service restrictions on automating user accounts — using a bot token rather than a user token for exporting is recommended).
+This project's data-download functionality is built on top of the open-source tool **[DiscordChatExporter](https://github.com/Tyrrrz/DiscordChatExporter)** (author: [Tyrrrz](https://github.com/Tyrrrz), licensed under GPL-3.0-only). DiscordChatExporter itself is **not included** in this repository. Please download the appropriate executable from its [Releases page](https://github.com/Tyrrrz/DiscordChatExporter/releases) and comply with its license and the conditions stated in the project repository (including Discord's Terms of Service restrictions on automated user accounts — Bot Tokens are recommended for production exports).
 
 ---
 
 ## 打赏支持 / Donation
 
-**中文：** 如果这个项目对你有帮助，欢迎打赏支持后续开发与维护：
-
-**English:** If this project has been useful to you, donations to support continued development are greatly appreciated:
-
-**EVM / 以太坊兼容地址 · EVM / Ethereum-compatible address:**
-
-```text
-0xB1D6e9f2706085007eD506DD3e9b6697D16D3903
-```
-
-**Solana 地址 · Solana address:**
-
-```text
-3ZUSMkMAnBZK9e7VeP6JgRk846T1KH4zaDAod7hwAGqe
-```
+感谢支持本项目。
 
 ---
 
 ## 许可证 / License
 
-**中文：** 本仓库的具体开源许可证请以仓库中实际的 `LICENSE` 文件为准；本项目所依赖的 DiscordChatExporter 采用 **GPL-3.0-only** 许可证，使用时请遵守其条款。
-
-**English:** Please refer to the `LICENSE` file in this repository for its actual license terms. The DiscordChatExporter dependency used by this project is licensed under **GPL-3.0-only**; please comply with its terms when using it.
+本项目许可证请以仓库中的 LICENSE 文件为准。
