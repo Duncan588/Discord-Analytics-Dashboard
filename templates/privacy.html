@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>隐私政策 - 抽象派档案馆</title>
+<meta name="discord-client-id" content="{{ discord_client_id }}">
+<script src="/static/js/discord-activity.js?v=20260821-9" defer></script>
+<script src="/static/js/i18n.js?v=20260821-3" defer></script>
+<link rel="stylesheet" href="/static/css/fallback.css?v=20260821-1">
+<link rel="stylesheet" href="/static/css/tailwind-static.css?v=20260821-1">
+<style>
+  body{background:#36393f;color:#fff;font-family:"Microsoft YaHei",sans-serif}
+  .section{background:linear-gradient(145deg,#2f3136,#292b2f);border:1px solid #40444b;border-radius:1rem;padding:1.25rem;box-shadow:0 10px 30px rgba(0,0,0,.12)}
+  @media(min-width:640px){.section{padding:1.75rem}}
+  .legal h2{font-size:1.05rem;font-weight:700;color:#fff;margin:1.4rem 0 .6rem}
+  .legal h3{font-size:.95rem;font-weight:700;color:#c7c9cb;margin:1rem 0 .4rem}
+  .legal p,.legal li{font-size:.875rem;color:#b9bbbe;line-height:1.75}
+  .legal ul{list-style:disc;padding-left:1.4rem;margin:.4rem 0}
+  .legal table{width:100%;font-size:.82rem;border-collapse:collapse;margin:.6rem 0}
+  .legal th,.legal td{border:1px solid #40444b;padding:.5rem .7rem;text-align:left;color:#b9bbbe}
+  .legal th{background:#202225;color:#8f9297}
+  .legal code{background:#202225;border:1px solid #40444b;border-radius:.3rem;padding:.05rem .35rem;font-size:.8em}
+  .lang-switch{display:flex;gap:.5rem;margin-bottom:1rem}
+  .lang-switch button{font-size:.8rem;padding:.3rem .9rem;border-radius:.6rem;border:1px solid #40444b;background:#202225;color:#b9bbbe;cursor:pointer}
+  .lang-switch button.active{background:#5865f2;color:#fff;border-color:#5865f2}
+</style>
+</head>
+<body class="min-h-screen p-2 sm:p-4 md:p-8">
+<div class="w-full max-w-4xl mx-auto space-y-4">
+
+<header class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+  <div>
+    <h1 class="text-xl sm:text-2xl font-bold">隐私政策</h1>
+    <p class="text-gray-500 mt-1 text-sm">最近更新：2026-09-16 · 本政策说明「抽象派档案馆」收集哪些数据、如何使用与保护。</p>
+  </div>
+  <div class="space-x-3 text-sm">
+    <a href="/terms" class="text-blue-400 hover:underline">服务条款</a>
+    <a href="/welcome" class="text-blue-400 hover:underline">返回首页</a>
+  </div>
+</header>
+
+<div class="section legal">
+  <div class="lang-switch">
+    <button type="button" onclick="switchLang('zh')" id="btn-zh" class="active">中文</button>
+    <button type="button" onclick="switchLang('en')" id="btn-en">English</button>
+  </div>
+
+  <!-- ==================== 中文 ==================== -->
+  <div id="lang-zh">
+    <h2>1. 我们是谁</h2>
+    <p>「抽象派档案馆」（下称"本站"）是一个 Discord 社区数据分析看板，由社区管理员运营，通过 Discord 机器人收集服务器内公开频道与论坛（Forum）的讨论数据，并以统计图表的形式展示。本政策说明本站收集、使用、存储和保护数据的方式。</p>
+
+    <h2>2. 我们收集的数据</h2>
+    <h3>2.1 通过 Discord OAuth 登录收集</h3>
+    <ul>
+      <li>你的 Discord 用户 ID、用户名、头像——用于创建和识别你的账户；</li>
+      <li>你所在服务器的列表及你在其中的权限（所有者 / 管理员）——用于判断你可以查看哪些服务器的数据。该列表仅在你登录时获取一次。</li>
+    </ul>
+    <h3>2.2 通过数据下载机器人收集（来自已授权分析的服务器）</h3>
+    <table>
+      <tr><th>数据</th><th>说明</th></tr>
+      <tr><td>消息内容与时间戳</td><td>服务器内公开频道与 Forum 帖子中的消息文本及发送时间</td></tr>
+      <tr><td>消息 ID 与回复关系</td><td>用于还原讨论串结构</td></tr>
+      <tr><td>表情回应（Reactions）</td><td>谁对哪条消息用了什么表情，用于热度统计</td></tr>
+      <tr><td>@提及</td><td>谁提到了谁，用于互动关系统计</td></tr>
+      <tr><td>附件元数据</td><td>附件的文件名、URL、大小（不下载附件内容本身）</td></tr>
+      <tr><td>成员名单</td><td>服务器成员的用户 ID、昵称、头像（成员加入/更新时同步）</td></tr>
+    </table>
+    <h3>2.3 通过机器人互动功能收集</h3>
+    <ul>
+      <li><strong>收藏</strong>：你收藏了哪个帖子（用户 ID、服务器 ID、帖子 ID、时间）；</li>
+      <li><strong>拉黑</strong>：你拉黑了谁、拉黑时间，以及机器人替你拦截消息的次数统计；</li>
+      <li><strong>主页访问记录</strong>：谁访问了你的个人主页（展示最近 20 位访客，互相可见）。</li>
+    </ul>
+    <h3>2.4 管理员提供的技术凭据</h3>
+    <ul>
+      <li>下载机器人 Token（由管理员在后台添加，仅用于连接 Discord API 下载数据，不会展示给其他用户）。</li>
+    </ul>
+    <h3>2.5 自动收集的技术信息</h3>
+    <ul>
+      <li>登录状态 Cookie（签名后的会话数据，仅含用户 ID、用户名、头像和服务器列表摘要，不包含密码或 Token）；</li>
+      <li>服务器访问日志（IP 地址、请求路径、时间，用于安全审计与故障排查，日志自动轮转并定期覆盖）。</li>
+    </ul>
+
+    <h2>3. 我们如何使用数据</h2>
+    <ul>
+      <li>生成词云、排行榜、互动关系、活跃趋势等统计分析并在看板展示；</li>
+      <li>判断你对服务器数据的访问权限；</li>
+      <li>驱动机器人的收藏、拉黑拦截、成员同步等功能；</li>
+      <li>下载任务的状态跟踪与失败通知。</li>
+    </ul>
+    <p><strong>我们不做什么</strong>：不出售数据；不向广告商共享数据；不将数据用于本站说明之外的用途；不给用户发送营销信息。</p>
+
+    <h2>4. 数据的存储与保护</h2>
+    <ul>
+      <li>所有数据存储在运营者控制的 VPS 上的本地 SQLite 数据库中，不使用第三方云存储；</li>
+      <li>站点通过 HTTPS 提供服务，登录凭据使用签名 Cookie；</li>
+      <li>机器人 Token 与 OAuth Secret 仅保存在服务器端配置中，日志中自动脱敏；</li>
+      <li>仅管理员和白名单授权用户可以访问对应服务器的数据。</li>
+    </ul>
+
+    <h2>5. 数据的共享</h2>
+    <ul>
+      <li><strong>Discord</strong>：登录与数据下载必须与 Discord API 交互，受 Discord 隐私政策约束；</li>
+      <li><strong>Cloudflare</strong>：站点通过 Cloudflare 提供 CDN 与防护，其会处理请求 IP 等技术信息；</li>
+      <li>除上述服务外，不会向任何第三方提供你的数据（法律强制要求除外）。</li>
+    </ul>
+
+    <h2>6. 数据保留与删除</h2>
+    <ul>
+      <li>消息分析数据在服务器持续运营期间保留；服务器数据被管理员删除时，对应分析库一并删除；</li>
+      <li>你可以联系管理员（见第 8 节）要求删除你的个人数据（收藏、拉黑记录、主页访问记录、账户信息）；</li>
+      <li>访问日志按轮转策略自动覆盖。</li>
+    </ul>
+
+    <h2>7. 你的选择</h2>
+    <ul>
+      <li>不想被统计：请避免在已授权分析的公开频道发言，或联系管理员将服务器移出分析范围；</li>
+      <li>拉黑某用户后，双方无法互相回复、@提及，机器人会自动删除相关消息并通知发送者；</li>
+      <li>收藏与拉黑数据仅本人和管理员可见，其他用户无法查看你的列表。</li>
+    </ul>
+
+    <h2>8. 联系我们</h2>
+    <p>对本政策或数据处理的任何问题、更正或删除请求，请在 Discord 服务器内联系管理员（Admin 权限成员），或通过本站后台的审核流程提交。</p>
+
+    <h2>9. 政策更新</h2>
+    <p>机器人新增收集内容或数据处理方式变化时，我们会更新本页面的「最近更新」日期并如实描述新增内容。继续使用本站即表示接受更新后的政策。</p>
+  </div>
+
+  <!-- ==================== English ==================== -->
+  <div id="lang-en" style="display:none">
+    <h2>1. Who We Are</h2>
+    <p>"抽象派档案馆" (the "Site") is a Discord community analytics dashboard operated by community administrators. It collects discussion data from public channels and Forum posts in authorized Discord servers via Discord bots, and presents it as statistical dashboards. This policy explains what we collect, how we use it, and how we protect it.</p>
+
+    <h2>2. Data We Collect</h2>
+    <h3>2.1 Via Discord OAuth Login</h3>
+    <ul>
+      <li>Your Discord user ID, username, and avatar — to create and identify your account;</li>
+      <li>Your guild list and your permission level in each (owner / administrator) — to determine which server data you may view. Fetched once at login.</li>
+    </ul>
+    <h3>2.2 Via Data Download Bots (from authorized servers)</h3>
+    <table>
+      <tr><th>Data</th><th>Details</th></tr>
+      <tr><td>Message content &amp; timestamps</td><td>Text and send time of messages in public channels and Forum posts</td></tr>
+      <tr><td>Message IDs &amp; reply relations</td><td>Used to reconstruct discussion threads</td></tr>
+      <tr><td>Reactions</td><td>Who reacted to which message with which emoji, for engagement statistics</td></tr>
+      <tr><td>Mentions</td><td>Who mentioned whom, for interaction statistics</td></tr>
+      <tr><td>Attachment metadata</td><td>Filename, URL and size (attachment contents are not downloaded)</td></tr>
+      <tr><td>Member roster</td><td>Member IDs, nicknames and avatars (synced on join/update)</td></tr>
+    </table>
+    <h3>2.3 Via Bot Interactive Features</h3>
+    <ul>
+      <li><strong>Favorites</strong>: which post you favorited (user ID, guild ID, thread ID, timestamp);</li>
+      <li><strong>Blocking</strong>: whom you blocked, when, and interception counts performed by the bot on your behalf;</li>
+      <li><strong>Profile visits</strong>: who viewed your profile page (last 20 visitors are shown, mutually visible).</li>
+    </ul>
+    <h3>2.4 Technical Credentials Provided by Administrators</h3>
+    <ul>
+      <li>Download bot tokens (added by admins, used solely to call the Discord API for data download; never shown to other users).</li>
+    </ul>
+    <h3>2.5 Automatically Collected Technical Information</h3>
+    <ul>
+      <li>Session cookie (signed; contains only user ID, username, avatar and a summary of your guild list — no passwords or tokens);</li>
+      <li>Server access logs (IP address, request path, time — for security auditing and troubleshooting; rotated automatically).</li>
+    </ul>
+
+    <h2>3. How We Use Data</h2>
+    <ul>
+      <li>Generating word clouds, leaderboards, interaction graphs and activity trends on the dashboard;</li>
+      <li>Determining your access to server data;</li>
+      <li>Powering bot features: favorites, block interception, member sync;</li>
+      <li>Download task status tracking and failure notifications.</li>
+    </ul>
+    <p><strong>What we do NOT do</strong>: we do not sell data, share it with advertisers, use it beyond the purposes described here, or send marketing messages.</p>
+
+    <h2>4. Storage &amp; Protection</h2>
+    <ul>
+      <li>All data is stored in local SQLite databases on operator-controlled VPS servers — no third-party cloud storage;</li>
+      <li>The site is served over HTTPS; login state uses signed cookies;</li>
+      <li>Bot tokens and OAuth secrets are kept in server-side configuration only and are redacted from logs;</li>
+      <li>Only admins and whitelisted users may access the data of the corresponding servers.</li>
+    </ul>
+
+    <h2>5. Data Sharing</h2>
+    <ul>
+      <li><strong>Discord</strong>: login and data download require interaction with the Discord API, governed by Discord's own privacy policy;</li>
+      <li><strong>Cloudflare</strong>: the site is served through Cloudflare CDN, which processes technical data such as request IPs;</li>
+      <li>Beyond the above, your data is never shared with any third party (except where legally required).</li>
+    </ul>
+
+    <h2>6. Retention &amp; Deletion</h2>
+    <ul>
+      <li>Analytics data is retained while the server remains in operation; when an admin deletes a server's data, its analytics database is removed with it;</li>
+      <li>You may contact an administrator (Section 8) to request deletion of your personal data (favorites, block records, profile visits, account info);</li>
+      <li>Access logs are overwritten automatically per rotation policy.</li>
+    </ul>
+
+    <h2>7. Your Choices</h2>
+    <ul>
+      <li>To avoid statistics: refrain from posting in public channels of analyzed servers, or ask an admin to remove the server from analysis;</li>
+      <li>After blocking a user, neither party can reply to or @mention the other; the bot deletes such messages automatically and notifies the sender;</li>
+      <li>Favorites and block records are visible only to you and administrators — other users cannot see your lists.</li>
+    </ul>
+
+    <h2>8. Contact</h2>
+    <p>For any questions, corrections or deletion requests regarding this policy or data handling, contact an administrator (members with Admin permission) in the Discord server.</p>
+
+    <h2>9. Policy Updates</h2>
+    <p>Whenever the bot starts collecting new types of content or data handling changes, we will update the "Last updated" date on this page and describe the additions truthfully. Continued use of the Site constitutes acceptance of the updated policy.</p>
+  </div>
+</div>
+
+</div>
+<script>
+function switchLang(lang){
+  document.getElementById('lang-zh').style.display = lang==='zh' ? '' : 'none';
+  document.getElementById('lang-en').style.display = lang==='en' ? '' : 'none';
+  document.getElementById('btn-zh').classList.toggle('active', lang==='zh');
+  document.getElementById('btn-en').classList.toggle('active', lang==='en');
+}
+</script>
+</body>
+</html>

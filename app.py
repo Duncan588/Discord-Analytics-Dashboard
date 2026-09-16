@@ -690,16 +690,50 @@ _EN_STOP_WORDS = set(
     because sure thanks thank good great nice lol lmao haha hmm btw fyi""".split()
 )
 
+# 技术/品牌/链接类停用词：这些词来自链接碎片或日常软件名，没有讨论统计价值。
+_TECH_STOP_WORDS = set(
+    """discord douyin claude api http https com cn net org www app appid pro bot token server client
+    youtube youtu bilibili b23 tiktok telegram twitter xiaohongshu reddit github gitlab google baidu bing
+    openai chatgpt gemini deepseek grok anthropic midjourney steam spotify qq wechat weixin alipay taobao
+    png jpg jpeg gif webp mp4 mp3 pdf zip rar exe apk iso json xml html css sql js py lua sh
+    windows android ios linux macos iphone cf cloudflare cdn url uri dns ip tcp udp http2
+    version update download link channel invite emoji sticker ban mute kick ping fps cpu gpu
+    xiaoku shunfei""".split()
+)
+
+# 可扩展排除词：项目根目录 wordcloud_stopwords.txt，每行一个词，# 开头为注释。
+# 拼音昵称、临时热词等个性化内容加在这里即可，中英文通用。
+_EXTRA_STOPWORDS_PATH = os.path.join(BASE_DIR, "wordcloud_stopwords.txt")
+
+# 链接与裸域名：分词前整段剔除，从根源上消灭 https/com/app 等链接碎片
+_URL_NOISE_RE = re.compile(
+    r"(https?://\S+|www\.\S+|\b[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)+\b\S*)",
+    re.IGNORECASE,
+)
+
+
+def _load_extra_stopwords():
+    try:
+        with open(_EXTRA_STOPWORDS_PATH, "r", encoding="utf-8") as fh:
+            return {line.strip().lower() for line in fh if line.strip() and not line.startswith("#")}
+    except OSError:
+        return set()
+
 
 def get_word_cloud_counter(text_list):
     text = " ".join(str(t) for t in text_list if t)
     text = text[:5000000]
-    stop_words = set("什么 这个 那个 怎么 可以 因为 所以 但是 就是 这就 感觉 时候 现在 还是 没有 一样 知道 觉得 出来 其实 这种 那样 一下 然后 虽然 不是 还有 这里 那里 今天 明天 真的 可能 图片 表情 回复 一个 自己 只是 非常 不能 不要 需要 如果 以及 我们 你们 他们 看到 不过 确实 已经 大家 为什么 不会 这样 这么 那么 那些 是不是 有没有".split())
+    # 分词前先剥离链接与裸域名（https://...、v.douyin.com/xxx 等），
+    # 否则 https/com/app 这类链接碎片会占据词云前排。
+    text = _URL_NOISE_RE.sub(" ", text)
+    extra = _load_extra_stopwords()
+    stop_words = set("什么 这个 那个 怎么 可以 因为 所以 但是 就是 这就 感觉 时候 现在 还是 没有 一样 知道 觉得 出来 其实 这种 那样 一下 然后 虽然 不是 还有 这里 那里 今天 明天 真的 可能 图片 表情 回复 一个 自己 只是 非常 不能 不要 需要 如果 以及 我们 你们 他们 看到 不过 确实 已经 大家 为什么 不会 这样 这么 那么 那些 是不是 有没有".split()) | extra
+    en_stop = _EN_STOP_WORDS | _TECH_STOP_WORDS | extra
     # 中文按整段提取；英文按单词切分并归一为小写，两路合并计数
     words = re.findall(r"[\u4e00-\u9fa5]{2,}", text)
     en_words = (w.lower() for w in re.findall(r"[a-zA-Z][a-zA-Z'-]*", text))
     counter = collections.Counter(w for w in words if w not in stop_words)
-    counter.update(w for w in en_words if w not in _EN_STOP_WORDS)
+    counter.update(w for w in en_words if w not in en_stop)
     return counter
 
 
@@ -973,7 +1007,8 @@ class ProfileEngine:
     leaving the current page of messages live.
     """
 
-    VERSION = 1
+    # v2: 词云新增链接剥离与技术停用词过滤，强制重算用户缓存
+    VERSION = 2
 
     def __init__(self):
         self._memory = {}
@@ -2009,6 +2044,16 @@ def welcome():
     else:
         can_upload = False
     return render_template("welcome.html", can_upload=can_upload, current_user=current_user, no_data=bool(current_user and not servers))
+
+
+@app.route("/privacy")
+def privacy():
+    return render_template("privacy.html", current_user=session.get("user"), discord_client_id=DISCORD_CLIENT_ID)
+
+
+@app.route("/terms")
+def terms():
+    return render_template("terms.html", current_user=session.get("user"), discord_client_id=DISCORD_CLIENT_ID)
 
 
 @app.route("/upload-json", methods=["POST"])
