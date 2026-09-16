@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>机器人功能 - 抽象派档案馆</title>
+  <link rel="stylesheet" href="/static/css/fallback.css?v=20260821-1">
+  <link rel="stylesheet" href="/static/css/tailwind-static.css?v=20260821-1">
+</head>
+<body class="bg-[#2b2d31] text-gray-200 min-h-screen">
+  <div class="max-w-6xl mx-auto p-4">
+    <div class="flex items-center justify-between mb-6">
+      <h1 class="text-xl font-bold">🤖 机器人功能</h1>
+      <div class="space-x-3 text-sm">
+        <a href="/admin" class="text-blue-400 hover:underline">返回 Admin</a>
+        <a href="/" class="text-blue-400 hover:underline">首页</a>
+      </div>
+    </div>
+
+    <p class="text-gray-500 text-sm mb-6">白名单机器人的用户功能数据总览。机器人新增功能后数据表会同步展示在这里。</p>
+
+    <!-- 拉黑列表 -->
+    <div class="bg-[#36393f] rounded-lg p-4 mb-8">
+      <div class="flex items-baseline justify-between mb-3">
+        <h2 class="text-lg font-bold text-red-400">🚫 拉黑列表</h2>
+        <span class="text-gray-500 text-sm">共 {{ blocks|length }} 条 · 按拦截次数排序</span>
+      </div>
+      {% if blocks %}
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="text-gray-400 border-b border-[#4f545c]">
+            <tr>
+              <th class="text-left py-2 pr-4">拉黑人</th>
+              <th class="text-left py-2 pr-4">被拉黑</th>
+              <th class="text-left py-2 pr-4">拉黑时间</th>
+              <th class="text-left py-2 pr-4">🛡️ 机器人拦截</th>
+              <th class="text-left py-2">最近拦截</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for b in blocks %}
+            <tr class="border-b border-[#42454a]">
+              <td class="py-2 pr-4 font-medium">{{ b.blocker }}</td>
+              <td class="py-2 pr-4 text-red-300">{{ b.blocked }}</td>
+              <td class="py-2 pr-4 text-gray-400">{{ b.created_at }}</td>
+              <td class="py-2 pr-4">{{ b.intercepted }} 次</td>
+              <td class="py-2 text-gray-400">{{ b.last_blocked_at }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="text-gray-500 text-sm">暂无拉黑记录。</p>
+      {% endif %}
+    </div>
+
+    <!-- 收藏列表 -->
+    <div class="bg-[#36393f] rounded-lg p-4">
+      <div class="flex items-baseline justify-between mb-3">
+        <h2 class="text-lg font-bold text-yellow-400">📌 收藏列表</h2>
+        <span class="text-gray-500 text-sm">最近 {{ favorites|length }} 条</span>
+      </div>
+      {% if favorites %}
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="text-gray-400 border-b border-[#4f545c]">
+            <tr>
+              <th class="text-left py-2 pr-4">用户</th>
+              <th class="text-left py-2 pr-4">服务器</th>
+              <th class="text-left py-2 pr-4">帖子</th>
+              <th class="text-left py-2">收藏时间</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for f in favorites %}
+            <tr class="border-b border-[#42454a]">
+              <td class="py-2 pr-4 font-medium">{{ f.user }}</td>
+              <td class="py-2 pr-4 text-gray-300">{{ f.guild_name }}</td>
+              <td class="py-2 pr-4 text-blue-300">{{ f.thread_name }}</td>
+              <td class="py-2 text-gray-400">{{ f.created_at }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <p class="text-gray-500 text-sm">暂无收藏记录。</p>
+      {% endif %}
+    </div>
+  </div>
+</body>
+</html>

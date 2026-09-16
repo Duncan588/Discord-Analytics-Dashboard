@@ -932,7 +932,7 @@ bot = Bot()
 # 白名单 / 成员同步 / 下载通知 相关斜杠命令
 # ---------------------------------------------------------------------------
 
-@bot.tree.command(name='whitelist_add', description='添加 JSON 分析白名单用户')
+@bot.tree.command(name='whitelist_add', description='添加白名单 · Add whitelist user')
 async def whitelist_add(interaction: discord.Interaction, user: discord.User):
     if not admin(interaction.user.id):
         return await interaction.response.send_message('无权限', ephemeral=True)
@@ -943,7 +943,7 @@ async def whitelist_add(interaction: discord.Interaction, user: discord.User):
     await interaction.response.send_message(f'已加入白名单 {user}，默认服务器配额 1', ephemeral=True)
 
 
-@bot.tree.command(name='whitelist_remove', description='移除 JSON 分析白名单用户')
+@bot.tree.command(name='whitelist_remove', description='移除白名单 · Remove whitelist user')
 async def whitelist_remove(interaction: discord.Interaction, user: discord.User):
     if not admin(interaction.user.id):
         return await interaction.response.send_message('无权限', ephemeral=True)
@@ -951,7 +951,7 @@ async def whitelist_remove(interaction: discord.Interaction, user: discord.User)
     await interaction.response.send_message(f'已移除 {user}', ephemeral=True)
 
 
-@bot.tree.command(name='whitelist_list', description='查看白名单')
+@bot.tree.command(name='whitelist_list', description='查看白名单 · Show whitelist')
 async def whitelist_list(interaction: discord.Interaction):
     if not admin(interaction.user.id):
         return await interaction.response.send_message('无权限', ephemeral=True)
@@ -960,7 +960,7 @@ async def whitelist_list(interaction: discord.Interaction):
     await interaction.response.send_message(text[:1900], ephemeral=True)
 
 
-@bot.tree.command(name='server_access', description='给白名单用户授权服务器')
+@bot.tree.command(name='server_access', description='授权访问服务器 · Grant server access')
 @app_commands.describe(user='白名单用户', server_id='Discord Server ID')
 async def server_access(interaction: discord.Interaction, user: discord.User, server_id: str):
     if not admin(interaction.user.id):
@@ -975,7 +975,7 @@ async def server_access(interaction: discord.Interaction, user: discord.User, se
     await interaction.response.send_message(f'已授权 {user} 使用已导入服务器 {server_id}', ephemeral=True)
 
 
-@bot.tree.command(name='quota', description='修改白名单用户服务器配额')
+@bot.tree.command(name='quota', description='设置下载配额 · Set download quota')
 async def quota(interaction: discord.Interaction, user: discord.User, quota: int):
     if not admin(interaction.user.id):
         return await interaction.response.send_message('无权限', ephemeral=True)
@@ -1015,7 +1015,7 @@ def request_full_application_restart() -> bool:
     return False
 
 
-@bot.tree.command(name='restart', description='重启完整 V20 服务（仅 .env 管理员）')
+@bot.tree.command(name='restart', description='重启机器人 · Restart bot')
 async def restart(interaction: discord.Interaction):
     if not admin(interaction.user.id):
         return await interaction.response.send_message('无权限：只有 .env 中的 ADMIN_IDS 可以重启完整 V20 服务。', ephemeral=True)
@@ -1028,7 +1028,7 @@ async def restart(interaction: discord.Interaction):
         await interaction.followup.send('完整服务重启失败，请检查 V20_APP_PID 或 systemd 权限。', ephemeral=True)
 
 
-@bot.tree.command(name='members_sync', description='更新服务器成员名单')
+@bot.tree.command(name='members_sync', description='同步成员名单 · Sync members')
 @app_commands.describe(server_id='Discord Server ID')
 async def members_sync(interaction: discord.Interaction, server_id: str):
     if not server_id.isdigit():
@@ -1400,7 +1400,7 @@ def _parse_db_datetime(value) -> datetime:
 
 @bot.tree.command(
     name="favorites",
-    description="查看我的收藏",
+    description="查看我的收藏 · My favorites",
 )
 async def favorites(
     interaction: discord.Interaction,
@@ -1514,7 +1514,7 @@ async def ranking(
 
 @bot.tree.command(
     name="top",
-    description="查看服务器历史累计收藏 Top 10",
+    description="收藏排行 · Top favorites",
 )
 async def top(
     interaction: discord.Interaction,
@@ -1524,7 +1524,7 @@ async def top(
 
 @bot.tree.command(
     name="top30",
-    description="查看服务器最近 30 天收藏 Top 10",
+    description="近期收藏排行 · Recent top favorites",
 )
 async def top30(
     interaction: discord.Interaction,
@@ -1534,7 +1534,7 @@ async def top30(
 
 @bot.tree.command(
     name="help",
-    description="查看收藏机器人帮助",
+    description="使用帮助 · Help",
 )
 async def help_command(
     interaction: discord.Interaction,
@@ -1638,7 +1638,7 @@ async def _get_blocked_list_with_counts(blocker_id: int, guild_id: Optional[int]
 
 @bot.tree.command(
     name="block",
-    description="拉黑用户（双方将无法在任何频道/论坛中互相回复）",
+    description="拉黑用户 · Block user",
 )
 @app_commands.describe(user_id="输入对方的 User ID，或直接 @提及 对方")
 async def block_command(interaction: discord.Interaction, user_id: str):
@@ -1668,7 +1668,7 @@ async def block_command(interaction: discord.Interaction, user_id: str):
 
 @bot.tree.command(
     name="unblock",
-    description="解除对指定用户的拉黑",
+    description="解除拉黑 · Unblock user",
 )
 @app_commands.describe(user_id="输入要解除的 User ID，或直接 @提及 对方")
 async def unblock_command(interaction: discord.Interaction, user_id: str):
@@ -1695,7 +1695,7 @@ async def unblock_command(interaction: discord.Interaction, user_id: str):
 
 @bot.tree.command(
     name="list",
-    description="查看你拉黑的用户列表，以及本机器人替你拦截消息的次数",
+    description="查看拉黑列表 · Show blocklist",
 )
 async def list_command(interaction: discord.Interaction):
     """黑名单列表 + 拦截次数。

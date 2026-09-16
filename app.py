@@ -2337,6 +2337,97 @@ def admin_panel():
         configs.append(d)
     return render_template("admin.html", pending_requests=reqs, active_merges=merges, whitelist=whitelist, servers=servers, accesses=accesses, bots=bot_rows, download_servers=configs, tasks=tasks, admin_level=level, current_user=session["user"], user_quota=get_download_quota(uid))
 
+@app.route("/admin/bot-features")
+@login_required
+@admin_required
+def admin_bot_features():
+    """机器人用户功能面板：拉黑列表 / 收藏列表。
+
+    机器人在 portal.db 新增用户功能数据表时，在这里补一个查询块即可同步到面板。
+    """
+    portal = get_portal_db()
+
+    # ---- 拉黑列表（含双向拦截次数）----
+    blocklist = portal.execute(
+        """
+        SELECT b.blocker_id, b.blocked_id, b.created_at,
+               COALESCE(SUM(c.count), 0) AS intercepted,
+               MAX(c.last_blocked_at) AS last_blocked_at
+        FROM user_blocks b
+        LEFT JOIN block_interception_counts c
+               ON (c.sender_id = b.blocker_id AND c.target_id = b.blocked_id)
+               OR (c.sender_id = b.blocked_id AND c.target_id = b.blocker_id)
+        GROUP BY b.blocker_id, b.blocked_id
+        ORDER BY intercepted DESC, b.created_at DESC
+        LIMIT 200
+        """
+    ).fetchall()
+
+    def _display_name(user_id):
+        row = portal.execute(
+            "SELECT username, nickname FROM portal_users WHERE user_id=?", (str(user_id),)
+        ).fetchone()
+        if row:
+            return row["nickname"] or row["username"] or str(user_id)
+        return str(user_id)
+
+    blocks = []
+    for r in blocklist:
+        blocks.append({
+            "blocker": _display_name(r["blocker_id"]),
+            "blocked": _display_name(r["blocked_id"]),
+            "created_at": (r["created_at"] or "")[:16].replace("T", " "),
+            "intercepted": int(r["intercepted"] or 0),
+            "last_blocked_at": ((r["last_blocked_at"] or "")[:16].replace("T", " ")) or "—",
+        })
+
+    # ---- 收藏列表（最近 200 条，附帖子标题）----
+    fav_rows = portal.execute(
+        """
+        SELECT f.user_id, f.guild_id, f.thread_id, f.created_at,
+               COALESCE(s.name, f.guild_id) AS guild_name
+        FROM favorites f
+        LEFT JOIN servers s ON s.server_id = f.guild_id
+        ORDER BY f.created_at DESC
+        LIMIT 200
+        """
+    ).fetchall()
+    thread_ids_by_guild = {}
+    for r in fav_rows:
+        thread_ids_by_guild.setdefault(str(r["guild_id"]), set()).add(str(r["thread_id"]))
+    thread_names = {}
+    for gid, tids in thread_ids_by_guild.items():
+        db_path = server_db_path(gid)
+        if not os.path.exists(db_path):
+            continue
+        try:
+            g = sqlite3.connect(db_path)
+            g.row_factory = sqlite3.Row
+            ph = ",".join("?" * len(tids))
+            for row in g.execute(
+                f"SELECT thread_id, name FROM threads WHERE thread_id IN ({ph})", tuple(tids)
+            ):
+                thread_names[str(row["thread_id"])] = row["name"]
+            g.close()
+        except Exception:
+            app.logger.exception("读取服务器帖子标题失败 guild=%s", gid)
+    favorites = []
+    for r in fav_rows:
+        tid = str(r["thread_id"])
+        favorites.append({
+            "user": _display_name(r["user_id"]),
+            "guild_name": r["guild_name"],
+            "thread_name": thread_names.get(tid) or f"帖子 {tid}",
+            "created_at": (r["created_at"] or "")[:16].replace("T", " "),
+        })
+
+    return render_template(
+        "bot_features.html",
+        blocks=blocks,
+        favorites=favorites,
+        current_user=session["user"],
+    )
+
 def _admin_server_scope():
     uid = str(session["user"]["id"])
     level = admin_level(uid)
