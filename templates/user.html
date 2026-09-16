@@ -149,6 +149,80 @@
             </div>
         </div>
 
+        {% if is_self %}
+        <!-- 机器人功能：拉黑列表 + 收藏列表（仅本人可见，两卡片严格对齐） -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8 items-stretch">
+            <div class="card p-6 bg-[#202225] shadow-lg rounded-2xl flex flex-col">
+                <div class="flex items-baseline justify-between mb-4 border-b border-gray-700 pb-2">
+                    <h3 class="text-xs font-bold text-red-400 uppercase tracking-widest">🚫 拉黑列表</h3>
+                    <span class="text-[10px] text-gray-500">共 {{ my_blocks|length }} 条 · 第 {{ blk_page }}/{{ total_blk_pages }} 页</span>
+                </div>
+                {% if my_blocks %}
+                <ul class="space-y-2 flex-1">
+                    {% for b in my_blocks %}
+                    <li class="flex items-center justify-between gap-2 p-2 hover:bg-[#2f3136] rounded transition">
+                        <div class="flex items-center min-w-0">
+                            <img src="{{ b.avatar_url or 'https://cdn.discordapp.com/embed/avatars/0.png' }}" class="w-8 h-8 rounded-full mr-3" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'">
+                            <div class="min-w-0">
+                                <div class="text-sm text-red-300 font-medium truncate">{{ b.name }}</div>
+                                <div class="text-[10px] text-gray-500">{{ b.created_at }}</div>
+                            </div>
+                        </div>
+                        <div class="text-right shrink-0">
+                            <span class="text-[10px] bg-[#2f3136] px-2 py-1 rounded font-mono text-gray-300">🛡️ {{ b.intercepted }}次</span>
+                            <div class="text-[10px] text-gray-500 mt-0.5">{{ b.last_blocked_at }}</div>
+                        </div>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <div class="flex-1 flex items-center justify-center text-gray-500 text-sm p-4">暂无拉黑记录。使用 /block 或右键消息拉黑用户。</div>
+                {% endif %}
+                {% if total_blk_pages > 1 %}
+                <div class="flex justify-center gap-2 mt-4 flex-wrap pt-2 border-t border-gray-700">
+                    {% for p in range(1, total_blk_pages + 1) %}
+                    <a href="?blk_page={{ p }}" class="page-link {{ 'active' if p == blk_page else '' }}">{{ p }}</a>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="card p-6 bg-[#202225] shadow-lg rounded-2xl flex flex-col">
+                <div class="flex items-baseline justify-between mb-4 border-b border-gray-700 pb-2">
+                    <h3 class="text-xs font-bold text-yellow-400 uppercase tracking-widest">📌 收藏列表</h3>
+                    <span class="text-[10px] text-gray-500">第 {{ fav_page }}/{{ total_fav_pages }} 页</span>
+                </div>
+                {% if my_favorites %}
+                <div class="space-y-3 flex-1">
+                    {% for f in my_favorites %}
+                    <a href="https://discord.com/channels/{{ f.guild_id }}/{{ f.thread_id }}" target="_blank" class="user-content-card profile-post-card block bg-[#36393f] border border-[#202225] p-4 rounded-2xl hover:bg-[#202225] transition group">
+                        <div class="flex gap-3 md:gap-4 h-full">
+                            <div class="shrink-0 pt-1 text-xl">📌</div>
+                            <div class="profile-post-content flex-1 flex flex-col">
+                                <div class="flex items-start justify-between gap-2 mb-1 min-w-0">
+                                    <h3 class="profile-post-title font-bold text-gray-200 text-sm md:text-base leading-tight pr-2 group-hover:text-[#5865f2] transition">{{ f.thread_name }}</h3>
+                                    <span class="text-[10px] text-gray-500 shrink-0 mt-0.5">{{ f.created_at }}</span>
+                                </div>
+                                <div class="profile-post-author text-xs text-gray-400 mb-2">{{ f.guild_name }}</div>
+                            </div>
+                        </div>
+                    </a>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="flex-1 flex items-center justify-center text-gray-500 text-sm p-4">暂无收藏。在 Forum 帖子上右键 → Apps → 📌 收藏帖子。</div>
+                {% endif %}
+                {% if total_fav_pages > 1 %}
+                <div class="flex justify-center gap-2 mt-4 flex-wrap pt-2 border-t border-gray-700">
+                    {% for p in range(1, total_fav_pages + 1) %}
+                    <a href="?fav_page={{ p }}" class="page-link {{ 'active' if p == fav_page else '' }}">{{ p }}</a>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
         <div class="flex flex-col md:flex-row justify-between items-end border-b border-gray-700 mb-6 sticky top-0 bg-[#36393f] z-10 pt-4 pb-1">
             <div class="flex gap-6">
                 <button @click="tab = 'threads'; loadData('{{ current_page }}', '{{ current_sort }}', 'threads')" :class="{ 'border-[#5865f2] text-white': tab === 'threads', 'border-transparent text-gray-500 hover:text-gray-300': tab !== 'threads' }" class="pb-3 border-b-2 font-bold transition text-base md:text-lg flex items-center gap-2">📢 发帖记录</button>

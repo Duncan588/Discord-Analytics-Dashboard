@@ -1,93 +1,114 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>机器人功能 - 抽象派档案馆</title>
-  <link rel="stylesheet" href="/static/css/fallback.css?v=20260821-1">
-  <link rel="stylesheet" href="/static/css/tailwind-static.css?v=20260821-1">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>机器人功能 - 管理后台</title>
+<meta name="discord-client-id" content="{{ discord_client_id }}">
+<script src="/static/js/discord-activity.js?v=20260821-9" defer></script>
+<script src="/static/js/i18n.js?v=20260821-3" defer></script>
+<link rel="stylesheet" href="/static/css/fallback.css?v=20260821-1">
+<link rel="stylesheet" href="/static/css/tailwind-static.css?v=20260821-1">
+<style>
+  body{background:#36393f;color:#fff;font-family:"Microsoft YaHei",sans-serif}
+  .section{background:linear-gradient(145deg,#2f3136,#292b2f);border:1px solid #40444b;border-radius:1rem;padding:1rem;box-shadow:0 10px 30px rgba(0,0,0,.12)}
+  @media(min-width:640px){.section{padding:1.5rem}}
+  .bf-table{width:100%;font-size:.875rem;border-collapse:collapse}
+  .bf-table thead th{text-align:left;color:#8f9297;font-weight:700;padding:.5rem .75rem .5rem 0;border-bottom:1px solid #40444b;white-space:nowrap}
+  .bf-table tbody td{padding:.55rem .75rem .55rem 0;border-bottom:1px solid #2f3136;vertical-align:middle}
+  .bf-table tbody tr:hover{background:#2f3136}
+  .bf-badge{font-size:.65rem;background:#202225;border:1px solid #40444b;color:#b9bbbe;padding:.15rem .5rem;border-radius:9999px;font-family:ui-monospace,monospace;white-space:nowrap}
+</style>
 </head>
-<body class="bg-[#2b2d31] text-gray-200 min-h-screen">
-  <div class="max-w-6xl mx-auto p-4">
-    <div class="flex items-center justify-between mb-6">
-      <h1 class="text-xl font-bold">🤖 机器人功能</h1>
-      <div class="space-x-3 text-sm">
-        <a href="/admin" class="text-blue-400 hover:underline">返回 Admin</a>
-        <a href="/" class="text-blue-400 hover:underline">首页</a>
-      </div>
-    </div>
+<body class="min-h-screen p-2 sm:p-4 md:p-8">
+<div class="w-full max-w-6xl mx-auto space-y-4 sm:space-y-6">
 
-    <p class="text-gray-500 text-sm mb-6">白名单机器人的用户功能数据总览。机器人新增功能后数据表会同步展示在这里。</p>
-
-    <!-- 拉黑列表 -->
-    <div class="bg-[#36393f] rounded-lg p-4 mb-8">
-      <div class="flex items-baseline justify-between mb-3">
-        <h2 class="text-lg font-bold text-red-400">🚫 拉黑列表</h2>
-        <span class="text-gray-500 text-sm">共 {{ blocks|length }} 条 · 按拦截次数排序</span>
-      </div>
-      {% if blocks %}
-      <div class="overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead class="text-gray-400 border-b border-[#4f545c]">
-            <tr>
-              <th class="text-left py-2 pr-4">拉黑人</th>
-              <th class="text-left py-2 pr-4">被拉黑</th>
-              <th class="text-left py-2 pr-4">拉黑时间</th>
-              <th class="text-left py-2 pr-4">🛡️ 机器人拦截</th>
-              <th class="text-left py-2">最近拦截</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for b in blocks %}
-            <tr class="border-b border-[#42454a]">
-              <td class="py-2 pr-4 font-medium">{{ b.blocker }}</td>
-              <td class="py-2 pr-4 text-red-300">{{ b.blocked }}</td>
-              <td class="py-2 pr-4 text-gray-400">{{ b.created_at }}</td>
-              <td class="py-2 pr-4">{{ b.intercepted }} 次</td>
-              <td class="py-2 text-gray-400">{{ b.last_blocked_at }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      {% else %}
-      <p class="text-gray-500 text-sm">暂无拉黑记录。</p>
-      {% endif %}
-    </div>
-
-    <!-- 收藏列表 -->
-    <div class="bg-[#36393f] rounded-lg p-4">
-      <div class="flex items-baseline justify-between mb-3">
-        <h2 class="text-lg font-bold text-yellow-400">📌 收藏列表</h2>
-        <span class="text-gray-500 text-sm">最近 {{ favorites|length }} 条</span>
-      </div>
-      {% if favorites %}
-      <div class="overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead class="text-gray-400 border-b border-[#4f545c]">
-            <tr>
-              <th class="text-left py-2 pr-4">用户</th>
-              <th class="text-left py-2 pr-4">服务器</th>
-              <th class="text-left py-2 pr-4">帖子</th>
-              <th class="text-left py-2">收藏时间</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for f in favorites %}
-            <tr class="border-b border-[#42454a]">
-              <td class="py-2 pr-4 font-medium">{{ f.user }}</td>
-              <td class="py-2 pr-4 text-gray-300">{{ f.guild_name }}</td>
-              <td class="py-2 pr-4 text-blue-300">{{ f.thread_name }}</td>
-              <td class="py-2 text-gray-400">{{ f.created_at }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-      {% else %}
-      <p class="text-gray-500 text-sm">暂无收藏记录。</p>
-      {% endif %}
-    </div>
+<header class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+  <div class="min-w-0">
+    <h1 class="text-xl sm:text-2xl font-bold truncate">🤖 机器人功能</h1>
+    <p class="text-gray-500 mt-1 text-sm">白名单机器人的用户功能数据总览；机器人新增功能后会同步展示在这里。</p>
   </div>
+  <details class="relative self-end sm:self-auto shrink-0">
+    <summary class="list-none cursor-pointer"><img src="{{ current_user.avatar }}" class="w-10 h-10 rounded-full border border-[#5865f2]"></summary>
+    <div class="absolute right-0 mt-2 w-40 p-2 rounded-xl bg-[#202225] shadow-xl z-50">
+      <a href="/me" class="block p-2 hover:bg-[#36393f] rounded">个人主页</a>
+      <a href="/admin" class="block p-2 hover:bg-[#36393f] rounded">Admin</a>
+      <a href="/admin/bot-features" class="block p-2 hover:bg-[#36393f] rounded">🤖 机器人功能</a>
+      <a href="/logout" class="block p-2 text-red-300 hover:bg-[#36393f] rounded">退出登录</a>
+    </div>
+  </details>
+</header>
+
+<!-- 拉黑列表 -->
+<div class="section">
+  <div class="flex items-baseline justify-between mb-3">
+    <h2 class="text-base sm:text-lg font-bold text-red-400">🚫 拉黑列表</h2>
+    <span class="text-xs text-gray-500">共 {{ blocks|length }} 条 · 按拦截次数排序</span>
+  </div>
+  {% if blocks %}
+  <div class="overflow-x-auto">
+    <table class="bf-table">
+      <thead>
+        <tr>
+          <th>拉黑人</th>
+          <th>被拉黑</th>
+          <th>拉黑时间</th>
+          <th>🛡️ 机器人拦截</th>
+          <th>最近拦截</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for b in blocks %}
+        <tr>
+          <td class="font-medium">{{ b.blocker }}</td>
+          <td class="text-red-300">{{ b.blocked }}</td>
+          <td class="text-gray-400 whitespace-nowrap">{{ b.created_at }}</td>
+          <td><span class="bf-badge">{{ b.intercepted }} 次</span></td>
+          <td class="text-gray-400 whitespace-nowrap">{{ b.last_blocked_at }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-gray-500 text-sm">暂无拉黑记录。</p>
+  {% endif %}
+</div>
+
+<!-- 收藏列表 -->
+<div class="section">
+  <div class="flex items-baseline justify-between mb-3">
+    <h2 class="text-base sm:text-lg font-bold text-yellow-400">📌 收藏列表</h2>
+    <span class="text-xs text-gray-500">最近 {{ favorites|length }} 条</span>
+  </div>
+  {% if favorites %}
+  <div class="overflow-x-auto">
+    <table class="bf-table">
+      <thead>
+        <tr>
+          <th>用户</th>
+          <th>服务器</th>
+          <th>帖子</th>
+          <th>收藏时间</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in favorites %}
+        <tr>
+          <td class="font-medium">{{ f.user }}</td>
+          <td class="text-gray-300">{{ f.guild_name }}</td>
+          <td class="text-blue-300">{{ f.thread_name }}</td>
+          <td class="text-gray-400 whitespace-nowrap">{{ f.created_at }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-gray-500 text-sm">暂无收藏记录。</p>
+  {% endif %}
+</div>
+
+</div>
 </body>
 </html>

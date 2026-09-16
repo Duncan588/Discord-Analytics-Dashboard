@@ -1814,7 +1814,19 @@ def exchange_discord_code(code, redirect_uri=None, source="unknown", fetch_guild
         portal.commit()
         session.clear()
         session["user"] = {"id": u["id"], "username": u["username"], "avatar": avatar}
-        session["discord_guilds"] = guilds
+        # Session 是客户端签名字符串 Cookie：完整 guild 对象（含 features/description
+        # 等长数组字段）会把 302 响应头撑到几十 KB，超过 nginx 默认 header 缓冲，
+        # 直接 502（upstream sent too big header）。只保留下游实际用到的字段。
+        session["discord_guilds"] = [
+            {
+                "id": g.get("id"),
+                "name": g.get("name"),
+                "icon": g.get("icon"),
+                "owner": g.get("owner"),
+                "permissions": g.get("permissions"),
+            }
+            for g in guilds
+        ]
         session.permanent = True
         app.logger.info(
             "oauth.exchange.success request_id=%s source=%s discord_user_id=%s guild_count=%s fetch_guilds=%s",
@@ -2249,6 +2261,106 @@ def user_profile(user_id):
             my_threads.append(d)
     msg_count = profile["msg_count"]
     thread_count = profile["thread_count"]
+
+    # ---- 机器人用户功能（仅本人主页显示）----
+    is_self = session["user"]["id"] == user_id
+    my_blocks = []
+    my_favorites = []
+    blk_page = fav_page = 1
+    total_blk_pages = total_fav_pages = 1
+    if is_self:
+        portal = get_portal_db()
+        uid_str = str(user_id)
+        # 拉黑列表：每页 10 条，按拦截次数排序
+        blk_total = portal.execute("SELECT COUNT(*) FROM user_blocks WHERE blocker_id=?", (user_id,)).fetchone()[0]
+        total_blk_pages = max(1, math.ceil(blk_total / 10))
+        try:
+            blk_page = max(1, min(total_blk_pages, int(request.args.get("blk_page", 1))))
+        except (TypeError, ValueError):
+            blk_page = 1
+        for r in portal.execute(
+            """
+            SELECT b.blocked_id, b.created_at,
+                   COALESCE(SUM(c.count),0) intercepted,
+                   MAX(c.last_blocked_at) last_blocked_at
+            FROM user_blocks b
+            LEFT JOIN block_interception_counts c
+                   ON (c.sender_id=b.blocker_id AND c.target_id=b.blocked_id)
+                   OR (c.sender_id=b.blocked_id AND c.target_id=b.blocker_id)
+            WHERE b.blocker_id=?
+            GROUP BY b.blocked_id, b.created_at
+            ORDER BY intercepted DESC, b.created_at DESC
+            LIMIT 10 OFFSET ?
+            """,
+            (user_id, (blk_page - 1) * 10),
+        ).fetchall():
+            bid = str(r["blocked_id"])
+            pu = portal.execute("SELECT username,nickname FROM portal_users WHERE user_id=?", (bid,)).fetchone()
+            gu = conn.execute("SELECT nickname,username,avatar_url FROM users WHERE user_id=?", (bid,)).fetchone()
+            if gu:
+                name = gu["nickname"] or gu["username"] or bid
+                avatar = gu["avatar_url"] or ""
+            elif pu:
+                name = pu["nickname"] or pu["username"] or bid
+                avatar = ""
+            else:
+                name, avatar = bid, ""
+            my_blocks.append({
+                "blocked_id": bid, "name": name, "avatar_url": avatar,
+                "created_at": (r["created_at"] or "")[:16].replace("T", " "),
+                "intercepted": int(r["intercepted"] or 0),
+                "last_blocked_at": ((r["last_blocked_at"] or "")[:16].replace("T", " ")) or "—",
+            })
+        # 收藏列表：每页 5 条，跨服务器，解析帖子标题
+        fav_total = portal.execute("SELECT COUNT(*) FROM favorites WHERE user_id=?", (user_id,)).fetchone()[0]
+        total_fav_pages = max(1, math.ceil(fav_total / 5))
+        try:
+            fav_page = max(1, min(total_fav_pages, int(request.args.get("fav_page", 1))))
+        except (TypeError, ValueError):
+            fav_page = 1
+        fav_rows = portal.execute(
+            """
+            SELECT f.guild_id, f.thread_id, f.created_at,
+                   COALESCE(s.name, f.guild_id) guild_name
+            FROM favorites f
+            LEFT JOIN servers s ON s.server_id=f.guild_id
+            WHERE f.user_id=?
+            ORDER BY f.created_at DESC
+            LIMIT 5 OFFSET ?
+            """,
+            (user_id, (fav_page - 1) * 5),
+        ).fetchall()
+        titles_by_guild = {}
+        for r in fav_rows:
+            gid = str(r["guild_id"])
+            if gid in titles_by_guild:
+                continue
+            db_path = server_db_path(gid)
+            if not os.path.exists(db_path):
+                titles_by_guild[gid] = {}
+                continue
+            try:
+                g = sqlite3.connect(server_db_path(gid))
+                g.row_factory = sqlite3.Row
+                titles_by_guild[gid] = {
+                    str(row["thread_id"]): row["name"]
+                    for row in g.execute("SELECT thread_id,name FROM threads")
+                }
+                g.close()
+            except Exception:
+                app.logger.exception("读取服务器帖子标题失败 guild=%s", gid)
+                titles_by_guild[gid] = {}
+        for r in fav_rows:
+            gid = str(r["guild_id"])
+            tid = str(r["thread_id"])
+            my_favorites.append({
+                "guild_id": gid,
+                "guild_name": r["guild_name"],
+                "thread_id": tid,
+                "thread_name": titles_by_guild.get(gid, {}).get(tid) or f"帖子 {tid}",
+                "created_at": (r["created_at"] or "")[:16].replace("T", " "),
+            })
+
     return render_template(
         "user.html", user=user, messages=messages, my_threads=my_threads,
         view_count=view_count, recent_viewers=recent_viewers, server_id=sid,
@@ -2264,6 +2376,9 @@ def user_profile(user_id):
         interactions_outgoing=profile["interactions_outgoing"],
         chart_daily=profile["chart_daily"], chart_hourly=profile["chart_hourly"],
         word_cloud_data=profile["word_cloud_data"],
+        is_self=is_self, my_blocks=my_blocks, my_favorites=my_favorites,
+        blk_page=blk_page, total_blk_pages=total_blk_pages,
+        fav_page=fav_page, total_fav_pages=total_fav_pages,
     )
 
 
@@ -2426,6 +2541,7 @@ def admin_bot_features():
         blocks=blocks,
         favorites=favorites,
         current_user=session["user"],
+        discord_client_id=DISCORD_CLIENT_ID,
     )
 
 def _admin_server_scope():
