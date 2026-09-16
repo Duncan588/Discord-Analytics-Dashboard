@@ -152,4 +152,6 @@ Admin/白名单用户不走兜底。清除某用户的 demo 身份：删 `demo_i
 - **ETA 显示**：`shared/task_timing.py` 优先用 `recent_speed`（downloader 每批维护的 5 分钟滑动窗口速率）算 ETA，事故停机不再污染预估值；recent_speed=0 时回退全程平均。
 - **OAuth 登录 502 教训**（2026-09-16）：session 是客户端签名字符串 Cookie，OAuth 时曾把 25 个完整 guild 对象写入 → 302 响应头几十 KB → nginx `upstream sent too big header` 502。已改为只存 id/name/icon/owner/permissions，nginx 侧也放大了 proxy_buffer_size 16k。新增 session 字段时注意体积。
 - **Web 面板同步约定**：机器人用户功能数据在 `/admin/bot-features`（管理版）和 `/user/<uid>` 个人主页卡片（用户版，仅本人可见）双端展示；portal.db 新增用户功能表时两处都要补。
+- **法务页面同步约定**：机器人新增收集内容时，必须同步更新 `templates/privacy.html`（第 2 节收集清单）和必要时 `terms.html`（第 4 节机器人规则），并修改页面顶部"最近更新"日期。
+- **词云过滤**：三层过滤在 `app.py get_word_cloud_counter`：URL/裸域名正则剥离 → `_TECH_STOP_WORDS` 技术/品牌词 → 项目根 `wordcloud_stopwords.txt` 可扩展排除词（每行一个，中英文通用，改文件即生效无需重启）。改词云逻辑后需 bump `ProfileEngine.VERSION` 强制用户缓存重算。
 - 修改下载逻辑前先阅读 `BOT_DOWNLOAD_LOGIC.md`，状态字段是持久化契约。
