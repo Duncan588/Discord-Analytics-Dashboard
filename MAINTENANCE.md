@@ -141,6 +141,7 @@ Admin/白名单用户不走兜底。清除某用户的 demo 身份：删 `demo_i
 - 日志自动轮转保留 5 份，禁止向日志写入任何 token。
 - 数据库 WAL 模式（portal.db-wal/shm 属正常现象，勿手工删）。
 - **绝对禁止删除服务器数据库**（本地或服务器上的 `data/portal.db`、`data/servers/*.db` 及其 -wal/-shm 文件）。任何调试、回退、重置操作只允许改代码和改配置，不允许 drop / rm / 清空任何 .db 文件。生产数据（25万+ 帖子、460万+ 消息）不可重建。
+- **generate_fake_data.py 的清理条件教训（2026-09-16）**：曾用「ID>=9e17」区分假用户并 DELETE，误删了真实拉黑关系——2022 年后注册的真实 Discord 雪花 ID 已超过 9e17。假用户判别只能用精确保留段 `900000000000000101-119`；任何涉及 DELETE 的脚本改动必须先用 SELECT COUNT 复核影响行数。
 - **每次修改 whitelist_bot.py / app.py 后必须重启服务并验证命令**，流程固定为：
   1. `scp` 改动文件到服务器；
   2. `systemctl restart v20.service`（不要用 pkill，pkill 会和 systemd 自动重启互相打架，导致双进程抢登录 / 重启计数暴涨）；
