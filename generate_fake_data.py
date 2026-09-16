@@ -3,8 +3,11 @@
 
 生成内容：
 - portal.db: servers 注册、portal_users、user_server_access/presence（自动授权）
+- portal.db 机器人功能: favorite_bot_users、favorites（收藏）、
+  user_blocks + block_interception_counts（拉黑与拦截次数）
 - data/servers/<guild_id>/discord_data.db: users / threads / messages /
-  reactions / attachments(仅文件名) / mentions / user_stats
+  reactions（默认 emoji 走 twemoji CDN URL）/ attachments(仅文件名) /
+  mentions / user_stats
 约 20 位成员、200 个帖子、1000 条消息，全部英文拟真讨论。
 """
 import os
@@ -284,6 +287,12 @@ for tid, cat, name, created in threads_meta:
     srv.execute("INSERT OR REPLACE INTO thread_scan_state VALUES(?,?,?,?,?)",
                 (tid, name, last_active, created.strftime("%Y-%m-%dT%H:%M:%S+00:00"), GUILD_ID))
 
+# 幂等性：reactions/attachments/mentions 无唯一约束，重复运行会累积。
+# 先清理本脚本此前生成的行（仅限演示库内 920 开头帖子的行——全部是本
+# 脚本的产物，不触碰任何生产数据）。
+srv.execute("DELETE FROM reactions WHERE message_id IN (SELECT message_id FROM messages WHERE thread_id LIKE '920%')")
+srv.execute("DELETE FROM attachments WHERE message_id IN (SELECT message_id FROM messages WHERE thread_id LIKE '920%')")
+srv.execute("DELETE FROM mentions WHERE message_id IN (SELECT message_id FROM messages WHERE thread_id LIKE '920%')")
 msg_ids = set()
 for r in msg_rows:
     srv.execute("INSERT OR IGNORE INTO messages VALUES(?,?,?,?,?,?)", r)
@@ -295,11 +304,27 @@ for r in msg_rows:
             srv.execute("INSERT OR IGNORE INTO mentions(message_id,mentioned_user_id,author_id) VALUES(?,?,?)",
                         (r[0], m[0], r[2]))
 
-# 反应
+# 反应（默认 emoji 走 twemoji CDN，与真实下载器的存储惯例一致，避免前端渲染成白块）
+def twemoji_url(emoji: str) -> str:
+    """Unicode emoji -> twemoji SVG URL（codepoint 用 '-' 连接，如 ❤️ -> 2764-fe0f）。"""
+    codepoints = "-".join(f"{ord(c):x}" for c in emoji)
+    return f"https://cdn.jsdelivr.net/gh/twitter/twemoji@latest/assets/svg/{codepoints}.svg"
+
+reaction_rows = []
 for r in random.sample(msg_rows, k=min(len(msg_rows), 350)):
     for _ in range(random.randint(1, 4)):
-        srv.execute("INSERT INTO reactions(message_id,user_id,emoji_name,emoji_url) VALUES(?,?,?,NULL)",
-                    (r[0], random.choice(MEMBER_IDS), random.choice(EMOJIS)))
+        emoji = random.choice(EMOJIS)
+        reaction_rows.append((r[0], random.choice(MEMBER_IDS), emoji, twemoji_url(emoji)))
+# 幂等性：reactions/attachments/mentions 无唯一约束，重复运行会累积。
+# 先清理本脚本此前生成的行（仅限演示库内 920 开头帖子的行——全部是本
+# 脚本的产物，不触碰任何生产数据）。
+srv.executemany("INSERT INTO reactions(message_id,user_id,emoji_name,emoji_url) VALUES(?,?,?,?)", reaction_rows)
+# 修复历史运行残留的 NULL emoji_url（默认 emoji 按 name 补 twemoji URL）
+stale = srv.execute("SELECT id, emoji_name FROM reactions WHERE emoji_url IS NULL OR emoji_url=''").fetchall()
+srv.executemany(
+    "UPDATE reactions SET emoji_url=? WHERE id=?",
+    [(twemoji_url(name), rid) for rid, name in stale],
+)
 
 # 附件（仅记录元数据，不生成真实文件）
 for r in random.sample(msg_rows, k=min(len(msg_rows), 60)):
@@ -320,6 +345,100 @@ UPDATE user_stats SET reaction_received_count=(
   SELECT COUNT(*) FROM reactions r JOIN messages m ON r.message_id=m.message_id WHERE m.author_id=user_stats.user_id)
 """)
 srv.commit()
+
+# ---------- 机器人互动功能：收藏 + 拉黑（写入 portal.db，与白名单机器人同表结构） ----------
+FAVORITES_PER_USER = (0, 8)      # 每人收藏 0-8 个帖子
+BLOCK_PAIRS = 8                  # 拉黑关系对数
+INTERCEPT_RANGE = (0, 6)         # 每对拉黑关系的拦截次数范围
+
+portal = sqlite3.connect(PORTAL)
+portal.execute("""
+    CREATE TABLE IF NOT EXISTS user_blocks (
+        blocker_id INTEGER NOT NULL,
+        blocked_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now')),
+        PRIMARY KEY (blocker_id, blocked_id)
+    )
+""")
+portal.execute("""
+    CREATE TABLE IF NOT EXISTS block_interception_counts (
+        guild_id INTEGER NOT NULL,
+        sender_id INTEGER NOT NULL,
+        target_id INTEGER NOT NULL,
+        count INTEGER NOT NULL DEFAULT 0,
+        last_blocked_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now')),
+        PRIMARY KEY (guild_id, sender_id, target_id)
+    )
+""")
+portal.execute("""
+    CREATE TABLE IF NOT EXISTS favorites (
+        user_id INTEGER NOT NULL,
+        guild_id INTEGER NOT NULL,
+        thread_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now')),
+        PRIMARY KEY (user_id, thread_id)
+    )
+""")
+portal.execute("""
+    CREATE TABLE IF NOT EXISTS favorite_bot_users (
+        user_id INTEGER PRIMARY KEY,
+        first_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now')),
+        last_seen_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now')),
+        help_dm_sent INTEGER NOT NULL DEFAULT 0
+    )
+""")
+
+def ts_between(a: datetime, b: datetime) -> str:
+    delta = b - a
+    t = a + timedelta(seconds=random.randint(0, int(delta.total_seconds())))
+    return t.strftime("%Y-%m-%dT%H:%M:%S+00:00")
+
+# 机器人用户注册（全部假成员）
+portal.executemany(
+    "INSERT OR IGNORE INTO favorite_bot_users(user_id, first_seen_at, last_seen_at, help_dm_sent) VALUES(?,?,?,1)",
+    [(uid, ts_between(start, now), ts_between(start, now)) for uid in MEMBER_IDS],
+)
+
+# 收藏：每人随机收藏若干帖子（时间在帖子创建之后）
+thread_created = {t[0]: t[3] for t in threads_meta}
+thread_ids = [t[0] for t in threads_meta]
+fav_rows = []
+for uid in MEMBER_IDS:
+    for tid in random.sample(thread_ids, k=random.randint(*FAVORITES_PER_USER)):
+        fav_rows.append((uid, GUILD_ID, tid, ts_between(thread_created[tid], now)))
+portal.executemany(
+    "INSERT OR IGNORE INTO favorites(user_id, guild_id, thread_id, created_at) VALUES(?,?,?,?)", fav_rows
+)
+
+# 拉黑：随机不重复的有向关系（不拉黑自己），并生成对应的拦截次数
+# 幂等性：先清掉本脚本此前生成的假拉黑/拦截数据（仅限至少一端是
+# 900000000000000000+ 假成员的关系与假 guild，绝不触碰生产成员间的关系），
+# 保证重复运行结果稳定。
+portal.execute("DELETE FROM user_blocks WHERE blocker_id>=900000000000000000 OR blocked_id>=900000000000000000")
+portal.execute("DELETE FROM block_interception_counts WHERE guild_id=900000000000000001 AND (sender_id>=900000000000000000 OR target_id>=900000000000000000)")
+pairs = set()
+while len(pairs) < BLOCK_PAIRS:
+    a, b = random.sample(MEMBER_IDS, 2)
+    if (a, b) in pairs or (b, a) in pairs:
+        continue
+    pairs.add((a, b))
+block_rows = []
+intercept_rows = []
+for a, b in sorted(pairs):
+    created_dt = ts_between(start, now)
+    created = created_dt  # 存储用字符串
+    block_rows.append((a, b, created))
+    n = random.randint(*INTERCEPT_RANGE)
+    if n > 0:
+        created_as_dt = datetime.strptime(created_dt, "%Y-%m-%dT%H:%M:%S+00:00").replace(tzinfo=timezone.utc)
+        intercept_rows.append((GUILD_ID, b, a, n, ts_between(created_as_dt, now)))
+portal.executemany("INSERT OR IGNORE INTO user_blocks(blocker_id, blocked_id, created_at) VALUES(?,?,?)", block_rows)
+portal.executemany(
+    "INSERT OR IGNORE INTO block_interception_counts(guild_id, sender_id, target_id, count, last_blocked_at) VALUES(?,?,?,?,?)",
+    intercept_rows,
+)
+portal.commit()
+portal.close()
 
 counts = {}
 for tbl in ["users", "threads", "messages", "reactions", "attachments", "mentions", "user_stats"]:
