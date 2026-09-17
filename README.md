@@ -238,6 +238,14 @@ This project's data-download functionality is built on top of the open-source to
 
 感谢支持本项目。
 
+ETH
+   ```
+0x3a1d27e8540dfc6c563841f7d620d834dc368323
+   ```
+SOLANA
+   ```
+Fucz37Pz8uhHiY7CV98za4jb3gLrLTjUQ2jmZdv9n8Ta
+   ```
 ---
 
 ## 许可证 / License
