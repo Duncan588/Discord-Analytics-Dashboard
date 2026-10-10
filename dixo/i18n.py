@@ -114,6 +114,7 @@ MESSAGES = {
     "home.chart.threads": ("新帖增长", "New threads"),
     "home.activity_tags": ("成员活跃分层", "Member activity tiers"),
     "home.activity_tags.hint": ("按月活跃轨迹打标，便于留存与清理盘点", "Monthly activity patterns for retention / cleanup"),
+    "home.activity_tags.full": ("分层图为全历史月份；名单可翻页查看全部成员", "Tier chart = all months; member list is paginated"),
     "home.tag.always": ("一贯活跃", "Always active"),
     "home.tag.returned": ("回归", "Returned"),
     "home.tag.faded": ("已消失", "Faded"),

@@ -99,20 +99,33 @@ def create_dashboard_api(ctx):
         def build(m, s):
             data = dashboard_data.analytics_bundle(s, since, until, cache_key=ctx.current_server_id())
             tags = data.get("activity_tags") or {}
-            samples = tags.get("samples") or {}
+            bags = []
+            for key in ("by_tag", "samples"):
+                bag = tags.get(key) or {}
+                bags.append(bag)
+                for rows in bag.values():
+                    pass
             ids = []
-            for rows in samples.values():
-                ids.extend(r["user_id"] for r in rows)
+            for bag in bags:
+                for rows in bag.values():
+                    ids.extend(r["user_id"] for r in rows)
+            ids = list(dict.fromkeys(ids))
             if ids:
-                ph = ",".join("?" for _ in ids)
-                users = {str(u["user_id"]): dict(u) for u in m.execute(
-                    f"SELECT user_id,username,nickname,avatar_url FROM users WHERE user_id IN ({ph})", ids)}
-                for rows in samples.values():
-                    for r in rows:
-                        u = users.get(str(r["user_id"])) or {}
-                        r["username"] = u.get("username")
-                        r["nickname"] = u.get("nickname")
-                        r["avatar_url"] = u.get("avatar_url")
+                users = {}
+                # chunk IN queries
+                for i in range(0, len(ids), 400):
+                    chunk = ids[i:i + 400]
+                    ph = ",".join("?" for _ in chunk)
+                    for u in m.execute(
+                        f"SELECT user_id,username,nickname,avatar_url FROM users WHERE user_id IN ({ph})", chunk):
+                        users[str(u["user_id"])] = dict(u)
+                for bag in bags:
+                    for rows in bag.values():
+                        for r in rows:
+                            u = users.get(str(r["user_id"])) or {}
+                            r["username"] = u.get("username")
+                            r["nickname"] = u.get("nickname")
+                            r["avatar_url"] = u.get("avatar_url")
             return data
 
         return _with(build)

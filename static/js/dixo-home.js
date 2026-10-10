@@ -122,7 +122,7 @@
 
   function analyticsController() {
     return {
-      grain: 'day', preset: '90', since: '', until: '', data: null, charts: {}, status: '', tagFilter: 'always_active',
+      grain: 'day', preset: '90', since: '', until: '', data: null, charts: {}, status: '', tagFilter: 'always_active', tagPage: 1, tagPageSize: 40,
       boot: function () {
         this.reload();
         document.addEventListener('dixo:theme', this.paint.bind(this));
@@ -131,9 +131,22 @@
         document.querySelectorAll('[data-tag-filter]').forEach(function (btn) {
           btn.addEventListener('click', function () {
             self.tagFilter = btn.getAttribute('data-tag-filter');
+            self.tagPage = 1;
             self.renderActivityTags();
           });
         });
+        var listHost = document.getElementById('anTagSamples');
+        if (listHost && !listHost._dixoPagerBound) {
+          listHost._dixoPagerBound = true;
+          listHost.addEventListener('click', function (ev) {
+            var b = ev.target && ev.target.closest ? ev.target.closest('[data-tag-page]') : null;
+            if (!b) return;
+            ev.preventDefault();
+            if (b.getAttribute('data-tag-page') === 'prev') self.tagPage = Math.max(1, self.tagPage - 1);
+            else self.tagPage = self.tagPage + 1;
+            self.renderActivityTags();
+          });
+        }
       },
       setGrain: function (g) { this.grain = g; this.paint(); },
       setPreset: function (p) { this.preset = String(p); if (p !== 'custom') this.reload(); },
@@ -181,14 +194,28 @@
         document.querySelectorAll('[data-tag-filter]').forEach(function (btn) {
           btn.classList.toggle('on', btn.getAttribute('data-tag-filter') === filter);
         });
-        var samples = ((tags.samples || {})[filter]) || [];
+        var all = ((tags.by_tag || tags.samples || {})[filter]) || [];
+        var pageSize = this.tagPageSize || 40;
+        var totalPages = Math.max(1, Math.ceil(all.length / pageSize));
+        if (this.tagPage > totalPages) this.tagPage = totalPages;
+        if (this.tagPage < 1) this.tagPage = 1;
+        var start = (this.tagPage - 1) * pageSize;
+        var pageRows = all.slice(start, start + pageSize);
         var list = document.getElementById('anTagSamples');
         if (list) {
-          list.innerHTML = samples.map(function (r) {
+          var rowsHtml = pageRows.map(function (r) {
             var name = r.nickname || r.username || r.user_id;
             var av = r.avatar_url || 'https://cdn.discordapp.com/embed/avatars/0.png';
             return '<a href="/user/' + r.user_id + '"><img class="avatar av-24" src="' + av + '" alt=""><span class="truncate" style="flex:1">' + name + '</span><span class="tag-pill ' + (pill[filter] || '') + '">' + (r.active_months || 0) + ' mo</span></a>';
           }).join('') || '<div class="empty">—</div>';
+          var pager = '';
+          if (all.length > pageSize) {
+            pager = '<div class="pager" style="margin-top:10px">' +
+              '<button type="button" class="btn btn-ghost" data-tag-page="prev" ' + (this.tagPage <= 1 ? 'disabled' : '') + '>‹</button>' +
+              '<span class="faint mono" style="padding:0 10px">' + this.tagPage + ' / ' + totalPages + ' · ' + all.length + '</span>' +
+              '<button type="button" class="btn btn-ghost" data-tag-page="next" ' + (this.tagPage >= totalPages ? 'disabled' : '') + '>›</button></div>';
+          }
+          list.innerHTML = rowsHtml + pager;
         }
         var series = (this.data && this.data.activity_tags_monthly) || [];
         var self = this;
@@ -198,6 +225,8 @@
           if (self.charts.anTagsMonth) self.charts.anTagsMonth.destroy();
           var dark = document.documentElement.getAttribute('data-theme') === 'dark';
           var base = baseOpts(dark);
+          // denser ticks when many months
+          base.scales.x.ticks.maxTicksLimit = Math.min(24, Math.max(6, Math.floor(series.length / 2) || 6));
           self.charts.anTagsMonth = new Chart(el, {
             type: 'bar',
             data: {

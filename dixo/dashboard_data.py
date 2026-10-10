@@ -483,9 +483,10 @@ def classify_member_activity(active_months, first_ym, last_ym, as_of_ym):
 
 
 def member_activity_tags(summ, as_of=None, sample_per_tag=12):
-    """Tag every member with monthly activity pattern; return summary + samples.
+    """Tag every member with monthly activity pattern; return summary + full by_tag lists.
 
     as_of: YYYY-MM-DD or YYYY-MM; defaults to max(user_day.day).
+    samples: first sample_per_tag per tier (compat); by_tag: ALL members per tier.
     """
     row = summ.execute("SELECT MAX(day) FROM user_day").fetchone()
     max_day = (row[0] if row else None) or as_of
@@ -512,6 +513,7 @@ def member_activity_tags(summ, as_of=None, sample_per_tag=12):
 
     counts = collections.Counter()
     samples = {TAG_ALWAYS: [], TAG_FADED: [], TAG_RARE: [], TAG_RETURNED: [], TAG_NEW: []}
+    by_tag = {TAG_ALWAYS: [], TAG_FADED: [], TAG_RARE: [], TAG_RETURNED: [], TAG_NEW: []}
     for uid, months in by_user.items():
         fl = first_last.get(uid)
         first_ym = (fl[0] if fl and fl[0] else min(months))
@@ -522,10 +524,15 @@ def member_activity_tags(summ, as_of=None, sample_per_tag=12):
         counts[tag] += 1
         rec = {"user_id": uid, "tag": tag, "first_month": first_ym, "last_month": last_ym,
                "active_months": len(months), "months_span": len(_month_range(first_ym, as_of_ym))}
+        by_tag[tag].append(rec)
         if len(samples[tag]) < sample_per_tag:
             samples[tag].append(rec)
 
     order = [TAG_ALWAYS, TAG_RETURNED, TAG_FADED, TAG_RARE, TAG_NEW]
+    # Sort each tier: most active months first
+    for k in order:
+        by_tag[k].sort(key=lambda r: (-r.get("active_months", 0), r.get("user_id") or ""))
+        samples[k] = by_tag[k][:sample_per_tag]
     return {
         "as_of": as_of_ym,
         "counts": {k: counts.get(k, 0) for k in order},
@@ -537,22 +544,31 @@ def member_activity_tags(summ, as_of=None, sample_per_tag=12):
             TAG_NEW: {"zh": "近两月新活跃", "en": "New (≤2 months)"},
         },
         "samples": samples,
+        "by_tag": by_tag,
         "total_tagged": sum(counts.values()),
     }
 
 
 def activity_tag_monthly_series(summ, since=None, until=None):
-    """For each month, count of members whose *current* tag (as of that month) is each tier.
+    """For each month in range, count of members by tier as-of that month-end.
 
-    Expensive if naive; we sample month ends from msg_hour range and reclassify lightly
-    using only months ≤ that point (reuse by_user precompute).
+    Month axis = every YYYY-MM with any user_day (or msg_hour) activity in [since, until].
+    No artificial month cap — full selected range.
     """
     days = _filter_days(summ, since, until)
-    if not days:
+    month_ends = sorted({d[:7] for d, _ in days}) if days else []
+    if not month_ends:
+        # Fall back to user_day span so chart still fills when msg_hour empty
+        q = "SELECT DISTINCT substr(day,1,7) FROM user_day WHERE 1=1"
+        args = []
+        if since:
+            q += " AND day>=?"; args.append(since)
+        if until:
+            q += " AND day<=?"; args.append(until)
+        q += " ORDER BY 1"
+        month_ends = [r[0] for r in summ.execute(q, args) if r[0]]
+    if not month_ends:
         return []
-    month_ends = sorted({d[:7] for d, _ in days})
-    if len(month_ends) > 36:
-        month_ends = month_ends[-36:]
     # Preload all user months once
     by_user = collections.defaultdict(set)
     for uid, day in summ.execute("SELECT user_id, day FROM user_day"):
@@ -632,5 +648,5 @@ def _analytics_bundle(summ, since=None, until=None):
         "heatmap": heatmap(summ),
         "word_cloud": word_cloud(summ, 40),
         "activity_tags": tags,
-        "activity_tags_monthly": activity_tag_monthly_series(summ, since, until),
+        "activity_tags_monthly": activity_tag_monthly_series(summ, None, None),  # full history; trend presets do not clip this
     }
