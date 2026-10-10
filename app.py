@@ -2,7 +2,6 @@ import os
 import re
 import json
 import math
-import pickle
 import sqlite3
 import collections
 import sys
@@ -46,6 +45,11 @@ from shared.sqlite_utils import add_columns, connect_sqlite, is_missing_table_er
 from shared.task_timing import calculate_task_timing
 from shared.timeutil import parse_utc_datetime, to_local_datetime, utc_now_iso
 from shared.cloud_db import cloud_enabled, remote_exists, remote_file_stat
+from dixo import textutil as dixo_textutil
+from dixo import visitors as dixo_visitors
+from types import SimpleNamespace
+from dixo.api import create_ai_api, create_dashboard_api
+from dixo.engines import ProfileEngine as DixoProfileEngine, SummaryEngine
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _startup_problems = []
@@ -368,7 +372,7 @@ def get_db():
 
 @app.teardown_appcontext
 def close_connections(exception=None):
-    for name in ("portal_db", "analytics_db"):
+    for name in ("portal_db", "analytics_db", "visitors_db"):
         conn = getattr(g, name, None)
         if conn is not None:
             conn.close()
@@ -693,77 +697,17 @@ def raw_datetime_filter(value, format="%Y-%m-%d %H:%M"):
 
 
 def is_pure_chinese(word):
-    return bool(word) and re.fullmatch(r"[\u4e00-\u9fa5]+", str(word)) is not None
+    return bool(re.fullmatch(r"[\u4e00-\u9fff]+", word or ""))
 
 
-# 英文停用词：过滤后剩余的都是有实义的讨论词汇
-_EN_STOP_WORDS = set(
-    """the a an and or but if then else for to of in on at by with from as is are was were be been being
-    it its it's this that these those i you he she they we me him her them my your his their our
-    not no yes so do does did done doing have has had having will would can could should shall may might must
-    what which who whom when where why how all any both each few more most other some such only own same than too very
-    just about into over under again further once here there out up down off why how
-    don't doesn't didn't won't wouldn't can't couldn't shouldn't isn't aren't wasn't weren't i'm you're we're they're
-    i've you've we've they've i'll you'll he'll she'll we'll they'll i'd you'd he'd she'd we'd they'd
-    got get getting gonna wanna yeah yep nope hey hi hello ok okay u ur ur's like well really even also still way
-    one two thing things something anything nothing everything someone anyone everyone time now new make made making
-    go going went come coming took take taken see seen saw know known knew think thought say said let lets us am
-    because sure thanks thank good great nice lol lmao haha hmm btw fyi""".split()
-)
-
-# 技术/品牌/链接类停用词：这些词来自链接碎片或日常软件名，没有讨论统计价值。
-_TECH_STOP_WORDS = set(
-    """discord douyin claude api http https com cn net org www app appid pro bot token server client
-    youtube youtu bilibili b23 tiktok telegram twitter xiaohongshu reddit github gitlab google baidu bing
-    openai chatgpt gemini deepseek grok anthropic midjourney steam spotify qq wechat weixin alipay taobao
-    png jpg jpeg gif webp mp4 mp3 pdf zip rar exe apk iso json xml html css sql js py lua sh
-    windows android ios linux macos iphone cf cloudflare cdn url uri dns ip tcp udp http2
-    version update download link channel invite emoji sticker ban mute kick ping fps cpu gpu
-    xiaoku shunfei""".split()
-)
-
-# 可扩展排除词：项目根目录 wordcloud_stopwords.txt，每行一个词，# 开头为注释。
-# 拼音昵称、临时热词等个性化内容加在这里即可，中英文通用。
-_EXTRA_STOPWORDS_PATH = os.path.join(BASE_DIR, "wordcloud_stopwords.txt")
-
-# 链接与裸域名：分词前整段剔除，从根源上消灭 https/com/app 等链接碎片
-_URL_NOISE_RE = re.compile(
-    r"(https?://\S+|www\.\S+|\b[a-z0-9][a-z0-9-]*(?:\.[a-z0-9-]+)+\b\S*)",
-    re.IGNORECASE,
-)
-
-
-def _load_extra_stopwords():
-    try:
-        with open(_EXTRA_STOPWORDS_PATH, "r", encoding="utf-8") as fh:
-            return {line.strip().lower() for line in fh if line.strip() and not line.startswith("#")}
-    except OSError:
-        return set()
-
-
+# 词云分词/过滤统一走 dixo.textutil（jieba + 中英停用词 + URL/提及/表情/代码/数字剥离）。
+# 下面两个名字保留给 /report 等旧调用点。
 def get_word_cloud_counter(text_list):
-    text = " ".join(str(t) for t in text_list if t)
-    text = text[:5000000]
-    # 分词前先剥离链接与裸域名（https://...、v.douyin.com/xxx 等），
-    # 否则 https/com/app 这类链接碎片会占据词云前排。
-    text = _URL_NOISE_RE.sub(" ", text)
-    extra = _load_extra_stopwords()
-    stop_words = set("什么 这个 那个 怎么 可以 因为 所以 但是 就是 这就 感觉 时候 现在 还是 没有 一样 知道 觉得 出来 其实 这种 那样 一下 然后 虽然 不是 还有 这里 那里 今天 明天 真的 可能 图片 表情 回复 一个 自己 只是 非常 不能 不要 需要 如果 以及 我们 你们 他们 看到 不过 确实 已经 大家 为什么 不会 这样 这么 那么 那些 是不是 有没有".split()) | extra
-    en_stop = _EN_STOP_WORDS | _TECH_STOP_WORDS | extra
-    # 中文按整段提取；英文按单词切分并归一为小写，两路合并计数
-    words = re.findall(r"[\u4e00-\u9fa5]{2,}", text)
-    en_words = (w.lower() for w in re.findall(r"[a-zA-Z][a-zA-Z'-]*", text))
-    counter = collections.Counter(w for w in words if w not in stop_words)
-    counter.update(w for w in en_words if w not in en_stop)
-    return counter
+    return dixo_textutil.count_words(text_list)
 
 
 def format_word_cloud(counter, limit=None):
-    items = [(k, v) for k, v in counter.items() if is_pure_chinese(k) or re.fullmatch(r"[a-z][a-z'-]{2,}", k)]
-    items.sort(key=lambda x: x[1], reverse=True)
-    if limit:
-        items = items[:limit]
-    return [{"text": k, "weight": v} for k, v in items]
+    return dixo_textutil.format_word_cloud(counter, limit)
 
 
 def process_messages(conn, rows):
@@ -786,475 +730,46 @@ def process_messages(conn, rows):
     return rows
 
 
-class DataEngine:
+
+class _MergeIndex:
+    """user_merges 映射（小表），按服务器内存缓存 30 秒。"""
+
     def __init__(self):
-        self.cache = {}
-        # 下载器会持续写入数据库。首页数据允许短暂使用上一份快照，避免每条新消息
-        # 都让 Activity 请求同步重建词云、榜单和趋势数据。
-        self._refresh_lock = threading.Lock()
-        self._refreshing = set()
-        self._last_refresh_started = {}
-        self._refresh_interval = 10.0
-
-    def _cache_file(self, sid):
-        return os.path.join(CACHE_DIR, f"{sid}.pkl")
-
-    def _load_cache(self, sid):
-        if sid in self.cache:
-            return self.cache[sid]
-        path = self._cache_file(sid)
-        try:
-            with open(path, "rb") as f:
-                value = pickle.load(f)
-                self.cache[sid] = value
-                return value
-        except FileNotFoundError:
-            app.logger.debug("首页缓存不存在 sid=%s path=%s", sid, path)
-        except (OSError, EOFError, pickle.UnpicklingError, TypeError, ValueError) as exc:
-            app.logger.warning("首页缓存读取失败 sid=%s path=%s error=%s", sid, path, exc)
-        value = {"last_msg_count": -1, "global_word_counter": collections.Counter(), "homepage": {}, "merges": {}}
-        self.cache[sid] = value
-        return value
-
-    def _save_cache(self, sid):
-        path = self._cache_file(sid)
-        tmp = path + ".tmp"
-        with open(tmp, "wb") as f:
-            pickle.dump(self.cache[sid], f)
-        os.replace(tmp, path)
-
-    def _refresh(self, sid):
-        """Rebuild one homepage snapshot outside the request thread.
-
-        大库（4.6M+ 消息）冷启动时单次 SELECT content + Python 端分词
-        会跑几分钟。改为增量分批处理，每批 10 万条，多次 commit 缓存，
-        后续进程若被中断也能从已保存的快照继续（不会阻塞访问）。
-        """
-        try:
-            cache = self._load_cache(sid)
-            db_path = server_db_path(sid)
-            conn = db_connect(db_path)
-            cur = conn.cursor()
-            count = cur.execute("SELECT MAX(rowid) FROM messages").fetchone()[0]
-            db_mtime = db_mtime_seconds(db_path)
-            # 已经统计过的消息数（增量分批）
-            processed = cache.get("global_word_processed", 0)
-            counter = cache.get("global_word_counter") or collections.Counter()
-            BATCH = 100_000
-            for off in range(processed, count, BATCH):
-                texts = [
-                    row[0] for row in cur.execute(
-                        "SELECT content FROM messages WHERE content IS NOT NULL AND content != '' "
-                        "ORDER BY timestamp DESC LIMIT ? OFFSET ?",
-                        (BATCH, off),
-                    )
-                ]
-                counter.update(get_word_cloud_counter(texts))
-                processed += len(texts)
-                cache["global_word_counter"] = counter
-                cache["global_word_processed"] = processed
-                self._save_cache(sid)
-            cache["homepage"] = self._homepage(cur, counter)
-            cache["last_msg_count"] = count
-            cache["db_mtime"] = db_mtime
-            cache["homepage_version"] = 5
-            cache["merges"] = {
-                str(r["target_id"]): str(r["parent_id"])
-                for r in cur.execute("SELECT target_id,parent_id FROM user_merges")
-            }
-            conn.close()
-            self._save_cache(sid)
-        except Exception:
-            app.logger.exception("刷新首页缓存失败: %s", sid)
-        finally:
-            with self._refresh_lock:
-                self._refreshing.discard(str(sid))
-
-    def _schedule_refresh(self, sid):
-        sid = str(sid)
-        with self._refresh_lock:
-            now = time.monotonic()
-            if sid in self._refreshing or now - self._last_refresh_started.get(sid, 0) < self._refresh_interval:
-                return
-            self._refreshing.add(sid)
-            self._last_refresh_started[sid] = now
-        # 给当前请求留出完成响应的时间，避免后台词云重算立刻和首屏争抢
-        # Python CPU/SQLite 资源。快照仍会在很短时间内自动更新。
-        thread = threading.Timer(0.25, self._refresh, args=(sid,))
-        thread.name = f"homepage-cache-{sid}"
-        thread.daemon = True
-        thread.start()
-
-    def load_or_compute(self, sid):
-        cache = self._load_cache(sid)
-        db_path = server_db_path(sid)
-        conn = db_connect(db_path)
-        cur = conn.cursor()
-        # 用 MAX(rowid) 代替 count(*) —— 460 万行全表扫秒级 vs 10 秒。
-        # count(*) 必须全表扫描；rowid 是 btree 索引，最后一行秒级。
-        count = cur.execute("SELECT MAX(rowid) FROM messages").fetchone()[0]
-        db_mtime = db_mtime_seconds(db_path)
-        # Rebuild once after changing the homepage ranking schema so stale cache
-        # data cannot keep the old (possibly incomplete) lists on screen. When a
-        # valid snapshot already exists, refresh it in the background: this is
-        # important while the downloader is importing messages continuously.
-        # 模板会直接读 top_users / top_threads / server_word_cloud / chart_hourly，
-        # 所以只有带这些 key 的快照才算可用。早期版本写下的占位快照缺这些 key
-        # （key 还是 word_cloud_data/active_members 那套），必须当作不可用替换掉，
-        # 否则冷缓存首次访问会 UndefinedError 500。
-        homepage = cache.get("homepage")
-        usable = (isinstance(homepage, dict)
-                  and "top_users" in homepage and "top_threads" in homepage)
-        cache_needs_refresh = (
-            count != cache.get("last_msg_count")
-            or db_mtime != cache.get("db_mtime")
-            or cache.get("homepage_version") != 5
-            or not usable
-        )
-        if not usable:
-            # 冷启动 / 首次访问 / 残缺快照：先给前端一个完整形状的空快照占位，
-            # 词云和榜单会随后台重建进度更新（避免首页同步等 4.6M 消息分词）。
-            cache["homepage"] = {
-                "total_msgs": count, "total_threads": 0, "total_users": 0,
-                "chart_daily": [], "chart_hourly": [],
-                "server_word_cloud": [], "server_word_rank": [],
-                "top_users": [], "top_threads": [], "top_hot_msgs": [],
-            }
-            cache["last_msg_count"] = count
-            cache["homepage_version"] = 5
-            self._save_cache(sid)
-            self._schedule_refresh(sid)
-        elif cache_needs_refresh:
-            self._schedule_refresh(sid)
-        conn.close()
-        return cache["homepage"]
-
-    def _homepage(self, cur, counter):
-        data = {}
-        data["total_msgs"] = cur.execute("SELECT count(*) FROM messages").fetchone()[0]
-        data["total_threads"] = cur.execute("SELECT count(*) FROM threads").fetchone()[0]
-        data["total_users"] = cur.execute("SELECT count(*) FROM users").fetchone()[0]
-        data["chart_daily"] = [dict(r) for r in cur.execute("SELECT substr(timestamp,1,10) day,count(*) c FROM messages GROUP BY day ORDER BY day")]
-        hourly = {r["hour"]: r["c"] for r in cur.execute("SELECT strftime('%H',timestamp) hour,count(*) c FROM messages GROUP BY hour")}
-        hours = [0] * 24
-        for h, c in hourly.items():
-            if h is not None:
-                hours[(int(h) + 8) % 24] += c
-        data["chart_hourly"] = [{"hour": f"{i:02d}:00", "c": v} for i, v in enumerate(hours)]
-        data["server_word_cloud"] = format_word_cloud(counter, 60)
-        data["server_word_rank"] = data["server_word_cloud"][:15]
-        # Build the complete leaderboard while the snapshot is refreshed in the
-        # background. The request path must never repeat the expensive per-user
-        # reaction queries for the modal's first 50 entries.
-        leaderboard = []
-        rows = cur.execute("SELECT u.*,count(m.message_id) msg_count FROM users u JOIN messages m ON u.user_id=m.author_id GROUP BY u.user_id ORDER BY msg_count DESC LIMIT 50").fetchall()
-        leaderboard_ids = [row["user_id"] for row in rows]
-        emoji_map = collections.defaultdict(list)
-        if leaderboard_ids:
-            placeholders = ",".join("?" for _ in leaderboard_ids)
-            emoji_rows = cur.execute(
-                f"SELECT m.author_id,r.emoji_url,r.emoji_name,count(*) c FROM reactions r "
-                f"JOIN messages m ON r.message_id=m.message_id WHERE m.author_id IN ({placeholders}) "
-                f"GROUP BY m.author_id,r.emoji_name ORDER BY m.author_id,c DESC",
-                leaderboard_ids,
-            ).fetchall()
-            for emoji in emoji_rows:
-                if len(emoji_map[emoji["author_id"]]) < 3:
-                    emoji_map[emoji["author_id"]].append({
-                        "emoji_url": emoji["emoji_url"],
-                        "emoji_name": emoji["emoji_name"],
-                        "c": emoji["c"],
-                    })
-        for u in rows:
-            d = dict(u)
-            d["top_emojis"] = emoji_map.get(u["user_id"], [])
-            leaderboard.append(d)
-        data["full_leaderboard"] = leaderboard
-        data["top_users"] = leaderboard[:10]
-        top_threads = []
-        thread_rows = cur.execute("SELECT thread_id,count(*) c FROM messages GROUP BY thread_id ORDER BY c DESC,thread_id LIMIT 10").fetchall()
-        for rank, r in enumerate(thread_rows, 1):
-            t = cur.execute("SELECT * FROM threads WHERE thread_id=?", (r["thread_id"],)).fetchone()
-            if not t:
-                continue
-            d = dict(t)
-            d["msg_count"] = r["c"]
-            d["rank"] = rank
-            first = cur.execute("SELECT message_id,content,timestamp FROM messages WHERE thread_id=? ORDER BY timestamp,message_id LIMIT 1", (d["thread_id"],)).fetchone()
-            d["first_content"] = first["content"] if first else ""
-            d["op_msg_id"] = first["message_id"] if first else ""
-            d["created_at"] = first["timestamp"] if first and first["timestamp"] else d.get("exported_at")
-            op = cur.execute("SELECT u.username,u.nickname,u.avatar_url FROM users u JOIN messages m ON u.user_id=m.author_id WHERE m.thread_id=? ORDER BY m.timestamp LIMIT 1", (d["thread_id"],)).fetchone()
-            d["op_user"] = dict(op) if op else {"username": "Unknown", "nickname": "", "avatar_url": ""}
-            top_threads.append(d)
-        data["top_threads"] = top_threads
-        hot = []
-        hot_rows = cur.execute("SELECT message_id,count(*) c FROM reactions GROUP BY message_id ORDER BY c DESC,message_id LIMIT 10").fetchall()
-        for rank, r in enumerate(hot_rows, 1):
-            m = cur.execute("SELECT * FROM messages WHERE message_id=?", (r["message_id"],)).fetchone()
-            if not m:
-                continue
-            d = dict(m)
-            d["rank"] = rank
-            auth = cur.execute("SELECT username,nickname,avatar_url FROM users WHERE user_id=?", (d["author_id"],)).fetchone()
-            d["author"] = dict(auth) if auth else {"username": "Unknown", "nickname": "", "avatar_url": ""}
-            tn = cur.execute("SELECT name FROM threads WHERE thread_id=?", (d["thread_id"],)).fetchone()
-            d["thread_name"] = tn["name"] if tn else "Unknown"
-            d["detailed_reactions"] = [dict(x) for x in cur.execute("SELECT emoji_url,emoji_name,count(*) count FROM reactions WHERE message_id=? GROUP BY emoji_name ORDER BY count DESC LIMIT 3", (d["message_id"],))]
-            hot.append(d)
-        data["top_hot_msgs"] = hot
-        return data
+        self._cache = {}
 
     def get_merged_ids(self, sid, uid):
-        cache = self._load_cache(sid)
-        if not cache.get("merges"):
+        sid = str(sid)
+        hit = self._cache.get(sid)
+        if not hit or time.monotonic() - hit[0] > 30:
             conn = db_connect(server_db_path(sid))
-            cache["merges"] = {str(r["target_id"]): str(r["parent_id"]) for r in conn.execute("SELECT target_id,parent_id FROM user_merges")}
-            conn.close()
-        children = [k for k, v in cache["merges"].items() if v == str(uid)]
+            try:
+                merges = {str(r["target_id"]): str(r["parent_id"]) for r in conn.execute("SELECT target_id,parent_id FROM user_merges")}
+            finally:
+                conn.close()
+            hit = (time.monotonic(), merges)
+            self._cache[sid] = hit
+        children = sorted(k for k, v in hit[1].items() if v == str(uid))
         return [str(uid)] + children
 
-
-data_engine = DataEngine()
-
-
-class ProfileEngine:
-    """Cached, stale-while-refresh profile aggregates.
-
-    A profile contains several statistics over the whole analytics database.
-    Those statistics do not change during a page navigation, so calculating
-    them in every request is particularly expensive for large servers.  Keep
-    them in a small per-user snapshot, just like the homepage snapshot, while
-    leaving the current page of messages live.
-    """
-
-    # v2: 词云新增链接剥离与技术停用词过滤，强制重算用户缓存
-    VERSION = 2
-
-    def __init__(self):
-        self._memory = {}
-        self._refresh_lock = threading.Lock()
-        self._refreshing = set()
-        self._last_refresh_started = {}
-        self._refresh_interval = 10.0
-
-    def _cache_file(self, sid, uid):
-        return os.path.join(CACHE_DIR, f"profile-{sid}-{uid}.pkl")
-
-    def _load(self, sid, uid):
-        key = (str(sid), str(uid))
-        if key in self._memory:
-            return self._memory[key]
-        try:
-            with open(self._cache_file(*key), "rb") as f:
-                value = pickle.load(f)
-                if isinstance(value, dict):
-                    self._memory[key] = value
-                    return value
-        except FileNotFoundError:
-            pass
-        except (OSError, EOFError, pickle.UnpicklingError, TypeError, ValueError) as exc:
-            app.logger.warning("个人主页缓存读取失败 sid=%s uid=%s error=%s", sid, uid, exc)
-        value = {}
-        self._memory[key] = value
-        return value
-
-    def _save(self, sid, uid):
-        key = (str(sid), str(uid))
-        path = self._cache_file(*key)
-        temp = path + ".tmp"
-        try:
-            with open(temp, "wb") as f:
-                pickle.dump(self._memory[key], f)
-            os.replace(temp, path)
-        finally:
-            if os.path.exists(temp):
-                try:
-                    os.remove(temp)
-                except OSError:
-                    pass
-
-    @staticmethod
-    def _db_signature(path):
-        """Use the main DB and WAL metadata without scanning a million rows."""
-        return tuple(
-            (candidate,) + db_file_signature(candidate)
-            for candidate in (path, path + "-wal")
-        )
-
-    def _build(self, sid, uid):
-        path = server_db_path(sid)
-        conn = db_connect(path)
-        try:
-            merged_ids = data_engine.get_merged_ids(sid, uid)
-            placeholders = ",".join("?" for _ in merged_ids)
-            args = tuple(merged_ids)
-            data = {"merged_ids": merged_ids}
-            data["msg_count"] = conn.execute(
-                f"SELECT count(*) FROM messages WHERE author_id IN ({placeholders})", args
-            ).fetchone()[0]
-            data["reaction_received_count"] = conn.execute(
-                f"SELECT count(*) FROM reactions r JOIN messages m ON r.message_id=m.message_id "
-                f"WHERE m.author_id IN ({placeholders})", args
-            ).fetchone()[0]
-            data["thread_count"] = conn.execute(
-                f"SELECT count(*) FROM (SELECT thread_id FROM messages "
-                f"WHERE author_id IN ({placeholders}) GROUP BY thread_id)", args
-            ).fetchone()[0]
-            data["top_emojis_given"] = [dict(row) for row in conn.execute(
-                f"SELECT emoji_url,emoji_name,count(*) c FROM reactions "
-                f"WHERE user_id IN ({placeholders}) GROUP BY emoji_name ORDER BY c DESC LIMIT 3", args
-            )]
-            data["top_emojis_received"] = [dict(row) for row in conn.execute(
-                f"SELECT r.emoji_url,r.emoji_name,count(*) c FROM reactions r "
-                f"JOIN messages m ON r.message_id=m.message_id "
-                f"WHERE m.author_id IN ({placeholders}) GROUP BY r.emoji_name ORDER BY c DESC LIMIT 3", args
-            )]
-
-            data["interactions_incoming"] = [dict(row) for row in conn.execute(
-                f"SELECT u.user_id,u.nickname,u.username,u.avatar_url,count(*) score "
-                f"FROM reactions r JOIN messages m ON r.message_id=m.message_id "
-                f"JOIN users u ON r.user_id=u.user_id "
-                f"WHERE m.author_id IN ({placeholders}) AND r.user_id NOT IN ({placeholders}) "
-                f"GROUP BY u.user_id ORDER BY score DESC LIMIT 5", args + args
-            )]
-            data["interactions_outgoing"] = [dict(row) for row in conn.execute(
-                f"SELECT u.user_id,u.nickname,u.username,u.avatar_url,count(*) score FROM ("
-                f"SELECT mentioned_user_id target_id FROM mentions WHERE author_id IN ({placeholders}) "
-                f"UNION ALL SELECT m.author_id target_id FROM reactions r "
-                f"JOIN messages m ON r.message_id=m.message_id WHERE r.user_id IN ({placeholders})"
-                f") raw JOIN users u ON raw.target_id=u.user_id "
-                f"WHERE u.user_id NOT IN ({placeholders}) GROUP BY u.user_id ORDER BY score DESC LIMIT 5",
-                args + args + args,
-            )]
-            data["chart_daily"] = [dict(row) for row in conn.execute(
-                f"SELECT substr(timestamp,1,10) day,count(*) c FROM messages "
-                f"WHERE author_id IN ({placeholders}) GROUP BY day ORDER BY day", args
-            )]
-            hourly = {row["hour"]: row["c"] for row in conn.execute(
-                f"SELECT strftime('%H',timestamp) hour,count(*) c FROM messages "
-                f"WHERE author_id IN ({placeholders}) GROUP BY hour", args
-            )}
-            hours = [0] * 24
-            for hour, count in hourly.items():
-                if hour is not None:
-                    hours[(int(hour) + 8) % 24] += count
-            data["chart_hourly"] = [{"hour": f"{i:02d}:00", "c": value} for i, value in enumerate(hours)]
-            texts = [row[0] for row in conn.execute(
-                f"SELECT content FROM messages WHERE author_id IN ({placeholders}) "
-                f"ORDER BY timestamp DESC LIMIT 2000", args
-            )]
-            data["word_cloud_data"] = format_word_cloud(get_word_cloud_counter(texts), 50)
-            data["signature"] = self._db_signature(path)
-            data["version"] = self.VERSION
-            data["complete"] = True
-            return data
-        finally:
-            conn.close()
-
-    def _build_fast(self, sid, uid):
-        """Build enough data for the first paint without large joins.
-
-        The expensive interaction and received-reaction aggregates are filled
-        by the background refresh. A profile should be usable immediately,
-        especially when a user has tens of thousands of messages.
-        """
-        path = server_db_path(sid)
-        conn = db_connect(path)
-        try:
-            merged_ids = data_engine.get_merged_ids(sid, uid)
-            placeholders = ",".join("?" for _ in merged_ids)
-            args = tuple(merged_ids)
-            texts = [row[0] for row in conn.execute(
-                f"SELECT content FROM messages WHERE author_id IN ({placeholders}) "
-                f"ORDER BY timestamp DESC LIMIT 2000", args
-            )]
-            data = {
-                "merged_ids": merged_ids,
-                "msg_count": conn.execute(
-                    f"SELECT count(*) FROM messages WHERE author_id IN ({placeholders})", args
-                ).fetchone()[0],
-                "reaction_received_count": 0,
-                "thread_count": conn.execute(
-                    f"SELECT count(*) FROM (SELECT thread_id FROM messages "
-                    f"WHERE author_id IN ({placeholders}) GROUP BY thread_id)", args
-                ).fetchone()[0],
-                "top_emojis_given": [dict(row) for row in conn.execute(
-                    f"SELECT emoji_url,emoji_name,count(*) c FROM reactions "
-                    f"WHERE user_id IN ({placeholders}) GROUP BY emoji_name ORDER BY c DESC LIMIT 3", args
-                )],
-                "top_emojis_received": [],
-                "interactions_incoming": [],
-                "interactions_outgoing": [],
-                "chart_daily": [dict(row) for row in conn.execute(
-                    f"SELECT substr(timestamp,1,10) day,count(*) c FROM messages "
-                    f"WHERE author_id IN ({placeholders}) GROUP BY day ORDER BY day", args
-                )],
-                "word_cloud_data": format_word_cloud(get_word_cloud_counter(texts), 50),
-                "signature": self._db_signature(path),
-                "version": self.VERSION,
-                "complete": False,
-            }
-            hourly = {row["hour"]: row["c"] for row in conn.execute(
-                f"SELECT strftime('%H',timestamp) hour,count(*) c FROM messages "
-                f"WHERE author_id IN ({placeholders}) GROUP BY hour", args
-            )}
-            hours = [0] * 24
-            for hour, count in hourly.items():
-                if hour is not None:
-                    hours[(int(hour) + 8) % 24] += count
-            data["chart_hourly"] = [{"hour": f"{i:02d}:00", "c": value} for i, value in enumerate(hours)]
-            return data
-        finally:
-            conn.close()
-
-    def _refresh(self, sid, uid):
-        key = (str(sid), str(uid))
-        try:
-            self._memory[key] = self._build(*key)
-            self._save(*key)
-        except Exception:
-            app.logger.exception("刷新个人主页缓存失败 sid=%s uid=%s", sid, uid)
-        finally:
-            with self._refresh_lock:
-                self._refreshing.discard(key)
-
-    def _schedule_refresh(self, sid, uid):
-        key = (str(sid), str(uid))
-        with self._refresh_lock:
-            now = time.monotonic()
-            if key in self._refreshing or now - self._last_refresh_started.get(key, 0) < self._refresh_interval:
-                return
-            self._refreshing.add(key)
-            self._last_refresh_started[key] = now
-        # Let the initial profile response release its SQLite read before the
-        # full aggregate refresh starts competing for CPU and disk bandwidth.
-        thread = threading.Timer(2.0, self._refresh, args=key)
-        thread.name = f"profile-cache-{sid}-{uid}"
-        thread.daemon = True
-        thread.start()
-
-    def load_or_compute(self, sid, uid):
-        value = self._load(sid, uid)
-        stale = (
-            value.get("version") != self.VERSION
-            or not value.get("signature")
-            or value.get("signature") != self._db_signature(server_db_path(sid))
-            or not value.get("merged_ids")
-        )
-        if stale and value.get("msg_count") is not None:
-            self._schedule_refresh(sid, uid)
-        elif stale:
-            # The first visit gets a lightweight snapshot immediately. The
-            # full interaction/word-cloud joins run after the response.
-            self._memory[(str(sid), str(uid))] = self._build_fast(str(sid), str(uid))
-            self._save(sid, uid)
-            self._schedule_refresh(sid, uid)
-            value = self._load(sid, uid)
-        return value
+    def invalidate(self, sid=None):
+        if sid is None:
+            self._cache.clear()
+        else:
+            self._cache.pop(str(sid), None)
 
 
-profile_engine = ProfileEngine()
+# data_engine 名字保留：/report 等旧代码通过它取合并账号。
+data_engine = _MergeIndex()
+def _after_summary_refresh(sid):
+    # AI API 启用时顺带推进全文索引（search.db，增量）。
+    if os.getenv("AI_API_TOKENS", "").strip():
+        from dixo import search as dixo_search
+        res = dixo_search.refresh(server_db_path(sid), budget_seconds=20)
+        app.logger.info("search.refresh sid=%s %s", sid, res)
+
+
+summary_engine = SummaryEngine(server_db_path, db_connect, cloud_enabled, app.logger, after_refresh=_after_summary_refresh)
+profile_engine = DixoProfileEngine(summary_engine, app.logger)
 
 
 def admin_level(user_id):
@@ -2137,6 +1652,21 @@ def _no_cache_html(response):
     return response
 
 
+def get_visitors_db():
+    """访客库（data/servers/<gid>/visitors.db），与 5GB 主库分离，避免每次访问改主库 mtime（K28）。"""
+    sid = current_server_id()
+    if not hasattr(g, "visitors_db"):
+        g.visitors_db = dixo_visitors.connect(server_db_path(sid), readonly=cloud_enabled())
+    return g.visitors_db
+
+
+def _safe_visitor_write(fn, *args):
+    try:
+        fn(get_visitors_db(), *args)
+    except sqlite3.Error as exc:  # 只读（云端模式）或锁冲突时不影响页面
+        app.logger.warning("访客记录写入失败 error=%s", exc)
+
+
 @app.route("/")
 def index():
     if "user" not in session:
@@ -2163,13 +1693,10 @@ def index():
     sid = current_server_id()
     conn = get_db()
     u = display_user
-    now = utc_now_iso()
-    conn.execute("INSERT INTO web_visitors(user_id,username,nickname,avatar_url,last_visit) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET username=excluded.username,nickname=excluded.nickname,avatar_url=excluded.avatar_url,last_visit=excluded.last_visit", (u["id"], u["username"], u.get("nickname") or u["username"], u.get("avatar"), now))
-    conn.commit()
-    data = data_engine.load_or_compute(sid)
-    visitors = conn.execute("SELECT * FROM web_visitors ORDER BY last_visit DESC").fetchall()
+    _safe_visitor_write(dixo_visitors.record_site_visit, u, utc_now_iso())
+    data = summary_engine.homepage(sid, conn)
+    visitors = dixo_visitors.recent_site_visitors(get_visitors_db())
     server = get_portal_db().execute("SELECT * FROM servers WHERE server_id=?", (sid,)).fetchone()
-    data = dict(data)
     full_leaderboard = data.pop("full_leaderboard", [])
     return render_template("index.html", server=server, server_id=sid, current_user=u, site_visitors=visitors, full_leaderboard=full_leaderboard, **data)
 
@@ -2178,47 +1705,12 @@ def index():
 @server_required
 def api_leaderboard():
     page = request_page()
-    offset = (page - 1) * 50
-    # Page one is already part of the homepage snapshot. This endpoint is
-    # opened from that page, so querying the same 50 users again only adds
-    # latency (and used to run one reaction query per user).
-    # Avoid even the cheap freshness check here: the homepage request just
-    # served this snapshot and the cache refresh is already stale-while-refresh.
-    snapshot = data_engine._load_cache(current_server_id()).get("homepage") or {}
-    if page != 1 or not snapshot.get("full_leaderboard"):
-        snapshot = data_engine.load_or_compute(current_server_id())
-    if page == 1 and snapshot.get("full_leaderboard"):
-        return jsonify([
-            dict(user, rank=index)
-            for index, user in enumerate(snapshot["full_leaderboard"], 1)
-        ])
-    conn = get_db()
-    rows = conn.execute(
-        "SELECT u.*,count(m.message_id) msg_count FROM users u JOIN messages m "
-        "ON u.user_id=m.author_id GROUP BY u.user_id ORDER BY msg_count DESC LIMIT 50 OFFSET ?",
-        (offset,),
-    ).fetchall()
-    ids = [row["user_id"] for row in rows]
-    emoji_map = collections.defaultdict(list)
-    # The homepage snapshot supplies emoji badges for its first page. For
-    # subsequent lazy-loaded pages, avoid another large reaction aggregation;
-    # the badges are decorative and an empty list keeps the API responsive.
-    if ids and page == 1:
-        placeholders = ",".join("?" for _ in ids)
-        emoji_rows = conn.execute(
-            f"SELECT m.author_id,r.emoji_url,r.emoji_name,count(*) c FROM reactions r "
-            f"JOIN messages m ON r.message_id=m.message_id WHERE m.author_id IN ({placeholders}) "
-            f"GROUP BY m.author_id,r.emoji_name ORDER BY m.author_id,c DESC", ids
-        ).fetchall()
-        for emoji in emoji_rows:
-            if len(emoji_map[emoji["author_id"]]) < 3:
-                emoji_map[emoji["author_id"]].append(dict(emoji))
-    users = []
-    for i, row in enumerate(rows):
-        d = dict(row)
-        d["rank"] = offset + i + 1
-        d["top_emojis"] = emoji_map.get(row["user_id"], [])
-        users.append(d)
+    from dixo import dashboard_data
+    summ = summary_engine.summary_conn(current_server_id())
+    try:
+        users = dashboard_data.leaderboard(get_db(), summ, 50, (page - 1) * 50)
+    finally:
+        summ.close()
     return jsonify(users)
 
 
@@ -2228,8 +1720,8 @@ def search():
     query = request.args.get("q", "").strip()
     conn = get_db()
     results = conn.execute("SELECT * FROM users WHERE user_id=? OR username LIKE ? OR nickname LIKE ? LIMIT 20", (query, f"%{query}%", f"%{query}%")).fetchall()
-    data = dict(data_engine.load_or_compute(current_server_id()))
-    data["full_leaderboard"] = []
+    data = summary_engine.homepage(current_server_id(), conn)
+    data.pop("full_leaderboard", None)
     return render_template("index.html", server_id=current_server_id(), current_user=session["user"], search_results=results, query=query, site_visitors=[], **data)
 
 
@@ -2247,11 +1739,9 @@ def user_profile(user_id):
         return "User Not Found", 404
     visitor = session["user"]
     if visitor["id"] != str(user_id):
-        conn.execute("INSERT INTO profile_views(target_user_id,viewer_user_id,viewer_name,viewer_avatar,timestamp) VALUES(?,?,?,?,?) ON CONFLICT(target_user_id,viewer_user_id) DO UPDATE SET timestamp=excluded.timestamp", (user_id, visitor["id"], visitor["username"], visitor["avatar"], utc_now_iso()))
-        conn.commit()
-    view_count = conn.execute("SELECT count(*) FROM profile_views WHERE target_user_id=?", (user_id,)).fetchone()[0]
-    recent_viewers = conn.execute("SELECT viewer_name,viewer_avatar,timestamp FROM profile_views WHERE target_user_id=? ORDER BY timestamp DESC LIMIT 20", (user_id,)).fetchall()
-    profile = profile_engine.load_or_compute(sid, user_id)
+        _safe_visitor_write(dixo_visitors.record_profile_view, user_id, visitor, utc_now_iso())
+    view_count, recent_viewers = dixo_visitors.profile_view_stats(get_visitors_db(), user_id)
+    profile = profile_engine.load(sid, data_engine.get_merged_ids(sid, user_id), conn, wait=0.3)
     merged_ids = profile["merged_ids"]
     ph = ",".join("?" for _ in merged_ids)
     # Time order can use the author/timestamp index and keeps the first paint
@@ -2288,16 +1778,27 @@ def user_profile(user_id):
     # returned thread.
     my_threads = []
     if active_tab == "threads":
-        thread_rows = conn.execute(
-            f"SELECT t.thread_id,t.name,m.timestamp created_at,"
-            f"(SELECT count(*) FROM messages WHERE thread_id=t.thread_id) reply_count,"
-            f"(SELECT content FROM messages WHERE thread_id=t.thread_id ORDER BY timestamp,message_id LIMIT 1) first_content,"
-            f"(SELECT message_id FROM messages WHERE thread_id=t.thread_id ORDER BY timestamp,message_id LIMIT 1) op_msg_id "
-            f"FROM threads t JOIN messages m ON t.thread_id=m.thread_id "
-            f"WHERE m.author_id IN ({ph}) AND m.timestamp=(SELECT min(timestamp) FROM messages WHERE thread_id=t.thread_id) "
-            f"ORDER BY {('reply_count DESC' if sort_by == 'hot' else 'm.timestamp DESC')} LIMIT ? OFFSET ?",
-            (*merged_ids, ITEMS_PER_PAGE, offset),
-        ).fetchall()
+        # 楼主帖列表来自 summary.thread_stats（op_author 索引），不再对每个帖子做相关子查询。
+        summ = summary_engine.summary_conn(sid)
+        try:
+            order_sql = "msg_count DESC" if sort_by == "hot" else "first_ts DESC"
+            stat_rows = summ.execute(
+                f"SELECT thread_id,msg_count,op_msg_id,first_ts FROM thread_stats WHERE op_author IN ({ph}) "
+                f"ORDER BY {order_sql} LIMIT ? OFFSET ?", (*merged_ids, ITEMS_PER_PAGE, offset)).fetchall()
+        finally:
+            summ.close()
+        tids = [r["thread_id"] for r in stat_rows]
+        names, firsts = {}, {}
+        if tids:
+            tph = ",".join("?" for _ in tids)
+            names = {str(r[0]): r[1] for r in conn.execute(f"SELECT thread_id,name FROM threads WHERE thread_id IN ({tph})", tids)}
+            oids = [r["op_msg_id"] for r in stat_rows if r["op_msg_id"]]
+            if oids:
+                oph = ",".join("?" for _ in oids)
+                firsts = {str(r[0]): r[1] for r in conn.execute(f"SELECT message_id,content FROM messages WHERE message_id IN ({oph})", oids)}
+        thread_rows = [{"thread_id": r["thread_id"], "name": names.get(str(r["thread_id"]), ""), "created_at": r["first_ts"],
+                        "reply_count": r["msg_count"], "first_content": firsts.get(str(r["op_msg_id"]), ""),
+                        "op_msg_id": r["op_msg_id"]} for r in stat_rows]
         op_message_ids = [row["op_msg_id"] for row in thread_rows]
         emoji_map = {}
         if op_message_ids:
@@ -2316,7 +1817,7 @@ def user_profile(user_id):
             d["top_emoji_count"] = emoji["c"] if emoji else 0
             my_threads.append(d)
     msg_count = profile["msg_count"]
-    thread_count = profile["thread_count"]
+    thread_count = profile.get("threads_started", profile["thread_count"])
 
     # ---- 机器人用户功能（仅本人主页显示）----
     is_self = session["user"]["id"] == user_id
@@ -2430,7 +1931,7 @@ def user_profile(user_id):
         interactions_incoming=profile["interactions_incoming"],
         interactions_outgoing=profile["interactions_outgoing"],
         chart_daily=profile["chart_daily"], chart_hourly=profile["chart_hourly"],
-        word_cloud_data=profile["word_cloud_data"],
+        word_cloud_data=profile["word_cloud_data"], profile=profile,
         is_self=is_self, my_blocks=my_blocks, my_favorites=my_favorites,
         blk_page=blk_page, total_blk_pages=total_blk_pages,
         fav_page=fav_page, total_fav_pages=total_fav_pages,
@@ -2624,7 +2125,7 @@ def admin_approve(req_id):
     req = conn.execute("SELECT * FROM claim_requests_v2 WHERE id=? AND status=0", (req_id,)).fetchone()
     if req:
         conn.execute("UPDATE claim_requests_v2 SET status=1 WHERE id=?", (req_id,))
-        conn.execute("INSERT OR REPLACE INTO user_merges(target_id,parent_id,created_at) VALUES(?,?,?)", (req["target_id"], req["requester_id"], utc_now_iso()))
+        conn.execute("INSERT OR REPLACE INTO user_merges(target_id,parent_id,created_at) VALUES(?,?,?)", (req["target_id"], req["requester_id"], utc_now_iso())); data_engine.invalidate()
         conn.commit()
     return redirect(url_for("admin_panel"))
 
@@ -2636,7 +2137,7 @@ def admin_unmerge(target_id):
     scope = _admin_server_scope()
     if isinstance(scope, tuple):
         return scope
-    conn = get_db(); conn.execute("DELETE FROM user_merges WHERE target_id=?", (target_id,)); conn.commit(); return redirect(url_for("admin_panel"))
+    conn = get_db(); conn.execute("DELETE FROM user_merges WHERE target_id=?", (target_id,)); data_engine.invalidate(); conn.commit(); return redirect(url_for("admin_panel"))
 
 
 @app.route("/admin/reset_all_claims", methods=["POST"])
@@ -2646,7 +2147,7 @@ def admin_reset_all():
     scope = _admin_server_scope()
     if isinstance(scope, tuple):
         return scope
-    conn = get_db(); conn.execute("DELETE FROM claim_requests_v2"); conn.execute("DELETE FROM user_merges"); conn.commit(); return redirect(url_for("admin_panel"))
+    conn = get_db(); conn.execute("DELETE FROM claim_requests_v2"); conn.execute("DELETE FROM user_merges"); data_engine.invalidate(); conn.commit(); return redirect(url_for("admin_panel"))
 
 
 @app.route("/admin/whitelist/add", methods=["POST"])
@@ -3299,6 +2800,27 @@ def inject_globals():
         "discord_client_id": DISCORD_CLIENT_ID,
         "csrf_token": csrf_token,
     }
+
+
+# ---- JSON API（dixo/api.py）----
+def _list_servers_for_ai():
+    conn = db_connect(PORTAL_DB)
+    try:
+        rows = conn.execute("SELECT server_id,name,icon_url FROM servers ORDER BY name").fetchall()
+    finally:
+        conn.close()
+    return [dict(r) for r in rows if server_db_exists(r["server_id"])]
+
+
+_api_ctx = SimpleNamespace(
+    server_required=server_required, get_db=get_db, current_server_id=current_server_id,
+    summary_engine=summary_engine, profile_engine=profile_engine, merged_ids=data_engine.get_merged_ids,
+    server_db_path=server_db_path, server_db_exists=server_db_exists, connect=db_connect,
+    list_servers=_list_servers_for_ai,
+    export_root=lambda gid: os.path.join(BASE_DIR, "data", "exports", str(gid), "members"),
+)
+app.register_blueprint(create_dashboard_api(_api_ctx))
+app.register_blueprint(create_ai_api(_api_ctx))
 
 
 if cloud_enabled():
