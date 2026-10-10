@@ -1,25 +1,21 @@
-"""白名单管理机器人 + 服务器成员名单同步 + Forum 帖子收藏机器人 + 黑名单拦截机器人。
+"""白名单管理机器人 + 服务器成员名单同步 + Forum 帖子收藏 + 黑名单拦截机器人。
 
-单个 Discord Bot 进程，同一个 Token，同一个 CommandTree，合并了原来多个
-独立机器人的全部功能：
+单个 Discord Bot 进程，同一个 Token，同一个 CommandTree，包含四部分功能：
 
-- 原 favorite_bot.py（收藏功能）：已合并进本文件，不再单独运行
-- 原 Blockbot.py（黑名单 / 双向拦截功能）：已合并进本文件，不再单独运行
-
-白名单 / 成员同步部分：
+白名单 / 成员同步：
 - 创建下载任务后，网站写入 member_sync_requests，机器人自动同步目标服务器成员
 - 新成员加入服务器时实时写入 portal.db
 - 成员资料变化时实时更新
 - Admin 或白名单用户可在后台或私聊执行 /members_sync server_id 手动同步
 - /whitelist_add /whitelist_remove /whitelist_list /server_access /quota /restart
 
-收藏部分（原 favorite_bot.py）：
+收藏：
 - 右键 Forum 帖子内的消息 -> Apps -> 📌 收藏帖子 / 📕 取消收藏
 - /favorites 查看我的收藏（服务器内看当前服务器，私信看全部服务器）
 - /top /top30 查看收藏排行榜
 - /help 查看收藏机器人使用说明
 
-黑名单部分（原 Blockbot.py）：
+黑名单：
 - /block /unblock 拉黑 / 解除用户
 - 右键消息 -> Apps -> 拉黑此发言者 / 解除拉黑此发言者
 - 双向拦截：被拉黑后双方不能互相回复、@提及，或在 Forum 跟帖中互动，
@@ -29,8 +25,7 @@
 - 同时支持「直接 Reply」和「Forum 帖子内的普通跟帖（默认目标 = 楼主）」两种
   触发场景
 
-收藏、白名单、黑名单三类数据共用同一个 portal.db（PORTAL_DB），不再使用
-单独的 discord_favorites.db / blocklist.db 文件，避免维护多份数据库连接。
+三类功能数据共用同一个 portal.db（PORTAL_DB）。
 """
 import os
 import sys
@@ -74,13 +69,12 @@ PER_PAGE = 10
 intents = discord.Intents.default()
 intents.guilds = True
 intents.members = True
-# 黑名单拦截功能需要读取消息内容来识别「引用回复 / Forum 跟帖」并把原文 DM
-# 回给发送者。原 Blockbot.py 也显式开启了此 Intent。
+# 黑名单拦截需要读取消息内容来识别「引用回复 / Forum 跟帖」并把原文 DM 回给发送者。
 intents.message_content = True
 
 
 # ---------------------------------------------------------------------------
-# 同步 SQLite（白名单 / 成员同步 / 下载任务通知），沿用原 whitelist_bot 实现
+# 同步 SQLite（白名单 / 成员同步 / 下载任务通知）
 # ---------------------------------------------------------------------------
 
 def db():
@@ -197,7 +191,7 @@ async def sync_guild_members(guild, request_id=None):
 
 
 # ---------------------------------------------------------------------------
-# 异步 SQLite（收藏功能，原 favorite_bot.py），与白名单共用同一个 portal.db 文件
+# 异步 SQLite（收藏功能），与白名单共用同一个 portal.db 文件
 # ---------------------------------------------------------------------------
 
 class SQLiteResult:
@@ -388,7 +382,7 @@ class Bot(discord.Client):
         self.db: Optional[SQLitePool] = None  # 收藏功能使用的异步连接
 
     async def setup_hook(self):
-        # 收藏功能建表（与白名单共用 portal.db，白名单表由同步 db() 负责建表）
+        # 收藏建表（与白名单共用 portal.db，白名单表由同步 db() 建表）
         self.db = await open_database()
         await self.init_favorites_db()
 
@@ -520,7 +514,7 @@ class Bot(discord.Client):
             await conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_favorites_guild_created ON favorites (guild_id, created_at DESC)"
             )
-            # 黑名单功能（原 Blockbot.py 合并进来）：黑名单关系表 + 拦截次数计数。
+            # 黑名单关系表 + 拦截次数计数
             # 使用 portal.db 同一文件，不再单独维护 blocklist.db。
             await conn.execute(
                 """
@@ -1048,7 +1042,7 @@ async def members_sync(interaction: discord.Interaction, server_id: str):
 
 
 # ---------------------------------------------------------------------------
-# 收藏功能（原 favorite_bot.py）
+# 收藏功能
 # ---------------------------------------------------------------------------
 
 async def ensure_favorite_user(interaction: discord.Interaction) -> None:
@@ -1063,7 +1057,6 @@ async def favorite_message(
     ephemeral = is_private_context(interaction)
 
     # 先 defer，避免 is_forum_thread() 的网络请求 + 数据库查询
-    # 耗时超过 3 秒导致 interaction token 失效（Unknown interaction）。
     await interaction.response.defer(ephemeral=ephemeral, thinking=True)
 
     if not await is_forum_thread(message):
@@ -1360,7 +1353,6 @@ def favorites_embed(
             )
 
         # Discord 单个 embed field 的 value 上限是 1024 字符。
-        # PER_PAGE 条目拼在一起可能超出该限制，因此这里按长度
         # 拆分成多个 field，而不是硬塞进同一个 field 导致 400。
         MAX_FIELD_LEN = 1024
         chunk_lines: list[str] = []
@@ -1375,7 +1367,6 @@ def favorites_embed(
                 )
 
         for line in lines:
-            # +2 对应拼接时使用的 "\n\n"
             added_len = len(line) + (2 if chunk_lines else 0)
 
             if chunk_len + added_len > MAX_FIELD_LEN:
@@ -1548,7 +1539,7 @@ async def help_command(
 
 
 # ---------------------------------------------------------------------------
-# 黑名单功能（原 Blockbot.py）斜杠命令 / 右键 Apps
+# 黑名单功能：斜杠命令 / 右键 Apps
 # ---------------------------------------------------------------------------
 
 
@@ -1748,7 +1739,6 @@ async def list_command(interaction: discord.Interaction):
     content = header + "\n\n".join(lines)
 
     if len(content) > 2000:
-        # 单条消息上限 2000 字符；超出时截断并保留尾部提示。
         content = content[:1990] + "\n…（内容过长已截断）"
 
     await interaction.response.send_message(content, ephemeral=True)

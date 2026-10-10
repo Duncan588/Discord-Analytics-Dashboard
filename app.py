@@ -1,6 +1,5 @@
 import os
 import re
-import csv
 import json
 import math
 import pickle
@@ -46,6 +45,7 @@ from shared.portal import touch_user_presence, upsert_portal_user
 from shared.sqlite_utils import add_columns, connect_sqlite, is_missing_table_error
 from shared.task_timing import calculate_task_timing
 from shared.timeutil import parse_utc_datetime, to_local_datetime, utc_now_iso
+from shared.cloud_db import cloud_enabled, remote_exists, remote_file_stat
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _startup_problems = []
@@ -120,25 +120,21 @@ app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 app.permanent_session_lifetime = timedelta(days=30)
 app.config["MAX_CONTENT_LENGTH"] = int(os.getenv("MAX_UPLOAD_BYTES", str(2 * 1024 * 1024 * 1024)))
 
-# 静态资源通过查询参数携带发布版本（例如 ?v=20260821-1）。版本化资源
-# 内容不会在同一版本内变化，可以安全地交给 Activity/浏览器长期复用。
+# 版本化静态资源（?v=xxx）内容不变，可交给浏览器长期缓存
 VERSIONED_STATIC_MAX_AGE = 365 * 24 * 60 * 60
 
-# Discord 活动（Activities）模式下，网站会被 Discord 客户端以跨站 iframe 形式加载
-# （地址类似 https://<app_id>.discordsays.com/ 通过 Discord 的代理转发到本站）。
-# 跨站 iframe 场景下，浏览器默认的 SameSite=Lax Cookie 不会被携带，登录状态会丢失，
-# 因此这里在部署为 https 时把 Session Cookie 切换成 SameSite=None; Secure。
-# 本地 http 调试（PUBLIC_BASE_URL 未配置或不是 https）时保持 Lax，避免开发环境下
-# Cookie 因为没有 https 被浏览器整个丢弃。
+# Discord Activity 以跨站 iframe 加载，SameSite=Lax 的 Cookie 不会被携带，
+# 所以 https 部署时必须用 SameSite=None; Secure，本地 http 调试保持 Lax。
 _IS_HTTPS_DEPLOY = PUBLIC_BASE_URL.startswith("https://")
 app.config["SESSION_COOKIE_SAMESITE"] = "None" if _IS_HTTPS_DEPLOY else "Lax"
 app.config["SESSION_COOKIE_SECURE"] = _IS_HTTPS_DEPLOY
-# Discord Activity 是跨站 iframe；Partitioned Cookie 兼容浏览器对第三方 Cookie
-# 的限制，同时仍将会话隔离在当前顶层 Discord 页面下。Flask 3.1+ 会自动附加
-# `Partitioned` 属性并要求 `Secure`，本地 HTTP 调试则保持关闭。
+# Activity 是跨站 iframe：Partitioned Cookie 兼容浏览器对第三方 Cookie 的限制。
+# Flask 3.1+ 会自动附加 `Partitioned` 属性并要求 `Secure`，本地 HTTP 调试关闭。
 app.config["SESSION_COOKIE_PARTITIONED"] = _IS_HTTPS_DEPLOY
 
-os.makedirs(DATA_DIR, exist_ok=True)
+# 云端数据模式下数据留在生产主机上（见 shared/cloud_db.py），本地不建 data/servers。
+if not cloud_enabled():
+    os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
 os.makedirs(os.path.join(BASE_DIR, "data", "uploads"), exist_ok=True)
 LOG_DIR = os.path.join(BASE_DIR, "data", "logs")
@@ -306,6 +302,25 @@ def db_connect(path):
     return connect_sqlite(path)
 
 
+def db_file_signature(path):
+    """数据库文件的 (mtime_ns, size)。
+
+    云端数据模式下本地没有这些文件，必须问生产主机，否则缓存签名恒为 0，
+    每次请求都会重算（实测 /user/<uid> 因此从缓存命中退化到 20 秒）。
+    """
+    if cloud_enabled():
+        return remote_file_stat(path) or (0, 0)
+    try:
+        info = os.stat(path)
+        return info.st_mtime_ns, info.st_size
+    except OSError:
+        return 0, 0
+
+
+def db_mtime_seconds(path):
+    return db_file_signature(path)[0] / 1e9
+
+
 def get_portal_db():
     if not hasattr(g, "portal_db"):
         g.portal_db = db_connect(PORTAL_DB)
@@ -320,13 +335,32 @@ def server_db_path(server_id):
     return os.path.join(DATA_DIR, str(server_id), "discord_data.db")
 
 
+def resolve_server_db_path(server_id, stored_path=None):
+    """服务器库应当在本地用哪个路径打开。
+
+    portal.db 里的 ``db_path`` 在生产上是绝对路径（例如
+    ``/root/v2/V20/data/servers/<gid>/discord_data.db``），跨机器不可用，
+    所以云端数据模式一律回到规范布局；本地模式保持原有行为。
+    """
+    if cloud_enabled() or not stored_path:
+        return server_db_path(server_id)
+    return stored_path
+
+
+def server_db_exists(server_id, stored_path=None):
+    """服务器库是否存在：云端数据模式下问生产主机，否则看本地文件。"""
+    if cloud_enabled():
+        return bool(remote_exists(server_db_path(server_id)))
+    return os.path.exists(resolve_server_db_path(server_id, stored_path))
+
+
 def get_db():
     sid = current_server_id()
     if not sid:
         raise NoServerSelectedError("未选择服务器")
     if not hasattr(g, "analytics_db"):
         path = server_db_path(sid)
-        if not os.path.exists(path):
+        if not server_db_exists(sid):
             raise ServerDataNotFoundError("服务器数据不存在")
         g.analytics_db = db_connect(path)
     return g.analytics_db
@@ -642,12 +676,6 @@ def ensure_server_indexes():
             conn.close()
 
 
-def format_time(seconds):
-    seconds = max(0, int(seconds))
-    m, s = divmod(seconds, 60)
-    h, m = divmod(m, 60)
-    return f"{h:d}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
-
 
 def parse_and_convert(time_str):
     return to_local_datetime(time_str)
@@ -666,13 +694,6 @@ def raw_datetime_filter(value, format="%Y-%m-%d %H:%M"):
 
 def is_pure_chinese(word):
     return bool(word) and re.fullmatch(r"[\u4e00-\u9fa5]+", str(word)) is not None
-
-
-def _is_valid_word(word):
-    """中文词或长度>=3 的英文小写词（排除 the/and 等短停用词由停用词表处理）。"""
-    if not word:
-        return False
-    return bool(re.fullmatch(r"[\u4e00-\u9fa5]+|[a-zA-Z][a-zA-Z'-]{2,}", str(word)))
 
 
 # 英文停用词：过滤后剩余的都是有实义的讨论词汇
@@ -815,10 +836,7 @@ class DataEngine:
             conn = db_connect(db_path)
             cur = conn.cursor()
             count = cur.execute("SELECT MAX(rowid) FROM messages").fetchone()[0]
-            try:
-                db_mtime = os.path.getmtime(db_path)
-            except OSError:
-                db_mtime = 0
+            db_mtime = db_mtime_seconds(db_path)
             # 已经统计过的消息数（增量分批）
             processed = cache.get("global_word_processed", 0)
             counter = cache.get("global_word_counter") or collections.Counter()
@@ -875,35 +893,38 @@ class DataEngine:
         # 用 MAX(rowid) 代替 count(*) —— 460 万行全表扫秒级 vs 10 秒。
         # count(*) 必须全表扫描；rowid 是 btree 索引，最后一行秒级。
         count = cur.execute("SELECT MAX(rowid) FROM messages").fetchone()[0]
-        try:
-            db_mtime = os.path.getmtime(db_path)
-        except OSError:
-            db_mtime = 0
+        db_mtime = db_mtime_seconds(db_path)
         # Rebuild once after changing the homepage ranking schema so stale cache
         # data cannot keep the old (possibly incomplete) lists on screen. When a
         # valid snapshot already exists, refresh it in the background: this is
         # important while the downloader is importing messages continuously.
+        # 模板会直接读 top_users / top_threads / server_word_cloud / chart_hourly，
+        # 所以只有带这些 key 的快照才算可用。早期版本写下的占位快照缺这些 key
+        # （key 还是 word_cloud_data/active_members 那套），必须当作不可用替换掉，
+        # 否则冷缓存首次访问会 UndefinedError 500。
+        homepage = cache.get("homepage")
+        usable = (isinstance(homepage, dict)
+                  and "top_users" in homepage and "top_threads" in homepage)
         cache_needs_refresh = (
             count != cache.get("last_msg_count")
             or db_mtime != cache.get("db_mtime")
             or cache.get("homepage_version") != 5
-            or not cache.get("homepage")
+            or not usable
         )
-        if cache_needs_refresh and cache.get("homepage"):
+        if not usable:
+            # 冷启动 / 首次访问 / 残缺快照：先给前端一个完整形状的空快照占位，
+            # 词云和榜单会随后台重建进度更新（避免首页同步等 4.6M 消息分词）。
+            cache["homepage"] = {
+                "total_msgs": count, "total_threads": 0, "total_users": 0,
+                "chart_daily": [], "chart_hourly": [],
+                "server_word_cloud": [], "server_word_rank": [],
+                "top_users": [], "top_threads": [], "top_hot_msgs": [],
+            }
+            cache["last_msg_count"] = count
+            cache["homepage_version"] = 5
+            self._save_cache(sid)
             self._schedule_refresh(sid)
         elif cache_needs_refresh:
-            # 冷启动 / 首次访问 / 数据库变化：永远在后台异步构建
-            # —— 避免首页一次 11 秒（4.6M 消息分词耗时）。
-            # 先给前端一个空快照占位，词云和榜单会随后台进度更新。
-            if not cache.get("homepage"):
-                cache["homepage"] = {
-                    "total_msgs": count, "total_threads": 0, "total_users": 0,
-                    "chart_daily": [], "word_cloud_data": [], "server_word_rank": [],
-                    "active_members": [], "popular_replies": [], "popular_discussions": [],
-                }
-                cache["last_msg_count"] = count
-                cache["homepage_version"] = 5
-                self._save_cache(sid)
             self._schedule_refresh(sid)
         conn.close()
         return cache["homepage"]
@@ -1056,14 +1077,10 @@ class ProfileEngine:
     @staticmethod
     def _db_signature(path):
         """Use the main DB and WAL metadata without scanning a million rows."""
-        result = []
-        for candidate in (path, path + "-wal"):
-            try:
-                stat_result = os.stat(candidate)
-                result.append((candidate, stat_result.st_mtime_ns, stat_result.st_size))
-            except OSError:
-                result.append((candidate, 0, 0))
-        return tuple(result)
+        return tuple(
+            (candidate,) + db_file_signature(candidate)
+            for candidate in (path, path + "-wal")
+        )
 
     def _build(self, sid, uid):
         path = server_db_path(sid)
@@ -1094,10 +1111,6 @@ class ProfileEngine:
                 f"WHERE m.author_id IN ({placeholders}) GROUP BY r.emoji_name ORDER BY c DESC LIMIT 3", args
             )]
 
-            # The first branch in the old query selected the author IDs of the
-            # user's own messages and then excluded those same IDs. It could
-            # never contribute a row, while making SQLite repeatedly resolve a
-            # large message-id subquery.
             data["interactions_incoming"] = [dict(row) for row in conn.execute(
                 f"SELECT u.user_id,u.nickname,u.username,u.avatar_url,count(*) score "
                 f"FROM reactions r JOIN messages m ON r.message_id=m.message_id "
@@ -1272,7 +1285,7 @@ def sync_server_users_to_portal(server_id):
     """把服务器分析库中的普通用户同步到门户数据库，避免普通登录用户被误判为无数据。"""
     sid = str(server_id)
     path = server_db_path(sid)
-    if not os.path.exists(path):
+    if not server_db_exists(sid):
         return 0
     now = utc_now_iso()
     portal = get_portal_db()
@@ -1326,8 +1339,8 @@ def get_servers_for_user(user_id):
     changed = False
     for server in rows:
         sid = str(server["server_id"])
-        path = server["db_path"]
-        if not os.path.exists(path):
+        path = resolve_server_db_path(sid, server["db_path"])
+        if not server_db_exists(sid, server["db_path"]):
             continue
         if level == 1:
             result.append(server)
@@ -1358,7 +1371,7 @@ def get_servers_for_user(user_id):
     if cached is not None:
         cached[uid] = result
         g.servers_for_user = cached
-    # ---- Demo 服务器兜底（2026-08-26 加入）----
+    # Demo 服务器兜底：无真实数据的普通用户被引入演示服务器并绑定假身份
     # 用户在任何真实服务器中都没有数据时，将其引入演示服务器以便体验；
     # 演示服务器绝不授予 admin/whitelist 权限，且一旦用户在真实服务器出现数据，
     # 就从可见列表中移除演示服务器。
@@ -1368,7 +1381,7 @@ def get_servers_for_user(user_id):
     has_real_data = any(str(s["server_id"]) != demo_id for s in result)
     if not has_real_data and level == 0:
         demo = portal.execute("SELECT * FROM servers WHERE server_id=?", (demo_id,)).fetchone()
-        if demo is not None and os.path.exists(demo["db_path"]):
+        if demo is not None and server_db_exists(demo_id, demo["db_path"]):
             portal.execute(
                 "INSERT OR IGNORE INTO user_server_access(user_id,server_id,granted_by,created_at) VALUES(?,?,?,?)",
                 (uid, demo_id, "demo-fallback", utc_now_iso()),
@@ -1378,7 +1391,7 @@ def get_servers_for_user(user_id):
         # admin 切换到 demo 浏览时也分配假身份（不写 user_server_access，
         # 不影响其 admin 权限与真实服务器可见性）。
         demo = portal.execute("SELECT * FROM servers WHERE server_id=?", (demo_id,)).fetchone()
-        if demo is not None and os.path.exists(demo["db_path"]):
+        if demo is not None and server_db_exists(demo_id, demo["db_path"]):
             _assign_demo_identity(portal, uid, demo_id)
     elif has_real_data and level == 0:
         changed2 = False
@@ -1480,9 +1493,6 @@ def get_display_user():
     session["display_user"] = display
     return display
 
-def user_has_server_data(user_id):
-    return get_servers_for_user(user_id)
-
 
 def login_required(f):
     @wraps(f)
@@ -1550,7 +1560,8 @@ def whitelist_allowed(user_id):
 def register_server(server_id, name, icon_url=None, owner_user_id=None, db_path=None):
     server_id = str(server_id)
     db_path = db_path or server_db_path(server_id)
-    init_server_db(db_path)
+    if not cloud_enabled():
+        init_server_db(db_path)
     now = utc_now_iso()
     conn = get_portal_db()
     conn.execute("INSERT INTO servers(server_id,name,icon_url,owner_user_id,db_path,created_at,updated_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(server_id) DO UPDATE SET name=excluded.name,icon_url=excluded.icon_url,db_path=excluded.db_path,updated_at=excluded.updated_at", (server_id, name or f"Discord Server {server_id}", icon_url, owner_user_id, db_path, now, now))
@@ -2381,12 +2392,11 @@ def user_profile(user_id):
             if gid in titles_by_guild:
                 continue
             db_path = server_db_path(gid)
-            if not os.path.exists(db_path):
+            if not server_db_exists(gid):
                 titles_by_guild[gid] = {}
                 continue
             try:
-                g = sqlite3.connect(server_db_path(gid))
-                g.row_factory = sqlite3.Row
+                g = db_connect(server_db_path(gid))
                 titles_by_guild[gid] = {
                     str(row["thread_id"]): row["name"]
                     for row in g.execute("SELECT thread_id,name FROM threads")
@@ -2449,7 +2459,7 @@ def claim_account():
 @admin_required
 def admin_panel():
     portal = get_portal_db(); sid = current_server_id()
-    conn = get_db() if sid and os.path.exists(server_db_path(sid)) else None
+    conn = get_db() if sid and server_db_exists(sid) else None
     reqs = conn.execute("SELECT r.*,u.username req_name,u.avatar_url req_avatar FROM claim_requests_v2 r LEFT JOIN users u ON r.requester_id=u.user_id WHERE r.status=0").fetchall() if conn else []
     merges = conn.execute("SELECT m.*,u.username parent_name FROM user_merges m LEFT JOIN users u ON m.parent_id=u.user_id").fetchall() if conn else []
     whitelist = portal.execute("SELECT w.*,COALESCE(q.quota,1) quota FROM whitelist_users w LEFT JOIN server_download_quota q ON q.user_id=w.user_id ORDER BY w.created_at DESC").fetchall()
@@ -2558,11 +2568,10 @@ def admin_bot_features():
     thread_names = {}
     for gid, tids in thread_ids_by_guild.items():
         db_path = server_db_path(gid)
-        if not os.path.exists(db_path):
+        if not server_db_exists(gid):
             continue
         try:
-            g = sqlite3.connect(db_path)
-            g.row_factory = sqlite3.Row
+            g = db_connect(db_path)
             ph = ",".join("?" * len(tids))
             for row in g.execute(
                 f"SELECT thread_id, name FROM threads WHERE thread_id IN ({ph})", tuple(tids)
@@ -2704,7 +2713,6 @@ def admin_bot_add():
     if token_type not in ("bot", "user"):
         return "账号类型无效",400
     try:
-        # 不相信手动填写的名称，避免后续配置显示错误账号。
         name=bot_identity(token, token_type)
     except requests.RequestException:
         return "无法验证机器人密钥，请确认 Token 有效后重试",400
@@ -2855,7 +2863,7 @@ def managed_discord_resources():
 # ---- 年度报告缓存（stale-while-revalidate）----
 # 单次 query 30+ 个 460 万行聚合，磁盘满时 5-10s。缓存 5 分钟供快速二次访问。
 _REPORT_CACHE = {}
-_REPORT_TTL = 300  # seconds
+_REPORT_TTL = 300  # 秒
 
 @app.route("/report")
 @server_required
@@ -2867,7 +2875,6 @@ def report():
     now_ts = time.time()
     cached = _REPORT_CACHE.get(cache_key)
     if cached and now_ts - cached["ts"] < _REPORT_TTL:
-        # 缓存命中，瞬时返回
         return render_template("report.html", user=cached["db_user"], server_id=sid,
                                word_cloud_data=cached["word_cloud_data"], percentile=95, **cached["result"])
     db_user = conn.execute("SELECT * FROM users WHERE user_id=?", (uid,)).fetchone()
@@ -2878,7 +2885,7 @@ def report():
     row = conn.execute(f"SELECT min(timestamp) joined FROM messages WHERE author_id IN ({ph})", ids).fetchone()
     if row and row["joined"]: result["join_date"] = datetimeformat_filter(row["joined"], "%Y-%m-%d")
     result["most_active_day"] = dict(conn.execute(f"SELECT substr(timestamp,1,10) day,count(*) c FROM messages WHERE author_id IN ({ph}) GROUP BY day ORDER BY c DESC LIMIT 1", ids).fetchone() or {}) or None
-    # 之前: strftime('%H', timestamp) 走全表扫 (4s+)。改为：取最近 200 条消息后，在 Python 端按小时过滤 16-21 点
+    # 小时分布：先按 author 索引取最近 200 条，再在 Python 端按小时过滤，避免全表扫
     late = conn.execute(
         f"SELECT * FROM messages WHERE author_id IN ({ph}) ORDER BY timestamp DESC LIMIT 200", ids
     ).fetchall()
@@ -2889,7 +2896,7 @@ def report():
     if row: result["most_replied_thread"] = dict(row); result["most_replied_thread"]["op_user"] = dict(db_user)
     row = conn.execute(f"SELECT t.thread_id,t.name,count(*) c FROM messages m JOIN threads t ON m.thread_id=t.thread_id WHERE m.author_id IN ({ph}) GROUP BY t.thread_id ORDER BY c DESC LIMIT 1", ids).fetchone()
     result["most_active_topic"] = dict(row) if row else None
-    # 之前: LEFT JOIN reactions r 全表扫。改为先按 author 索引取最近 N 条消息，再按 message_id 查反应
+    # 先取作者最近 2000 条消息，再按 message_id 批量查反应，避免 reactions 全表聚合
     top_msg_row = conn.execute(
         f"SELECT m.message_id, m.content, m.timestamp, m.thread_id, t.name AS thread_name "
         f"FROM messages m LEFT JOIN threads t ON t.thread_id=m.thread_id "
@@ -2962,15 +2969,6 @@ def report():
     return render_template("report.html", user=db_user, server_id=sid, word_cloud_data=format_word_cloud(get_word_cloud_counter(texts), 50), percentile=95, **result)
 
 
-@app.route("/chouxiangpai")
-@server_required
-def chouxiangpai_page():
-    path = os.path.join(BASE_DIR, "templates", "chouxiangpai.html")
-    if os.path.exists(path):
-        return open(path, encoding="utf-8").read()
-    return ""
-
-
 def _downloader_process_alive():
     with _service_lock:
         live = []
@@ -3028,7 +3026,7 @@ def admin_download_task_add():
         active=p.execute("SELECT COUNT(DISTINCT guild_id) FROM download_tasks WHERE created_by=? AND status IN ('pending','running')",(uid,)).fetchone()[0]
         if active>=quota: return f"已达到下载服务器配额 {quota}",403
     nowv=utc_now_iso()
-    mode="update" if int(cfg["update_enabled"] or 0) and os.path.exists(server_db_path(str(cfg["guild_id"]))) else "initial"
+    mode="update" if int(cfg["update_enabled"] or 0) and server_db_exists(str(cfg["guild_id"])) else "initial"
     p.execute("INSERT INTO download_tasks(guild_id,forum_channel_id,created_by,status,total,completed,created_at,message,config_id,guild_name,forum_name,scheduler_interval,download_interval_ms,mode) VALUES(?,?,?,?,0,0,?,?,?,?,?,?,?,?)",(cfg["guild_id"],cfg["forum_channel_id"],uid,"pending",nowv,f"等待下载器启动 · {'更新模式' if mode=='update' else '首次下载模式'}",cfg["id"],cfg["guild_name"] or cfg["guild_id"],cfg["forum_name"] or cfg["forum_channel_id"],cfg["scheduler_interval"] if int(cfg["scheduler_interval"] or 0) >= 50 else int(cfg["scheduler_interval"] or 1) * 1000,int(cfg["download_interval_ms"] or 0),mode))
     p.commit();
     request_member_sync(str(cfg["guild_id"]), uid)
@@ -3130,7 +3128,7 @@ def admin_download_task_cancel(task_id): return _task_action(task_id,"cancel")
 
 def _delete_task_data_from_server(p, task_id, guild_id):
     db_path=server_db_path(guild_id)
-    if not os.path.exists(db_path): return
+    if not server_db_exists(guild_id): return
     task_threads=[str(r[0]) for r in p.execute("SELECT thread_id FROM download_task_items WHERE task_id=?",(task_id,)).fetchall()]
     if not task_threads: return
     other=set(str(r[0]) for r in p.execute("SELECT DISTINCT thread_id FROM download_task_items WHERE task_id<>? AND status='downloaded'",(task_id,)).fetchall())
@@ -3197,7 +3195,7 @@ def admin_download_task_delete(task_id):
                 raise
             app.logger.warning("删除服务器扫描缓存时表不存在 guild_id=%s", guild_id)
     p.commit()
-    if remaining==0 and server_db and os.path.exists(server_db):
+    if remaining==0 and server_db and not cloud_enabled() and os.path.exists(server_db):
         try: os.remove(server_db)
         except OSError as exc:
             app.logger.warning("删除服务器数据库失败 path=%s error=%s", server_db, exc)
@@ -3286,7 +3284,7 @@ def admin_download_tasks_status():
 def inject_globals():
     sid = current_server_id()
     server = None
-    if sid and os.path.exists(PORTAL_DB):
+    if sid and (cloud_enabled() or os.path.exists(PORTAL_DB)):
         try:
             server = get_portal_db().execute("SELECT * FROM servers WHERE server_id=?", (sid,)).fetchone()
         except Exception as exc:
@@ -3303,11 +3301,18 @@ def inject_globals():
     }
 
 
-init_portal_db()
-migrate_legacy_db()
-with app.app_context():
-    ensure_server_indexes()
-    sync_all_server_users()
+if cloud_enabled():
+    app.logger.warning(
+        "云端数据模式已启用：数据库读取自 %s，跳过本地建表/迁移；"
+        "写操作是否放行取决于 CLOUD_DB_READONLY 与生产端 CLOUD_DB_AGENT_ALLOW_WRITE。",
+        os.getenv("CLOUD_DB_SSH_TARGET", "?"),
+    )
+else:
+    init_portal_db()
+    migrate_legacy_db()
+    with app.app_context():
+        ensure_server_indexes()
+        sync_all_server_users()
 
 _service_processes = []
 _service_stop = threading.Event()

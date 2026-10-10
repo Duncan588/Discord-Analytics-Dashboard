@@ -3,6 +3,8 @@
 import os
 import sqlite3
 
+from shared.cloud_db import maybe_connect
+
 
 def connect_sqlite(path, timeout=60, row_factory=True, create_parents=True, synchronous="NORMAL"):
     """Open a consistently configured SQLite connection.
@@ -11,7 +13,14 @@ def connect_sqlite(path, timeout=60, row_factory=True, create_parents=True, sync
     while the application and services use mapping-like ``sqlite3.Row`` rows.
     ``synchronous=None`` is accepted for callers that only want to set WAL and
     busy timeout without changing the existing database setting.
+
+    When ``CLOUD_DB=1`` and the path maps under ``CLOUD_DB_LOCAL_ROOT``, the
+    connection is transparently served by the production host over SSH instead
+    of the local file (see ``shared/cloud_db.py``).
     """
+    cloud = maybe_connect(path, row_factory=row_factory)
+    if cloud is not None:
+        return cloud
     path = os.fspath(path)
     if create_parents:
         parent = os.path.dirname(os.path.abspath(path))
@@ -44,4 +53,3 @@ def add_columns(conn, table, columns):
 
 def is_missing_table_error(error):
     return isinstance(error, sqlite3.OperationalError) and "no such table" in str(error).lower()
-

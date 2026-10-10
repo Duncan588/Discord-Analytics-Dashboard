@@ -287,7 +287,7 @@ for tid, cat, name, created in threads_meta:
     srv.execute("INSERT OR REPLACE INTO thread_scan_state VALUES(?,?,?,?,?)",
                 (tid, name, last_active, created.strftime("%Y-%m-%dT%H:%M:%S+00:00"), GUILD_ID))
 
-# 幂等性：reactions/attachments/mentions 无唯一约束，重复运行会累积。
+# 幂等：只清理本脚本在演示库内的产物（thread_id LIKE '920%'），不触碰生产数据
 # 先清理本脚本此前生成的行（仅限演示库内 920 开头帖子的行——全部是本
 # 脚本的产物，不触碰任何生产数据）。
 srv.execute("DELETE FROM reactions WHERE message_id IN (SELECT message_id FROM messages WHERE thread_id LIKE '920%')")
@@ -315,7 +315,7 @@ for r in random.sample(msg_rows, k=min(len(msg_rows), 350)):
     for _ in range(random.randint(1, 4)):
         emoji = random.choice(EMOJIS)
         reaction_rows.append((r[0], random.choice(MEMBER_IDS), emoji, twemoji_url(emoji)))
-# 幂等性：reactions/attachments/mentions 无唯一约束，重复运行会累积。
+# 幂等：只清理本脚本在演示库内的产物（thread_id LIKE '920%'），不触碰生产数据
 # 先清理本脚本此前生成的行（仅限演示库内 920 开头帖子的行——全部是本
 # 脚本的产物，不触碰任何生产数据）。
 srv.executemany("INSERT INTO reactions(message_id,user_id,emoji_name,emoji_url) VALUES(?,?,?,?)", reaction_rows)
@@ -434,7 +434,7 @@ block_rows = []
 intercept_rows = []
 for a, b in sorted(pairs):
     created_dt = ts_between(start, now)
-    created = created_dt  # 存储用字符串
+    created = created_dt
     block_rows.append((a, b, created))
     n = random.randint(*INTERCEPT_RANGE)
     if n > 0:

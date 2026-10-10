@@ -1,10 +1,8 @@
 """Discord 数据下载器。
 
 下载过程使用数据库记录任务/帖子状态；原始 JSON 只作为短生命周期的导入临时文件，
-成功导入 SQLite 后立即删除。帖子文件名只使用 Discord Thread ID，不再使用帖子标题，
-从根源上避免 Linux/Windows 的 File name too long。
+成功导入 SQLite 后立即删除。帖子文件名只使用 Discord Thread ID。
 """
-import csv
 import json
 import os
 import sqlite3
@@ -390,10 +388,9 @@ class Enumerator(discord.Client):
             async def fetch_archived_page(cursor):
                 """读取一个完整 API 页。
 
-                Discord 的历史接口偶发 5xx/429。扫描不能把这种临时错误
-                当作“没有更多帖子”，否则任务会静默停在某个分页（例如
-                13969）。只要任务没有被暂停/取消，就继续重试；成功返回后
-                游标才会推进。
+                Discord 的历史接口偶发 5xx/429。扫描不能把这种临时错误当作
+                “没有更多帖子”，否则任务会静默停在某个分页。只要任务没有被
+                暂停/取消就继续重试；成功返回后游标才会推进。
                 """
                 attempt = 0
                 while True:
@@ -1408,7 +1405,6 @@ def run_task(task, dce):
                     log_step("任务 #%s | 扫描线程异常 | %s", task_id, exc)
                 finally:
                     # 扫描客户端返回后必须可靠完成“扫描 Worker -> 下载 Worker”交接。
-                    # 旧逻辑在交接异常时没有设置 scan_finished，导致任务永久停留在
                     # scanning，且扫描机器人从未开始下载；这里保证事件一定释放。
                     try:
                         state_after_scan=task_status(task_id)

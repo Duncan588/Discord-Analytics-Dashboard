@@ -1,5 +1,7 @@
 # 敏感信息 —— 绝对不能上传
 .env
+.env.bak*
+qundiscord_collector/deploy.sh
 
 # 数据与日志
 data/

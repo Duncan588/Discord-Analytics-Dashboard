@@ -4,8 +4,7 @@
 1. DiscordChatExporter 的单频道/合并 JSON，根节点直接包含 messages
 2. 本项目的新格式，根节点包含 threads，每个 thread 包含 messages
 
-旧版 merged_final_clean.json 属于第一种格式，旧版脚本只读取 threads.item，
-因此会得到空数据库。这一版自动识别两种结构，并从 guild.id 获取服务器 ID。
+两种结构自动识别，并从 guild.id 获取服务器 ID。
 """
 import argparse
 import json
@@ -76,11 +75,9 @@ def inspect_json(filename):
         channel = data.get("channel") or {}
         return {"server_id": str(guild.get("id") or channel.get("guildId") or channel.get("guild_id") or "unknown"), "server_name": guild.get("name") or "Imported Discord Server", "icon_url": guild.get("iconUrl"), "format": "threads" if data.get("threads") is not None else "messages"}
 
-    # 注意：每个键的提取都必须使用独立的文件句柄。ijson 的迭代器会按内部缓冲区
-    # （而非按逻辑读取量）预读文件，如果多次调用 ijson.items() 共享同一个文件对象，
-    # 第二次调用会从被预读跳过的、非法的中间位置开始解析，从而抛出
-    # "parse error: premature EOF" / "invalid char in json text" 等异常。
-    # 这正是"下载好的 JSON 无法导入"报错的根本原因。
+    # 每个键的提取都必须使用独立的文件句柄。ijson 的迭代器会按内部缓冲区
+    # （而非按逻辑读取量）预读文件，共享同一个文件对象会让第二次调用从被
+    # 预读跳过的非法位置开始解析，从而抛出 "premature EOF" / "invalid char"。
     with open(filename, "rb") as f:
         guild = next(ijson.items(f, "guild"), {}) or {}
     with open(filename, "rb") as f:
