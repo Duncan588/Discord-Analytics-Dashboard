@@ -234,3 +234,124 @@ def profile_extra(main, ids, recent_limit=2000):
     words = textutil.count_words(texts)
     return {"interactions_incoming": incoming, "interactions_outgoing": outgoing,
             "word_cloud_data": textutil.format_word_cloud(words, 50)}
+
+
+def _bucket_day(day):
+    return day
+
+def _bucket_week(day):
+    try:
+        d = datetime.strptime(day, "%Y-%m-%d")
+        # Monday as week start (ISO)
+        monday = d - timedelta(days=d.weekday())
+        return monday.strftime("%Y-%m-%d")
+    except ValueError:
+        return day
+
+def _bucket_month(day):
+    return day[:7] if day and len(day) >= 7 else day
+
+def _bucket_year(day):
+    return day[:4] if day and len(day) >= 4 else day
+
+
+_BUCKETS = {"day": _bucket_day, "week": _bucket_week, "month": _bucket_month, "year": _bucket_year}
+
+
+def _filter_days(summ, since=None, until=None):
+    sql = "SELECT day, SUM(c) c FROM msg_hour"
+    where, args = [], []
+    if since:
+        where.append("day>=?"); args.append(since)
+    if until:
+        where.append("day<=?"); args.append(until)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " GROUP BY day ORDER BY day"
+    return [(r[0], r[1]) for r in summ.execute(sql, args)]
+
+
+def series_messages(summ, grain="day", since=None, until=None):
+    grain = grain if grain in _BUCKETS else "day"
+    bucket = _BUCKETS[grain]
+    agg = collections.Counter()
+    for day, c in _filter_days(summ, since, until):
+        agg[bucket(day)] += c
+    return [{"t": k, "c": agg[k]} for k in sorted(agg)]
+
+
+def series_active_users(summ, grain="day", since=None, until=None):
+    grain = grain if grain in _BUCKETS else "day"
+    bucket = _BUCKETS[grain]
+    sql = "SELECT day, user_id FROM user_day"
+    where, args = [], []
+    if since:
+        where.append("day>=?"); args.append(since)
+    if until:
+        where.append("day<=?"); args.append(until)
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sets = collections.defaultdict(set)
+    for day, uid in summ.execute(sql, args):
+        sets[bucket(day)].add(uid)
+    return [{"t": k, "c": len(sets[k])} for k in sorted(sets)]
+
+
+def series_thread_growth(summ, grain="month", since=None, until=None):
+    """New threads by first_ts (OP timestamp), cumulative optional via client."""
+    grain = grain if grain in _BUCKETS else "month"
+    bucket = _BUCKETS[grain]
+    sql = "SELECT substr(first_ts,1,10) day, count(*) c FROM thread_stats WHERE first_ts IS NOT NULL"
+    args = []
+    if since:
+        sql += " AND substr(first_ts,1,10)>=?"; args.append(since)
+    if until:
+        sql += " AND substr(first_ts,1,10)<=?"; args.append(until)
+    sql += " GROUP BY day ORDER BY day"
+    agg = collections.Counter()
+    for day, c in summ.execute(sql, args):
+        if day:
+            agg[bucket(day)] += c
+    out, running = [], 0
+    for k in sorted(agg):
+        running += agg[k]
+        out.append({"t": k, "c": agg[k], "cum": running})
+    return out
+
+
+def series_reply_rate(summ, grain="week", since=None, until=None):
+    """Approximate reply rate = (messages - new threads) / messages per bucket."""
+    msgs = {x["t"]: x["c"] for x in series_messages(summ, grain, since, until)}
+    threads = {x["t"]: x["c"] for x in series_thread_growth(summ, grain, since, until)}
+    keys = sorted(set(msgs) | set(threads))
+    out = []
+    for k in keys:
+        m = msgs.get(k, 0); t = threads.get(k, 0)
+        replies = max(0, m - t)
+        out.append({"t": k, "messages": m, "threads": t, "replies": replies,
+                    "reply_rate": round(replies / m, 4) if m else 0})
+    return out
+
+
+def top_emoji(summ, limit=20):
+    rows = summ.execute(
+        "SELECT emoji_name, MAX(emoji_url) emoji_url, SUM(c) c FROM user_emoji_given "
+        "GROUP BY emoji_name ORDER BY c DESC LIMIT ?", (limit,)).fetchall()
+    return [{"emoji_name": r[0], "emoji_url": r[1], "c": r[2]} for r in rows]
+
+
+def analytics_bundle(summ, since=None, until=None):
+    return {
+        "messages_day": series_messages(summ, "day", since, until),
+        "messages_week": series_messages(summ, "week", since, until),
+        "messages_month": series_messages(summ, "month", since, until),
+        "messages_year": series_messages(summ, "year", since, until),
+        "active_users_day": series_active_users(summ, "day", since, until),
+        "active_users_week": series_active_users(summ, "week", since, until),
+        "active_users_month": series_active_users(summ, "month", since, until),
+        "thread_growth_month": series_thread_growth(summ, "month", since, until),
+        "reply_rate_week": series_reply_rate(summ, "week", since, until),
+        "top_emoji": top_emoji(summ, 20),
+        "heatmap": heatmap(summ),
+        "word_cloud": word_cloud(summ, 40),
+    }

@@ -90,6 +90,13 @@ def create_dashboard_api(ctx):
         ids = ctx.merged_ids(sid, user_id)
         return jsonify(ok=True, data=ctx.profile_engine.load(sid, ids, ctx.get_db()))
 
+    @bp.route("/analytics")
+    @ctx.server_required
+    def analytics():
+        since = request.args.get("since")
+        until = request.args.get("until")
+        return _with(lambda m, s: dashboard_data.analytics_bundle(s, since, until))
+
     @bp.route("/status")
     @ctx.server_required
     def status():
