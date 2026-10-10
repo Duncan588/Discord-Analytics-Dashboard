@@ -29,11 +29,11 @@
 
 ## 项目简介 / Overview
 
-**中文：**
-Dixo 是一个基于 Flask 的 Web 平台，用于对 Discord 论坛（Forum）频道的数据进行采集、导入与可视化分析。项目内置多机器人并发下载器（基于 [DiscordChatExporter](https://github.com/Tyrrrz/DiscordChatExporter)）、SQLite 数据存储、Discord OAuth2 登录、常规用户自动授权，以及可直接在 Discord 客户端内运行的 Activity（内嵌应用）模式。
+**中文：**  
+Dixo（仓库历史名 Discord-Analytics-Dashboard）面向 Discord **Forum 频道**：把帖子、回复、反应采集进 SQLite，做成苹果风深浅色仪表盘——趋势图、热力、词云、排行榜、成员主页，以及「深度分析」里的分档活跃标签（一贯活跃 / 活跃后消失 / 几乎不活跃 / 消失后回归）。支持 **Discord Activity 内嵌**（安全区适配）、多 Bot 增量下载（可持续轮询新帖与反应），以及白名单配额与管理后台。演示站与邀请链接见上方。
 
-**English:**
-Dixo is a Flask-based web platform for collecting, importing, and visualizing data from Discord Forum channels. It includes a concurrent multi-bot downloader (built on [DiscordChatExporter](https://github.com/Tyrrrz/DiscordChatExporter)), SQLite-based storage, Discord OAuth2 login, automatic access provisioning for regular members, and a Discord Activity (embedded app) mode that runs directly inside the Discord client.
+**English:**  
+Dixo (historically Discord-Analytics-Dashboard) turns Discord **Forum** traffic into an Apple-style light/dark analytics dashboard: trends, heatmaps, word clouds, leaderboards, member profiles, and deep-analysis **activity tiers** (always active / faded / rare / returned). It runs as a **Discord Activity** (safe-area aware), ships a multi-bot incremental downloader that can keep polling for new threads/replies/reactions, plus whitelist quotas and an admin console. Demo and bot invite links are above.
 
 ---
 

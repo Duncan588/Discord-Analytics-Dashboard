@@ -95,7 +95,27 @@ def create_dashboard_api(ctx):
     def analytics():
         since = request.args.get("since")
         until = request.args.get("until")
-        return _with(lambda m, s: dashboard_data.analytics_bundle(s, since, until, cache_key=ctx.current_server_id()))
+
+        def build(m, s):
+            data = dashboard_data.analytics_bundle(s, since, until, cache_key=ctx.current_server_id())
+            tags = data.get("activity_tags") or {}
+            samples = tags.get("samples") or {}
+            ids = []
+            for rows in samples.values():
+                ids.extend(r["user_id"] for r in rows)
+            if ids:
+                ph = ",".join("?" for _ in ids)
+                users = {str(u["user_id"]): dict(u) for u in m.execute(
+                    f"SELECT user_id,username,nickname,avatar_url FROM users WHERE user_id IN ({ph})", ids)}
+                for rows in samples.values():
+                    for r in rows:
+                        u = users.get(str(r["user_id"])) or {}
+                        r["username"] = u.get("username")
+                        r["nickname"] = u.get("nickname")
+                        r["avatar_url"] = u.get("avatar_url")
+            return data
+
+        return _with(build)
 
     @bp.route("/status")
     @ctx.server_required

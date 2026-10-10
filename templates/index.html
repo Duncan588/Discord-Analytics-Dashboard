@@ -141,15 +141,31 @@
     <button class="btn btn-primary" type="button" @click="reload()">{{ t("home.apply") }}</button>
   </div>
   <p class="faint" style="font-size:12px;margin:0 0 10px" x-text="status" x-show="status"></p>
-  <div class="grid g-2">
+  <div class="grid g-2 chart-pad-x">
     <div><div class="eyebrow" style="margin-bottom:8px">{{ t("home.chart.messages") }}</div><div class="chart sm"><canvas id="anMsgs"></canvas></div></div>
     <div><div class="eyebrow" style="margin-bottom:8px">{{ t("home.chart.active_users") }}</div><div class="chart sm"><canvas id="anUsers"></canvas></div></div>
     <div><div class="eyebrow" style="margin-bottom:8px">{{ t("home.chart.threads") }}</div><div class="chart sm"><canvas id="anThreads"></canvas></div></div>
-    <div><div class="eyebrow" style="margin-bottom:8px">{{ t("home.chart.reply_rate") }}</div><div class="chart sm"><canvas id="anReply"></canvas></div></div>
+    <div class="hide-mobile"><div class="eyebrow" style="margin-bottom:8px">{{ t("home.chart.reply_rate") }}</div><div class="chart sm"><canvas id="anReply"></canvas></div></div>
   </div>
   <div style="margin-top:var(--space-4)">
     <div class="eyebrow" style="margin-bottom:8px">{{ t("home.chart.emoji") }}</div>
     <div class="row wrap" id="anEmoji"></div>
+  </div>
+  <div style="margin-top:var(--space-5)" id="activityTags">
+    <div class="card-head" style="margin-bottom:8px">
+      <div><h3 class="h-card">{{ t("home.activity_tags") }}</h3>
+        <div class="card-sub">{{ t("home.activity_tags.hint") }}</div></div>
+      <div class="seg">
+        <button type="button" class="on" data-tag-filter="always_active" @click="tagFilter='always_active'">{{ t("home.tag.always") }}</button>
+        <button type="button" data-tag-filter="returned" @click="tagFilter='returned'">{{ t("home.tag.returned") }}</button>
+        <button type="button" data-tag-filter="faded" @click="tagFilter='faded'">{{ t("home.tag.faded") }}</button>
+        <button type="button" data-tag-filter="rare" @click="tagFilter='rare'">{{ t("home.tag.rare") }}</button>
+        <button type="button" data-tag-filter="new" @click="tagFilter='new'">{{ t("home.tag.new") }}</button>
+      </div>
+    </div>
+    <div class="activity-tags" id="anTagCounts"></div>
+    <div class="chart sm" style="margin-top:var(--space-4)"><canvas id="anTagsMonth"></canvas></div>
+    <div class="activity-tag-list" id="anTagSamples"></div>
   </div>
 </section>
 

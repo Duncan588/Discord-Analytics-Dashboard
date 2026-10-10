@@ -119,7 +119,11 @@
           changed = true;
         }
       });
-      if (changed) link.href = url.toString();
+      if (changed) {
+        // Keep path-relative href so Discord Activity URL mapping / iframe
+        // navigation stays inside the embedded app (absolute public origins break taps).
+        link.setAttribute("href", url.pathname + url.search + url.hash);
+      }
     } catch (e) { /* malformed links are left untouched */ }
   }
 

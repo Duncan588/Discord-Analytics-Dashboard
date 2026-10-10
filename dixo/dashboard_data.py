@@ -355,6 +355,187 @@ def top_emoji(summ, limit=20):
     return [{"emoji_name": r[0], "emoji_url": r[1], "c": r[2]} for r in rows]
 
 
+# Activity retention tags (monthly grain). Used for cleanup / engagement prep.
+TAG_ALWAYS = "always_active"      # 一贯活跃
+TAG_FADED = "faded"               # 活跃后消失
+TAG_RARE = "rare"                 # 几乎不活跃
+TAG_RETURNED = "returned"         # 消失后回归
+TAG_NEW = "new"                   # 近两月新活跃
+
+
+def _month_range(start_ym, end_ym):
+    """Inclusive YYYY-MM range."""
+    if not start_ym or not end_ym or start_ym > end_ym:
+        return []
+    y, m = int(start_ym[:4]), int(start_ym[5:7])
+    ey, em = int(end_ym[:4]), int(end_ym[5:7])
+    out = []
+    while (y, m) <= (ey, em):
+        out.append(f"{y:04d}-{m:02d}")
+        m += 1
+        if m > 12:
+            m = 1
+            y += 1
+    return out
+
+
+def classify_member_activity(active_months, first_ym, last_ym, as_of_ym):
+    """Classify one member from their set of active YYYY-MM keys.
+
+    Tiers (priority order):
+      new       — first activity within last 2 months of as_of
+      returned  — ≥2 consecutive inactive months in the middle, then active again near as_of
+      always_active — active in ≥70% of months since first, and active in last 2 months
+      faded     — had activity earlier, silent in last 2 months, ≥2 active months historically
+      rare      — otherwise (≤2 active months or <15% coverage)
+    """
+    if not active_months or not first_ym:
+        return TAG_RARE
+    months = _month_range(first_ym, as_of_ym)
+    if not months:
+        return TAG_RARE
+    active = set(active_months)
+    n = len(months)
+    n_active = sum(1 for m in months if m in active)
+    recent = months[-2:] if len(months) >= 2 else months
+    recent_hit = sum(1 for m in recent if m in active)
+    # new
+    span_from_first = _month_range(first_ym, as_of_ym)
+    if len(span_from_first) <= 2:
+        return TAG_NEW
+    # returned: gap of ≥2 inactive then activity in last 2 months
+    if recent_hit >= 1 and n >= 4:
+        # find longest trailing gap before last active streak
+        bits = [1 if m in active else 0 for m in months]
+        # look for 0,0 pattern then later 1 near end
+        gap = False
+        for i in range(len(bits) - 2):
+            if bits[i] == 0 and bits[i + 1] == 0:
+                # was there activity before this gap?
+                if any(bits[:i]):
+                    gap = True
+                    break
+        if gap and recent_hit >= 1 and bits[-1] == 1:
+            return TAG_RETURNED
+    ratio = n_active / n if n else 0
+    if recent_hit >= 1 and ratio >= 0.70 and n_active >= 3:
+        return TAG_ALWAYS
+    if recent_hit == 0 and n_active >= 2:
+        return TAG_FADED
+    if n_active <= 2 or ratio < 0.15:
+        return TAG_RARE
+    if recent_hit == 0:
+        return TAG_FADED
+    return TAG_ALWAYS if ratio >= 0.5 else TAG_RARE
+
+
+def member_activity_tags(summ, as_of=None, sample_per_tag=12):
+    """Tag every member with monthly activity pattern; return summary + samples.
+
+    as_of: YYYY-MM-DD or YYYY-MM; defaults to max(user_day.day).
+    """
+    row = summ.execute("SELECT MAX(day) FROM user_day").fetchone()
+    max_day = (row[0] if row else None) or as_of
+    if as_of:
+        as_of_ym = as_of[:7]
+    else:
+        as_of_ym = (max_day or "")[:7]
+    if not as_of_ym:
+        return {"as_of": None, "counts": {}, "samples": {}, "tags": []}
+
+    # active months per user
+    by_user = collections.defaultdict(set)
+    for uid, day in summ.execute("SELECT user_id, day FROM user_day"):
+        if day and day[:7] <= as_of_ym:
+            by_user[str(uid)].add(day[:7])
+
+    # first/last from user_stats when available
+    first_last = {}
+    try:
+        for r in summ.execute("SELECT user_id, substr(first_ts,1,7), substr(last_ts,1,7) FROM user_stats"):
+            first_last[str(r[0])] = (r[1], r[2])
+    except Exception:
+        pass
+
+    counts = collections.Counter()
+    samples = {TAG_ALWAYS: [], TAG_FADED: [], TAG_RARE: [], TAG_RETURNED: [], TAG_NEW: []}
+    for uid, months in by_user.items():
+        fl = first_last.get(uid)
+        first_ym = (fl[0] if fl and fl[0] else min(months))
+        last_ym = (fl[1] if fl and fl[1] else max(months))
+        if first_ym > as_of_ym:
+            continue
+        tag = classify_member_activity(months, first_ym, min(last_ym, as_of_ym), as_of_ym)
+        counts[tag] += 1
+        rec = {"user_id": uid, "tag": tag, "first_month": first_ym, "last_month": last_ym,
+               "active_months": len(months), "months_span": len(_month_range(first_ym, as_of_ym))}
+        if len(samples[tag]) < sample_per_tag:
+            samples[tag].append(rec)
+
+    order = [TAG_ALWAYS, TAG_RETURNED, TAG_FADED, TAG_RARE, TAG_NEW]
+    return {
+        "as_of": as_of_ym,
+        "counts": {k: counts.get(k, 0) for k in order},
+        "labels": {
+            TAG_ALWAYS: {"zh": "一贯活跃", "en": "Always active"},
+            TAG_RETURNED: {"zh": "消失后回归", "en": "Returned after gap"},
+            TAG_FADED: {"zh": "活跃后消失", "en": "Active then gone"},
+            TAG_RARE: {"zh": "几乎不活跃", "en": "Rarely active"},
+            TAG_NEW: {"zh": "近两月新活跃", "en": "New (≤2 months)"},
+        },
+        "samples": samples,
+        "total_tagged": sum(counts.values()),
+    }
+
+
+def activity_tag_monthly_series(summ, since=None, until=None):
+    """For each month, count of members whose *current* tag (as of that month) is each tier.
+
+    Expensive if naive; we sample month ends from msg_hour range and reclassify lightly
+    using only months ≤ that point (reuse by_user precompute).
+    """
+    days = _filter_days(summ, since, until)
+    if not days:
+        return []
+    month_ends = sorted({d[:7] for d, _ in days})
+    if len(month_ends) > 36:
+        month_ends = month_ends[-36:]
+    # Preload all user months once
+    by_user = collections.defaultdict(set)
+    for uid, day in summ.execute("SELECT user_id, day FROM user_day"):
+        if day:
+            by_user[str(uid)].add(day[:7])
+    first_last = {}
+    try:
+        for r in summ.execute("SELECT user_id, substr(first_ts,1,7), substr(last_ts,1,7) FROM user_stats"):
+            first_last[str(r[0])] = (r[1], r[2])
+    except Exception:
+        pass
+    out = []
+    for ym in month_ends:
+        counts = collections.Counter()
+        for uid, months in by_user.items():
+            sub = {m for m in months if m <= ym}
+            if not sub:
+                continue
+            fl = first_last.get(uid)
+            first_ym = (fl[0] if fl and fl[0] else min(sub))
+            if first_ym > ym:
+                continue
+            last_ym = min(max(sub), ym)
+            tag = classify_member_activity(sub, first_ym, last_ym, ym)
+            counts[tag] += 1
+        out.append({
+            "t": ym,
+            "always_active": counts[TAG_ALWAYS],
+            "returned": counts[TAG_RETURNED],
+            "faded": counts[TAG_FADED],
+            "rare": counts[TAG_RARE],
+            "new": counts[TAG_NEW],
+        })
+    return out
+
+
 _BUNDLE_CACHE = {}
 
 
@@ -382,6 +563,8 @@ def analytics_bundle(summ, since=None, until=None, cache_key=None):
 
 
 def _analytics_bundle(summ, since=None, until=None):
+    until_ym = (until or "")[:7] or None
+    tags = member_activity_tags(summ, as_of=until or since)
     return {
         "messages_day": series_messages(summ, "day", since, until),
         "messages_week": series_messages(summ, "week", since, until),
@@ -395,4 +578,6 @@ def _analytics_bundle(summ, since=None, until=None):
         "top_emoji": top_emoji(summ, 20),
         "heatmap": heatmap(summ),
         "word_cloud": word_cloud(summ, 40),
+        "activity_tags": tags,
+        "activity_tags_monthly": activity_tag_monthly_series(summ, since, until),
     }
