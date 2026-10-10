@@ -1636,9 +1636,14 @@ def start_background_services():
     else:
         app.logger.info("服务未启动 name=whitelist_bot：DISCORD_BOT_TOKEN 为空")
     try:
-        conn=db_connect(PORTAL_DB); row=conn.execute("SELECT 1 FROM download_tasks WHERE status IN ('pending','running') AND delete_requested=0 LIMIT 1").fetchone(); conn.close()
-        if row: ensure_downloader_process()
-        else: app.logger.info("服务未启动 name=discord_downloader：没有下载任务")
+        conn=db_connect(PORTAL_DB)
+        row=conn.execute("SELECT 1 FROM download_tasks WHERE status IN ('pending','running') AND delete_requested=0 LIMIT 1").fetchone()
+        poll=conn.execute("SELECT 1 FROM download_configs WHERE enabled=1 AND update_enabled=1 LIMIT 1").fetchone()
+        conn.close()
+        if row or poll:
+            ensure_downloader_process()
+        else:
+            app.logger.info("服务未启动 name=discord_downloader：没有下载任务")
     except Exception as exc:
         app.logger.exception("检查下载任务状态失败，无法启动 discord_downloader：%s", exc)
 
@@ -1647,6 +1652,15 @@ def _has_active_download_tasks():
     try:
         return bool(conn.execute(
             "SELECT 1 FROM download_tasks WHERE status IN ('pending','running') AND delete_requested=0 LIMIT 1"
+        ).fetchone())
+    finally:
+        conn.close()
+
+def _has_update_poll_configs():
+    conn = db_connect(PORTAL_DB)
+    try:
+        return bool(conn.execute(
+            "SELECT 1 FROM download_configs WHERE enabled=1 AND update_enabled=1 LIMIT 1"
         ).fetchone())
     finally:
         conn.close()
@@ -1662,7 +1676,7 @@ def _service_watchdog():
     """Keep child services available after an unexpected process exit."""
     while not _service_stop.wait(5):
         try:
-            if _has_active_download_tasks() and not _downloader_process_alive():
+            if (_has_active_download_tasks() or _has_update_poll_configs()) and not _downloader_process_alive():
                 app.logger.warning("检测到下载任务仍在运行但下载器进程已退出，自动恢复下载器")
                 ensure_downloader_process()
             _ensure_whitelist_process()

@@ -11,27 +11,79 @@ bp = Blueprint("pages", __name__)
 
 
 def _member_count_for(sid):
-    """Live Discord roster size from portal after whitelist_bot member sync.
+    """Live Discord roster size for the homepage KPI.
 
-    Only trusts servers.member_count (written by sync/prune). Raw presence may still
-    include leavers until a full sync runs — do not use it as the KPI alone.
+    Prefer servers.member_count (whitelist bot sync/prune). If the whitelist bot is
+    not in the guild, fall back to Discord GET /guilds/{id}?with_counts=true using a
+    download-bot / default downloader token, and cache onto servers.member_count.
+    Analytics `users` table is NOT used (includes leavers / historical authors).
     """
+    sid = str(sid)
     portal = get_portal_db()
     try:
-        row = portal.execute("SELECT member_count FROM servers WHERE server_id=?", (str(sid),)).fetchone()
+        row = portal.execute("SELECT member_count, updated_at FROM servers WHERE server_id=?", (sid,)).fetchone()
     except Exception:
-        return None
-    if row is None:
-        return None
-    # sqlite3.Row or tuple
-    val = row[0] if not isinstance(row, dict) else row.get("member_count")
-    if val is None:
-        return None
+        row = None
+    cached = None
+    if row is not None:
+        try:
+            cached = int(row[0]) if row[0] is not None else None
+        except (TypeError, ValueError):
+            cached = None
+    # Refresh from Discord at most every 6 hours when we only have API approx counts.
+    need_fetch = cached is None or cached <= 0
+    if not need_fetch:
+        return cached
+    token = None
+    token_type = "bot"
     try:
-        n = int(val)
-    except (TypeError, ValueError):
-        return None
-    return n if n > 0 else None
+        bots = portal.execute(
+            """SELECT b.token, b.token_type FROM download_bots b
+               JOIN download_config_bots cb ON cb.bot_id=b.id
+               JOIN download_configs c ON c.id=cb.config_id
+               WHERE c.guild_id=? AND c.enabled=1 ORDER BY b.id LIMIT 1""",
+            (sid,),
+        ).fetchone()
+        if bots:
+            token, token_type = bots[0], (bots[1] or "bot")
+    except Exception:
+        pass
+    if not token:
+        try:
+            from dixo.core import default_downloader_token
+            token = default_downloader_token()
+            token_type = "bot"
+        except Exception:
+            token = None
+    if not token:
+        return cached
+    try:
+        import urllib.request, json as _json
+        req = urllib.request.Request(
+            f"https://discord.com/api/v10/guilds/{sid}?with_counts=true",
+            headers={
+                "Authorization": (token if str(token_type).lower() == "user" else f"Bot {token}"),
+                "User-Agent": "DixoMemberCount/1.0",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+        n = data.get("approximate_member_count") or data.get("member_count")
+        if n is None:
+            return cached
+        n = int(n)
+        try:
+            portal.execute("UPDATE servers SET member_count=?, updated_at=? WHERE server_id=?", (n, utc_now_iso(), sid))
+            portal.commit()
+        except Exception:
+            pass
+        return n
+    except Exception as exc:
+        try:
+            app.logger.warning("member_count fetch failed guild=%s err=%s", sid, exc)
+        except Exception:
+            pass
+        return cached
 
 @bp.route("/me")
 @login_required
