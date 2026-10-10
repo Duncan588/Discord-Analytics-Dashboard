@@ -1,10 +1,8 @@
 """Discord 数据下载器。
 
 下载过程使用数据库记录任务/帖子状态；原始 JSON 只作为短生命周期的导入临时文件，
-成功导入 SQLite 后立即删除。帖子文件名只使用 Discord Thread ID，不再使用帖子标题，
-从根源上避免 Linux/Windows 的 File name too long。
+成功导入 SQLite 后立即删除。帖子文件名只使用 Discord Thread ID。
 """
-import csv
 import json
 import os
 import sqlite3
@@ -390,10 +388,9 @@ class Enumerator(discord.Client):
             async def fetch_archived_page(cursor):
                 """读取一个完整 API 页。
 
-                Discord 的历史接口偶发 5xx/429。扫描不能把这种临时错误
-                当作“没有更多帖子”，否则任务会静默停在某个分页（例如
-                13969）。只要任务没有被暂停/取消，就继续重试；成功返回后
-                游标才会推进。
+                Discord 的历史接口偶发 5xx/429。扫描不能把这种临时错误当作
+                “没有更多帖子”，否则任务会静默停在某个分页。只要任务没有被
+                暂停/取消就继续重试；成功返回后游标才会推进。
                 """
                 attempt = 0
                 while True:
@@ -1408,7 +1405,6 @@ def run_task(task, dce):
                     log_step("任务 #%s | 扫描线程异常 | %s", task_id, exc)
                 finally:
                     # 扫描客户端返回后必须可靠完成“扫描 Worker -> 下载 Worker”交接。
-                    # 旧逻辑在交接异常时没有设置 scan_finished，导致任务永久停留在
                     # scanning，且扫描机器人从未开始下载；这里保证事件一定释放。
                     try:
                         state_after_scan=task_status(task_id)
@@ -1534,6 +1530,62 @@ def find_dce():
     return str(path)
 
 
+
+def any_update_enabled():
+    conn = db()
+    try:
+        row = conn.execute("SELECT 1 FROM download_configs WHERE enabled=1 AND update_enabled=1 LIMIT 1").fetchone()
+        return bool(row)
+    finally:
+        conn.close()
+
+
+def enqueue_update_polls():
+    """For each update-enabled config, queue a mode=update task if none is pending/running.
+
+    Keeps the existing download_task_items list: update mode skips unchanged threads
+    via existing_thread_active / last_active_at, and only re-exports threads with new
+    replies/activity (DCE JSON includes reactions/emoji).
+    """
+    conn = db()
+    created = 0
+    try:
+        ensure_schema(conn)
+        rows = conn.execute(
+            "SELECT * FROM download_configs WHERE enabled=1 AND update_enabled=1 ORDER BY id"
+        ).fetchall()
+        for cfg in rows:
+            gid = str(cfg["guild_id"])
+            forum = str(cfg["forum_channel_id"])
+            busy = conn.execute(
+                """SELECT 1 FROM download_tasks
+                   WHERE guild_id=? AND forum_channel_id=? AND status IN ('pending','running','paused')
+                     AND delete_requested=0 LIMIT 1""",
+                (gid, forum),
+            ).fetchone()
+            if busy:
+                continue
+            interval = cfg["scheduler_interval"] if "scheduler_interval" in cfg.keys() else 1000
+            dl_ms = cfg["download_interval_ms"] if "download_interval_ms" in cfg.keys() else 0
+            # Match admin_download_task_add column set so migrations stay happy.
+            interval_ms = int(interval or 1000)
+            if interval_ms < 50:
+                interval_ms = interval_ms * 1000
+            conn.execute(
+                "INSERT INTO download_tasks(guild_id,forum_channel_id,created_by,status,total,completed,created_at,message,config_id,guild_name,forum_name,scheduler_interval,download_interval_ms,mode) VALUES(?,?,?,?,0,0,?,?,?,?,?,?,?,?)",
+                (gid, forum, str(cfg["owner_user_id"]), "pending", now(),
+                 "定时轮询：扫描新帖/新回复/新反应", int(cfg["id"]),
+                 cfg["guild_name"] or gid, cfg["forum_name"] or forum,
+                 interval_ms, int(dl_ms or 0), "update"),
+            )
+            created += 1
+            log_step("轮询入队 | config=%s guild=%s forum=%s", cfg["id"], gid, forum)
+        conn.commit()
+    finally:
+        conn.close()
+    return created
+
+
 def main_once():
     recover_stale_tasks()
     dce = find_dce()
@@ -1563,6 +1615,15 @@ def main_once():
                     pool = main_once._pool
                 active[tid] = pool.submit(run_task, task, dce)
         if not active and not pending_tasks(1):
+            n = enqueue_update_polls()
+            if n:
+                log_step("空闲轮询已入队 %s 个更新任务", n)
+                continue
+            if any_update_enabled():
+                idle = max(15, int(os.getenv("DOWNLOAD_POLL_IDLE_SEC", "60")))
+                log_step("无待处理任务，%ss 后再次轮询（update_enabled 配置仍在）", idle)
+                time.sleep(idle)
+                continue
             log_step("没有剩余下载任务，下载器退出")
             return False
         active_intervals=[]
@@ -1584,4 +1645,12 @@ def main_once():
 
 
 if __name__ == "__main__":
-    main_once()
+    # Continuous mode: keep process alive while update_enabled configs exist.
+    forever = os.getenv("DOWNLOAD_POLL_FOREVER", "1").strip() not in ("0", "false", "False")
+    while True:
+        main_once()
+        if not forever or not any_update_enabled():
+            break
+        idle = max(15, int(os.getenv("DOWNLOAD_POLL_IDLE_SEC", "60")))
+        log_step("下载器主循环结束，%ss 后重启轮询", idle)
+        time.sleep(idle)

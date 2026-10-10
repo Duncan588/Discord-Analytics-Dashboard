@@ -1,0 +1,67 @@
+{# Reusable UI macros #}
+{% macro avatar(url, size=32) -%}
+<img class="avatar av-{{ size }}" src="{{ url or 'https://cdn.discordapp.com/embed/avatars/0.png' }}" alt="" loading="lazy" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'">
+{%- endmacro %}
+
+{% macro kpi(label_key, value, delta=None, sub_key=None, click=None) -%}
+<div class="card kpi{{ ' clickable' if click }}" {% if click %}@click="{{ click }}" @keydown.enter="{{ click }}" role="button" tabindex="0"{% endif %}>
+  <div class="label">{{ t(label_key) }}</div>
+  <div class="value" title="{{ value or 0 }}">{{ (value or 0)|compact }}</div>
+  {% if delta is not none %}
+  <div class="delta {{ 'up' if delta > 0 else ('down' if delta < 0 else '') }}">{{ '▲' if delta > 0 else ('▼' if delta < 0 else '•') }} {{ delta|abs }}% {% if sub_key %}{{ t(sub_key) }}{% endif %}</div>
+  {% elif sub_key %}<div class="delta">{{ t(sub_key) }}</div>{% endif %}
+</div>
+{%- endmacro %}
+
+{% macro emojis(items, n=3) -%}
+{% for e in (items or [])[:n] %}<span class="chip" title="{{ e.emoji_name }}">{% if e.emoji_url %}<img src="{{ e.emoji_url }}" alt="{{ e.emoji_name }}" loading="lazy">{% else %}{{ e.emoji_name }}{% endif %}<span class="num" title="{{ e.c if e.c is defined else e.count }}">{{ (e.c if e.c is defined else e.count)|compact }}</span></span>{% endfor %}
+{%- endmacro %}
+
+{% macro pager(current, total, url_fn) -%}
+{% if total and total > 1 %}
+<nav class="pager" aria-label="pagination">
+  {% if current > 1 %}<a href="{{ url_fn(current - 1) }}">‹ {{ t("common.prev") }}</a>{% endif %}
+  {% set lo = [1, current - 2]|max %}{% set hi = [total, current + 2]|min %}
+  {% if lo > 1 %}<a href="{{ url_fn(1) }}">1</a>{% if lo > 2 %}<span>…</span>{% endif %}{% endif %}
+  {% for p in range(lo, hi + 1) %}{% if p == current %}<span class="on">{{ p }}</span>{% else %}<a href="{{ url_fn(p) }}">{{ p }}</a>{% endif %}{% endfor %}
+  {% if hi < total %}{% if hi < total - 1 %}<span>…</span>{% endif %}<a href="{{ url_fn(total) }}">{{ total }}</a>{% endif %}
+  {% if current < total %}<a href="{{ url_fn(current + 1) }}">{{ t("common.next") }} ›</a>{% endif %}
+</nav>
+{% endif %}
+{%- endmacro %}
+
+{% macro word_cloud(words, max_px=44, min_px=13) -%}
+{% if words %}
+{% set top = words[0].weight %}{% set low = words[-1].weight %}
+<div class="wcloud">
+  {% for w in words|sort(attribute='text') %}
+  {% set r = ((w.weight - low) / ((top - low) or 1)) %}
+  {% set px = (min_px + (max_px - min_px) * (r ** 0.6))|round(0, 'floor')|int %}
+  <span style="font-size:{{ px }}px;font-weight:{{ 600 if r > 0.35 else 500 }};" class="{{ 'w-hi' if r > 0.6 else ('w-mid' if r > 0.25 else 'w-lo') }}" title="{{ w.weight }}">{{ w.text }}</span>
+  {% endfor %}
+</div>
+{% else %}<div class="empty">{{ t("common.empty") }}</div>{% endif %}
+{%- endmacro %}
+
+{% macro word_bars(words, n=15) -%}
+{% if words %}{% set top = words[0].weight or 1 %}
+<ol class="bars">
+  {% for w in words[:n] %}
+  <li><span class="rank {{ 'top' if loop.index <= 3 }}">{{ loop.index }}</span><span class="truncate">{{ w.text }}</span><span class="mono muted">{{ "{:,}".format(w.weight) }}</span><span></span><span class="track"><i style="width:{{ (100 * w.weight / top)|round(1) }}%"></i></span></li>
+  {% endfor %}
+</ol>
+{% else %}<div class="empty">{{ t("common.empty") }}</div>{% endif %}
+{%- endmacro %}
+
+{% macro heatmap(grid) -%}
+{% set flat = grid|sum(start=[]) %}{% set mx = (flat|max) if flat else 0 %}
+{% set days = ['一','二','三','四','五','六','日'] %}{% set days_en = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'] %}
+<div class="heat" role="img" aria-label="heatmap">
+  <span></span>{% for h in range(24) %}<span class="cl">{{ h if h % 3 == 0 else '' }}</span>{% endfor %}
+  {% for row in grid %}{% set wd = loop.index0 %}
+  <span class="rl" data-wd-zh="{{ days[wd] }}" data-wd-en="{{ days_en[wd] }}">{{ days[wd] }}</span>
+  {% for c in row %}{% set lv = 0 if not c or not mx else (1 + (3.999 * ((c / mx) ** 0.5))|int) %}
+  <span class="cell {{ 'l%d'|format([lv,4]|min) if lv else '' }}" title="{{ days_en[wd] }} {{ '%02d'|format(loop.index0) }}:00 · {{ c }}"></span>
+  {% endfor %}{% endfor %}
+</div>
+{%- endmacro %}

@@ -4,8 +4,7 @@
 1. DiscordChatExporter 的单频道/合并 JSON，根节点直接包含 messages
 2. 本项目的新格式，根节点包含 threads，每个 thread 包含 messages
 
-旧版 merged_final_clean.json 属于第一种格式，旧版脚本只读取 threads.item，
-因此会得到空数据库。这一版自动识别两种结构，并从 guild.id 获取服务器 ID。
+两种结构自动识别，并从 guild.id 获取服务器 ID。
 """
 import argparse
 import json
@@ -47,16 +46,12 @@ def create_tables(cur):
     CREATE TABLE IF NOT EXISTS claim_requests_v2(id INTEGER PRIMARY KEY AUTOINCREMENT,requester_id TEXT,target_id TEXT,target_name TEXT,status INTEGER DEFAULT 0,created_at DATETIME,UNIQUE(requester_id,target_id));
     CREATE TABLE IF NOT EXISTS web_visitors(user_id TEXT PRIMARY KEY,username TEXT,nickname TEXT,avatar_url TEXT,last_visit DATETIME);
     CREATE TABLE IF NOT EXISTS profile_views(id INTEGER PRIMARY KEY AUTOINCREMENT,target_user_id TEXT,viewer_user_id TEXT,viewer_name TEXT,viewer_avatar TEXT,timestamp DATETIME,UNIQUE(target_user_id,viewer_user_id));
-    CREATE INDEX IF NOT EXISTS idx_msg_author ON messages(author_id);
     CREATE INDEX IF NOT EXISTS idx_msg_author_message ON messages(author_id,message_id);
     CREATE INDEX IF NOT EXISTS idx_msg_author_thread ON messages(author_id,thread_id);
     CREATE INDEX IF NOT EXISTS idx_msg_timestamp ON messages(timestamp);
-    CREATE INDEX IF NOT EXISTS idx_msg_thread ON messages(thread_id);
     CREATE INDEX IF NOT EXISTS idx_msg_author_timestamp ON messages(author_id,timestamp);
     CREATE INDEX IF NOT EXISTS idx_msg_thread_timestamp ON messages(thread_id,timestamp);
-    CREATE INDEX IF NOT EXISTS idx_react_user ON reactions(user_id);
     CREATE INDEX IF NOT EXISTS idx_react_user_message ON reactions(user_id,message_id);
-    CREATE INDEX IF NOT EXISTS idx_react_msg ON reactions(message_id);
     CREATE INDEX IF NOT EXISTS idx_react_msg_user ON reactions(message_id,user_id);
     CREATE INDEX IF NOT EXISTS idx_mentions_user ON mentions(mentioned_user_id);
     CREATE INDEX IF NOT EXISTS idx_mentions_author ON mentions(author_id);
@@ -64,7 +59,6 @@ def create_tables(cur):
     CREATE INDEX IF NOT EXISTS idx_stats_count ON user_stats(msg_count);
     CREATE INDEX IF NOT EXISTS idx_msg_hour ON messages(strftime('%H', timestamp));
     CREATE INDEX IF NOT EXISTS idx_msg_day  ON messages(substr(timestamp, 1, 10));
-    CREATE INDEX IF NOT EXISTS idx_react_msg_id ON reactions(message_id, id);
     """)
 
 
@@ -76,11 +70,9 @@ def inspect_json(filename):
         channel = data.get("channel") or {}
         return {"server_id": str(guild.get("id") or channel.get("guildId") or channel.get("guild_id") or "unknown"), "server_name": guild.get("name") or "Imported Discord Server", "icon_url": guild.get("iconUrl"), "format": "threads" if data.get("threads") is not None else "messages"}
 
-    # 注意：每个键的提取都必须使用独立的文件句柄。ijson 的迭代器会按内部缓冲区
-    # （而非按逻辑读取量）预读文件，如果多次调用 ijson.items() 共享同一个文件对象，
-    # 第二次调用会从被预读跳过的、非法的中间位置开始解析，从而抛出
-    # "parse error: premature EOF" / "invalid char in json text" 等异常。
-    # 这正是"下载好的 JSON 无法导入"报错的根本原因。
+    # 每个键的提取都必须使用独立的文件句柄。ijson 的迭代器会按内部缓冲区
+    # （而非按逻辑读取量）预读文件，共享同一个文件对象会让第二次调用从被
+    # 预读跳过的非法位置开始解析，从而抛出 "premature EOF" / "invalid char"。
     with open(filename, "rb") as f:
         guild = next(ijson.items(f, "guild"), {}) or {}
     with open(filename, "rb") as f:

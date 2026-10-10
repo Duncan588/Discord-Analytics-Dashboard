@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<script>try{var t=localStorage.getItem("dixo-theme");if(t==="dark"||t==="light")document.documentElement.setAttribute("data-theme",t);else if(matchMedia("(prefers-color-scheme: dark)").matches)document.documentElement.setAttribute("data-theme","dark");}catch(e){}</script>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>{% block title %}{{ current_server.name if current_server else "Dixo" }} · {{ tr("nav.archive") }}{% endblock %}</title>
+  <meta name="discord-client-id" content="{{ discord_client_id }}">
+  <link rel="stylesheet" href="{{ asset('css/dixo.css') }}">
+  <script src="{{ asset('js/discord-activity.js') }}" defer></script>
+  <script>window.DIXO_I18N = {{ i18n_en() | tojson }};</script>
+  <script src="{{ asset('js/dixo-format.js') }}"></script>
+  <script src="{{ asset('js/dixo-theme.js') }}"></script>
+  <script src="{{ asset('js/dixo-i18n.js') }}" defer></script>
+  {% block head %}{% endblock %}
+  <script src="{{ asset('vendor/ui/alpine/cdn.min.js') }}" defer></script>
+</head>
+<body {% block body_attrs %}{% endblock %}>
+  {% block before_nav %}{% endblock %}
+  {% set fallback_avatar = 'https://cdn.discordapp.com/embed/avatars/0.png' %}
+  {% block gnav %}<header class="gnav">
+    <div class="gnav-inner">
+      <a class="brand min0" href="/">
+        <img src="{{ (current_server.icon_url if current_server and current_server.icon_url) or fallback_avatar }}" alt="" onerror="this.src='{{ fallback_avatar }}'">
+        <span class="name">{{ current_server.name if current_server else "Discord" }}</span><span class="sub">{{ t("nav.archive") }}</span>
+      </a>
+      {% if current_user and current_server %}<form class="gnav-search" action="/search" method="get" role="search">
+        <label class="sr-only" for="q">{{ tr("search.placeholder") }}</label>
+        <input id="q" type="search" name="q" value="{{ query|default('') }}" placeholder="{{ tr('search.placeholder') }}" data-i18n-attr="placeholder:search.placeholder">
+      </form>{% else %}<span style="flex:1"></span>{% endif %}
+      <div class="gnav-actions">
+        {% block nav_actions %}{% endblock %}
+        <button type="button" class="theme-toggle" data-theme-toggle aria-label="theme">🌙</button>
+        {% if current_user %}
+        <details class="menu">
+          <summary aria-label="menu"><img class="avatar av-32" src="{{ current_user.avatar if current_user and current_user.avatar else fallback_avatar }}" alt="" onerror="this.src='{{ fallback_avatar }}'"></summary>
+          <div class="menu-panel">
+            <a href="/">{{ t("nav.home") }}</a>
+            <a href="/me">{{ t("nav.my_profile") }}</a>
+            <a href="/servers">{{ t("nav.switch_server") }}</a>
+            {% if admin_level %}<a href="/admin">{{ t("nav.admin") }}</a><a href="/admin/bot-features">{{ t("nav.bot_features") }}</a>{% endif %}
+            <button type="button" data-language-toggle>{{ t("nav.language") }}</button>
+            <a class="danger" href="/logout">{{ t("nav.logout") }}</a>
+          </div>
+        </details>
+        {% else %}
+        <button class="btn btn-ghost" type="button" data-language-toggle>{{ t("nav.language") }}</button>
+        <a class="btn btn-primary" id="web-login-action" href="/auth/discord">{{ t("nav.login") }}</a>
+        {% endif %}
+      </div>
+    </div>
+  </header>{% endblock %}
+  <main class="page{% block page_class %}{% endblock %}">
+    {% block content %}{% endblock %}
+  </main>
+  {% block footer %}<footer class="foot"><a href="/privacy">{{ t("nav.privacy") }}</a><a href="/terms">{{ t("nav.terms") }}</a></footer>{% endblock %}
+  {% block modals %}{% endblock %}
+  {% block scripts %}{% endblock %}
+</body>
+</html>
