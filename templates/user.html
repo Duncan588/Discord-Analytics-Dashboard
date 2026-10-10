@@ -63,7 +63,7 @@
   <div class="card">
     <div class="card-head"><h2 class="h-card">{{ t("user.activity") }}</h2>
       <div class="seg"><button type="button" :class="chartMode==='daily'&&'on'" @click="chartMode='daily'">{{ t("home.trend.daily") }}</button><button type="button" :class="chartMode==='hourly'&&'on'" @click="chartMode='hourly'">{{ t("home.trend.hourly") }}</button></div></div>
-    <div class="chart sm"><canvas id="chartDaily" x-show="chartMode==='daily'"></canvas><canvas id="chartHourly" x-show="chartMode==='hourly'" x-cloak></canvas></div>
+    <div class="chart sm"><div x-show="chartMode==='daily'" style="height:100%"><canvas id="chartDaily"></canvas></div><div x-show="chartMode==='hourly'" x-cloak style="height:100%"><canvas id="chartHourly"></canvas></div></div>
   </div>
   <div class="card">
     <div class="card-head"><h2 class="h-card">{{ t("user.incoming") }}</h2></div>
@@ -171,18 +171,26 @@
 
 {% block scripts %}
 <script>
+window.dixoWhenChart = window.dixoWhenChart || function (fn) {
+  if (window.Chart) { fn(); return; }
+  var n = 0, t = setInterval(function () {
+    if (window.Chart || ++n > 100) { clearInterval(t); if (window.Chart) fn(); }
+  }, 50);
+};
 (function () {
   const daily = {{ chart_daily | tojson }}, hourly = {{ chart_hourly | tojson }};
   function init() {
-    if (!window.Chart) return;
-    Chart.defaults.font.family = getComputedStyle(document.body).fontFamily; Chart.defaults.color = '#86868b';
-    const T = (k, zh) => window.dixoT ? dixoT(k, zh) : zh;
-    const opts = { responsive: true, maintainAspectRatio: false, interaction: { intersect: false, mode: 'index' },
-      plugins: { legend: { display: false }, tooltip: { backgroundColor: 'rgba(29,29,31,.92)', cornerRadius: 8 } },
-      scales: { y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,.06)' }, border: { display: false }, ticks: { maxTicksLimit: 4 } },
-        x: { grid: { display: false }, border: { display: false }, ticks: { maxTicksLimit: 6, maxRotation: 0 } } } };
-    new Chart(document.getElementById('chartDaily'), { type: 'bar', data: { labels: daily.map(d => d.day), datasets: [{ label: T('home.trend.messages', '消息'), data: daily.map(d => d.c), backgroundColor: '#2997ff', borderRadius: 2, maxBarThickness: 10 }] }, options: opts });
-    new Chart(document.getElementById('chartHourly'), { type: 'bar', data: { labels: hourly.map(d => d.hour), datasets: [{ label: T('home.trend.messages', '消息'), data: hourly.map(d => d.c), backgroundColor: '#0066cc', borderRadius: 4, maxBarThickness: 16 }] }, options: opts });
+    window.dixoWhenChart(function () {
+      try {
+        const T = (k, zh) => window.dixoT ? dixoT(k, zh) : zh;
+        const opts = { responsive: true, maintainAspectRatio: false, animation: { duration: 250 },
+          plugins: { legend: { display: false }, tooltip: { backgroundColor: 'rgba(29,29,31,.92)', cornerRadius: 8 } },
+          scales: { y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,.06)', drawTicks: false }, border: { display: false }, ticks: { maxTicksLimit: 4 } },
+            x: { grid: { display: false }, border: { display: false }, ticks: { maxTicksLimit: 6, maxRotation: 0 } } } };
+        new Chart(document.getElementById('chartDaily'), { type: 'bar', data: { labels: daily.map(d => d.day), datasets: [{ label: T('home.trend.messages', '消息'), data: daily.map(d => d.c), backgroundColor: '#2997ff', borderRadius: 2, maxBarThickness: 10 }] }, options: opts });
+        new Chart(document.getElementById('chartHourly'), { type: 'bar', data: { labels: hourly.map(d => d.hour), datasets: [{ label: T('home.trend.messages', '消息'), data: hourly.map(d => d.c), backgroundColor: '#0066cc', borderRadius: 4, maxBarThickness: 16 }] }, options: opts });
+      } catch (err) { console.error('user charts', err); }
+    });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true }); else init();
 })();
