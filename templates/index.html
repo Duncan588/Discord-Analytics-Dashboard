@@ -70,7 +70,7 @@
       <li><span class="rank {{ 'top' if loop.index <= 3 }}">{{ loop.index }}</span>
         <a href="/user/{{ u.user_id }}">{{ ui.avatar(u.avatar_url, 32) }}</a>
         <div class="min0" style="flex:1"><a class="truncate" style="display:block;color:var(--ink);font-weight:500" href="/user/{{ u.user_id }}">{{ u.nickname or u.username }}</a><div class="row" style="gap:4px;margin-top:2px">{{ ui.emojis(u.top_emojis) }}</div></div>
-        <span class="mono muted">{{ "{:,}".format(u.msg_count) }}</span></li>
+        <span class="mono muted">{{ u.msg_count|compact }}</span></li>
       {% else %}<li class="empty">{{ t("common.empty") }}</li>{% endfor %}
     </ol>
   </div>
@@ -97,7 +97,7 @@
     <div class="card-head"><h2 class="h-card">{{ t("home.hot_threads") }}</h2></div>
     {% for th in top_threads %}
     <a class="post" href="https://discord.com/channels/{{ server_id }}/{{ th.thread_id }}" target="_blank" rel="noopener">
-      <div class="row between"><span class="post-title truncate">{{ th.name }}</span><span class="chip">💬 {{ "{:,}".format(th.msg_count) }}</span></div>
+      <div class="row between"><span class="post-title truncate">{{ th.name }}</span><span class="chip">💬 {{ th.msg_count|compact }}</span></div>
       <div class="post-text clamp-2">{{ th.first_content }}</div>
       <div class="post-meta">{{ ui.avatar(th.op_user.avatar_url, 24) }}<span>{{ th.op_user.nickname or th.op_user.username }}</span><span>·</span><span>{{ th.created_at | datetimeformat("%Y-%m-%d") }}</span></div>
     </a>
@@ -189,7 +189,7 @@
         <tbody><template x-for="u in board" :key="u.user_id"><tr>
           <td class="r mono faint" x-text="u.rank"></td>
           <td><a class="row" style="gap:10px;color:var(--ink)" :href="'/user/'+u.user_id"><img class="avatar av-24" :src="u.avatar_url || 'https://cdn.discordapp.com/embed/avatars/0.png'" alt="" loading="lazy" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'"><span class="truncate" x-text="u.nickname || u.username"></span></a></td>
-          <td class="r mono" x-text="u.msg_count.toLocaleString()"></td><td class="r mono muted" x-text="(u.reaction_received_count||0).toLocaleString()"></td>
+          <td class="r mono" x-text="dixoCompact(u.msg_count)"></td><td class="r mono muted" x-text="dixoCompact(u.reaction_received_count||0)"></td>
         </tr></template></tbody></table>
       <div class="empty" x-show="loading">{{ t("home.leaderboard.loading") }}</div>
     </div>

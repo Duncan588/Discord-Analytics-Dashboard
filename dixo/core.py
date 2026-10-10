@@ -782,6 +782,31 @@ def ensure_server_indexes():
 def parse_and_convert(time_str):
     return to_local_datetime(time_str)
 
+def compact_number(value):
+    """Compact display: 100, 1.2K, 5M, 1B (ASCII suffixes; works for zh UI too)."""
+    try:
+        n = float(value)
+    except (TypeError, ValueError):
+        return value if value is not None else "0"
+    if n < 0:
+        return "-" + compact_number(-n)
+    if n < 1000:
+        return str(int(n)) if n == int(n) else f"{n:.1f}".rstrip("0").rstrip(".")
+    for div, suf in ((1_000_000_000, "B"), (1_000_000, "M"), (1_000, "K")):
+        if n >= div:
+            v = n / div
+            if v >= 100:
+                return f"{int(round(v))}{suf}"
+            s = f"{v:.1f}".rstrip("0").rstrip(".")
+            return f"{s}{suf}"
+    return str(int(n))
+
+
+@app.template_filter("compact")
+def compact_filter(value):
+    return compact_number(value)
+
+
 @app.template_filter("datetimeformat")
 def datetimeformat_filter(value, format="%Y-%m-%d %H:%M"):
     dt = parse_and_convert(value)

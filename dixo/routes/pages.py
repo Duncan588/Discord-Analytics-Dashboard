@@ -278,7 +278,7 @@ def user_profile(user_id):
     if visitor["id"] != str(user_id):
         _safe_visitor_write(dixo_visitors.record_profile_view, user_id, visitor, utc_now_iso())
     view_count, recent_viewers = dixo_visitors.profile_view_stats(get_visitors_db(), user_id)
-    profile = profile_engine.load(sid, data_engine.get_merged_ids(sid, user_id), conn, wait=0.3)
+    profile = profile_engine.load(sid, data_engine.get_merged_ids(sid, user_id), conn, wait=0)
     merged_ids = profile["merged_ids"]
     ph = ",".join("?" for _ in merged_ids)
     # Time order can use the author/timestamp index and keeps the first paint
@@ -427,25 +427,24 @@ def user_profile(user_id):
             """,
             (user_id, (fav_page - 1) * 5),
         ).fetchall()
-        titles_by_guild = {}
+        # Only look up the few favorited thread ids — never SELECT * FROM threads.
+        titles = {}
+        by_guild = {}
         for r in fav_rows:
-            gid = str(r["guild_id"])
-            if gid in titles_by_guild:
-                continue
-            db_path = server_db_path(gid)
-            if not server_db_exists(gid):
-                titles_by_guild[gid] = {}
+            by_guild.setdefault(str(r["guild_id"]), []).append(str(r["thread_id"]))
+        for gid, tids in by_guild.items():
+            if not server_db_exists(gid) or not tids:
                 continue
             try:
                 g = db_connect(server_db_path(gid))
-                titles_by_guild[gid] = {
-                    str(row["thread_id"]): row["name"]
-                    for row in g.execute("SELECT thread_id,name FROM threads")
-                }
-                g.close()
+                try:
+                    ph = ",".join("?" for _ in tids)
+                    for row in g.execute(f"SELECT thread_id,name FROM threads WHERE thread_id IN ({ph})", tids):
+                        titles[(gid, str(row["thread_id"]))] = row["name"]
+                finally:
+                    g.close()
             except Exception:
                 app.logger.exception("读取服务器帖子标题失败 guild=%s", gid)
-                titles_by_guild[gid] = {}
         for r in fav_rows:
             gid = str(r["guild_id"])
             tid = str(r["thread_id"])
@@ -453,7 +452,7 @@ def user_profile(user_id):
                 "guild_id": gid,
                 "guild_name": r["guild_name"],
                 "thread_id": tid,
-                "thread_name": titles_by_guild.get(gid, {}).get(tid) or f"帖子 {tid}",
+                "thread_name": titles.get((gid, tid)) or f"帖子 {tid}",
                 "created_at": (r["created_at"] or "")[:16].replace("T", " "),
             })
 

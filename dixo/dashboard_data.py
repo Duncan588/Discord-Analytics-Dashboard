@@ -201,14 +201,15 @@ def profile_base(main, summ, ids):
     ph = ",".join("?" for _ in ids)
     s = summ.execute(f"SELECT COALESCE(SUM(msg_count),0) m, COALESCE(SUM(react_recv),0) rr, COALESCE(SUM(react_given),0) rg, "
                      f"MIN(first_ts) f, MAX(last_ts) l FROM user_stats WHERE user_id IN ({ph})", ids).fetchone()
-    thread_count = main.execute(f"SELECT count(*) FROM (SELECT DISTINCT thread_id FROM messages WHERE author_id IN ({ph}))", ids).fetchone()[0]
+    # Prefer summary.thread_stats (indexed); avoid DISTINCT scan on 5GB messages.
     started = summ.execute(f"SELECT count(*) FROM thread_stats WHERE op_author IN ({ph})", ids).fetchone()[0]
+    thread_count = started
     hours = [0] * 24
     for h, c in summ.execute(f"SELECT hour,SUM(c) FROM user_hour WHERE user_id IN ({ph}) GROUP BY hour", ids):
         hours[int(h)] = c
-    daily = []
-    for day, c in summ.execute(f"SELECT day,SUM(c) FROM user_day WHERE user_id IN ({ph}) GROUP BY day ORDER BY day", ids):
-        daily.append({"day": day, "c": c})
+    daily = [{"day": day, "c": c} for day, c in summ.execute(
+        f"SELECT day,SUM(c) FROM user_day WHERE user_id IN ({ph}) GROUP BY day ORDER BY day", ids)]
+    active_days = summ.execute(f"SELECT count(DISTINCT day) FROM user_day WHERE user_id IN ({ph})", ids).fetchone()[0]
 
     def emo(table):
         return [dict(r) for r in summ.execute(
@@ -216,7 +217,7 @@ def profile_base(main, summ, ids):
     rank_row = summ.execute("SELECT count(*)+1 FROM user_stats WHERE msg_count>?", (s["m"],)).fetchone()
     return {"merged_ids": ids, "msg_count": s["m"], "reaction_received_count": s["rr"], "reaction_given_count": s["rg"],
             "first_msg_at": s["f"], "last_msg_at": s["l"], "thread_count": thread_count, "threads_started": started,
-            "rank": rank_row[0] if s["m"] else None, "active_days": len(daily),
+            "rank": rank_row[0] if s["m"] else None, "active_days": active_days,
             "chart_daily": daily, "chart_hourly": [{"hour": f"{i:02d}:00", "c": v} for i, v in enumerate(hours)],
             "top_emojis_given": emo("user_emoji_given"), "top_emojis_received": emo("user_emoji_recv")}
 

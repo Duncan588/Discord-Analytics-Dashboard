@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% import "components/ui.html" as ui %}
 {% block title %}{{ user.nickname or user.username }} · {{ tr("nav.archive") }}{% endblock %}
-{% block head %}<script src="{{ asset('vendor/ui/chart/chart.umd.min.js') }}" defer></script>{% endblock %}
+{% block head %}<script src="{{ asset('js/dixo-format.js') }}" defer></script><script src="{{ asset('vendor/ui/chart/chart.umd.min.js') }}" defer></script>{% endblock %}
 {% block body_attrs %}x-data="{ chartMode: 'daily', showViews: false }"{% endblock %}
 {% macro tab_url(p, tab=active_tab, sort=current_sort) -%}?tab={{ tab }}&sort={{ sort }}&page={{ p }}#records{%- endmacro %}
 {% block content %}
@@ -67,19 +67,19 @@
   </div>
   <div class="card">
     <div class="card-head"><h2 class="h-card">{{ t("user.incoming") }}</h2></div>
-    {% if not profile_ready %}<div class="empty">{{ t("user.computing") }}</div>{% endif %}
-    <ul class="list">{% for u in interactions_incoming %}<a href="/user/{{ u.user_id }}">{{ ui.avatar(u.avatar_url, 32) }}<span class="truncate" style="flex:1;color:var(--ink)">{{ u.nickname or u.username }}</span><span class="chip num">{{ u.score }} {{ t("common.times") }}</span></a>{% endfor %}</ul>
+    {% if not profile_ready %}<div class="empty" id="incoming-placeholder">{{ t("user.computing") }}</div>{% endif %}
+    <ul class="list" id="incoming-list">{% for u in interactions_incoming %}<a href="/user/{{ u.user_id }}">{{ ui.avatar(u.avatar_url, 32) }}<span class="truncate" style="flex:1;color:var(--ink)">{{ u.nickname or u.username }}</span><span class="chip num" title="{{ u.score }}">{{ u.score|compact }} {{ t("common.times") }}</span></a>{% endfor %}</ul>
     <div class="card-head" style="margin-top:var(--space-4)"><h2 class="h-card">{{ t("user.outgoing") }}</h2></div>
-    <ul class="list">{% for u in interactions_outgoing %}<a href="/user/{{ u.user_id }}">{{ ui.avatar(u.avatar_url, 32) }}<span class="truncate" style="flex:1;color:var(--ink)">{{ u.nickname or u.username }}</span><span class="chip num">{{ u.score }} {{ t("common.times") }}</span></a>{% endfor %}</ul>
+    <ul class="list" id="outgoing-list">{% for u in interactions_outgoing %}<a href="/user/{{ u.user_id }}">{{ ui.avatar(u.avatar_url, 32) }}<span class="truncate" style="flex:1;color:var(--ink)">{{ u.nickname or u.username }}</span><span class="chip num" title="{{ u.score }}">{{ u.score|compact }} {{ t("common.times") }}</span></a>{% endfor %}</ul>
   </div>
 </section>
 
 <section class="grid g-3" style="margin-top:var(--space-4)">
   <div class="card span-2">
     <div class="card-head"><div><h2 class="h-card">{{ t("user.words") }}</h2><div class="card-sub">{{ t("user.words.hint") }}</div></div></div>
-    {% if profile_ready or word_cloud_data %}{{ ui.word_cloud(word_cloud_data[:40], 38, 13) }}{% else %}<div class="empty">{{ t("user.computing") }}</div>{% endif %}
+    <div id="user-wordcloud">{% if profile_ready or word_cloud_data %}{{ ui.word_cloud(word_cloud_data[:40], 38, 13) }}{% else %}<div class="empty">{{ t("user.computing") }}</div>{% endif %}</div>
   </div>
-  <div class="card"><div class="card-head"><h2 class="h-card">{{ t("home.words.rank") }}</h2></div>{{ ui.word_bars(word_cloud_data, 10) }}</div>
+  <div class="card"><div class="card-head"><h2 class="h-card">{{ t("home.words.rank") }}</h2></div><div id="user-wordbars">{{ ui.word_bars(word_cloud_data, 10) }}</div></div>
 </section>
 
 {% if is_self %}
@@ -133,7 +133,7 @@
     <div class="post">
       <div class="row between"><a class="post-title truncate" style="color:inherit" href="https://discord.com/channels/{{ server_id }}/{{ th.thread_id }}" target="_blank" rel="noopener">{{ th.name }}</a><span class="faint" style="font-size:12px;flex:none">{{ th.created_at | datetimeformat }}</span></div>
       <div class="post-text clamp-2">{{ th.first_content }}</div>
-      <div class="post-meta"><span class="chip">💬 {{ th.reply_count }}</span>{% if th.top_emoji_url %}<span class="chip"><img src="{{ th.top_emoji_url }}" alt="">{{ th.top_emoji_count }}</span>{% endif %}
+      <div class="post-meta"><span class="chip" title="{{ th.reply_count }}">💬 {{ th.reply_count|compact }}</span>{% if th.top_emoji_url %}<span class="chip"><img src="{{ th.top_emoji_url }}" alt="">{{ th.top_emoji_count }}</span>{% endif %}
       {% if is_self %}
       <form action="/api/social/favorite" method="post" style="display:inline">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -187,12 +187,69 @@ window.dixoWhenChart = window.dixoWhenChart || function (fn) {
           plugins: { legend: { display: false }, tooltip: { backgroundColor: 'rgba(29,29,31,.92)', cornerRadius: 8 } },
           scales: { y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,.06)', drawTicks: false }, border: { display: false }, ticks: { maxTicksLimit: 4 } },
             x: { grid: { display: false }, border: { display: false }, ticks: { maxTicksLimit: 6, maxRotation: 0 } } } };
+        var tickCb = function (v) { return (window.dixoCompact ? dixoCompact(v) : v); };
+        opts.scales.y.ticks.callback = tickCb;
         new Chart(document.getElementById('chartDaily'), { type: 'bar', data: { labels: daily.map(d => d.day), datasets: [{ label: T('home.trend.messages', '消息'), data: daily.map(d => d.c), backgroundColor: '#2997ff', borderRadius: 2, maxBarThickness: 10 }] }, options: opts });
         new Chart(document.getElementById('chartHourly'), { type: 'bar', data: { labels: hourly.map(d => d.hour), datasets: [{ label: T('home.trend.messages', '消息'), data: hourly.map(d => d.c), backgroundColor: '#0066cc', borderRadius: 4, maxBarThickness: 16 }] }, options: opts });
       } catch (err) { console.error('user charts', err); }
     });
   }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true }); else init();
+  function fillList(el, rows) {
+    if (!el) return;
+    var times = (window.dixoT ? dixoT('common.times', '次') : '次');
+    el.innerHTML = (rows || []).map(function (u) {
+      var name = u.nickname || u.username || u.user_id;
+      var av = u.avatar_url || 'https://cdn.discordapp.com/embed/avatars/0.png';
+      var sc = window.dixoCompact ? dixoCompact(u.score) : u.score;
+      return '<a href="/user/' + u.user_id + '"><img class="avatar av-32" src="' + av + '" alt=""><span class="truncate" style="flex:1;color:var(--ink)">' + name + '</span><span class="chip num" title="' + u.score + '">' + sc + ' ' + times + '</span></a>';
+    }).join('') || '<li class="empty">—</li>';
+  }
+  function fillWords(words) {
+    var cloud = document.getElementById('user-wordcloud');
+    var bars = document.getElementById('user-wordbars');
+    if (!words || !words.length) return;
+    if (cloud) {
+      var top = words[0].weight, low = words[words.length - 1].weight || 1;
+      cloud.innerHTML = '<div class="wcloud">' + words.slice(0, 40).sort(function (a, b) { return a.text < b.text ? -1 : 1; }).map(function (w) {
+        var r = (w.weight - low) / ((top - low) || 1);
+        var px = Math.floor(13 + (38 - 13) * Math.pow(r, 0.6));
+        var color = r > 0.6 ? '#1d1d1f' : (r > 0.25 ? '#0066cc' : '#6e6e73');
+        return '<span style="font-size:' + px + 'px;font-weight:' + (r > 0.35 ? 600 : 500) + ';color:' + color + '" title="' + w.weight + '">' + w.text + '</span>';
+      }).join('') + '</div>';
+    }
+    if (bars) {
+      var max = words[0].weight || 1;
+      bars.innerHTML = '<ol class="bars">' + words.slice(0, 10).map(function (w, i) {
+        var pct = Math.round(100 * w.weight / max);
+        return '<li><span class="rank">' + (i + 1) + '</span><span class="truncate">' + w.text + '</span><span class="num">' + (window.dixoCompact ? dixoCompact(w.weight) : w.weight) + '</span><span class="track"><i style="width:' + pct + '%"></i></span></li>';
+      }).join('') + '</ol>';
+    }
+  }
+  function pollExtra() {
+    var ready = {{ 'true' if profile_ready else 'false' }};
+    if (ready) return;
+    var uid = {{ user.user_id | tojson }};
+    var n = 0;
+    var t = setInterval(function () {
+      n++;
+      fetch('/api/v1/users/' + uid + '/profile', { credentials: 'same-origin' })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          if (!j || !j.ok || !j.data || !j.data.complete) {
+            if (n > 40) clearInterval(t);
+            return;
+          }
+          clearInterval(t);
+          var ph = document.getElementById('incoming-placeholder');
+          if (ph) ph.remove();
+          fillList(document.getElementById('incoming-list'), j.data.interactions_incoming);
+          fillList(document.getElementById('outgoing-list'), j.data.interactions_outgoing);
+          fillWords(j.data.word_cloud_data);
+        }).catch(function () { if (n > 40) clearInterval(t); });
+    }, 400);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { init(); pollExtra(); }, { once: true });
+  else { init(); pollExtra(); }
 })();
 </script>
 {% endblock %}

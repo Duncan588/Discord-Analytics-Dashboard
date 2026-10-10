@@ -44,7 +44,7 @@
         tooltip: { backgroundColor: dark ? 'rgba(28,28,30,.95)' : 'rgba(29,29,31,.92)', padding: 10, cornerRadius: 8 }
       },
       scales: {
-        y: { beginAtZero: true, grid: grid, border: { display: false }, ticks: { padding: 8, maxTicksLimit: 4, color: tick } },
+        y: { beginAtZero: true, grid: grid, border: { display: false }, ticks: { padding: 8, maxTicksLimit: 4, color: tick, callback: function (v) { return window.dixoCompact ? dixoCompact(v) : v; } } },
         x: { grid: { display: false }, border: { display: false },
           ticks: { maxTicksLimit: mobile ? 4 : 8, maxRotation: mobile ? 0 : 0, autoSkip: true, color: tick,
             callback: function (val, i, ticks) {
@@ -174,7 +174,7 @@
         if (countsEl) {
           countsEl.innerHTML = order.map(function (k) {
             var lab = (labels[k] && (document.documentElement.lang === 'en' ? labels[k].en : labels[k].zh)) || k;
-            return '<div class="activity-tag-card"><div class="lab">' + lab + '</div><div class="n num">' + (counts[k] || 0).toLocaleString() + '</div></div>';
+            return '<div class="activity-tag-card"><div class="lab">' + lab + '</div><div class="n num" title="' + (counts[k] || 0) + '">' + (window.dixoCompact ? dixoCompact(counts[k] || 0) : (counts[k] || 0)) + '</div></div>';
           }).join('');
         }
         var filter = this.tagFilter || 'always_active';

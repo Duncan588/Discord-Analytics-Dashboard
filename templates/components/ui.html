@@ -6,7 +6,7 @@
 {% macro kpi(label_key, value, delta=None, sub_key=None, click=None) -%}
 <div class="card kpi{{ ' clickable' if click }}" {% if click %}@click="{{ click }}" @keydown.enter="{{ click }}" role="button" tabindex="0"{% endif %}>
   <div class="label">{{ t(label_key) }}</div>
-  <div class="value">{{ "{:,}".format(value or 0) }}</div>
+  <div class="value" title="{{ value or 0 }}">{{ (value or 0)|compact }}</div>
   {% if delta is not none %}
   <div class="delta {{ 'up' if delta > 0 else ('down' if delta < 0 else '') }}">{{ '▲' if delta > 0 else ('▼' if delta < 0 else '•') }} {{ delta|abs }}% {% if sub_key %}{{ t(sub_key) }}{% endif %}</div>
   {% elif sub_key %}<div class="delta">{{ t(sub_key) }}</div>{% endif %}
@@ -14,7 +14,7 @@
 {%- endmacro %}
 
 {% macro emojis(items, n=3) -%}
-{% for e in (items or [])[:n] %}<span class="chip" title="{{ e.emoji_name }}">{% if e.emoji_url %}<img src="{{ e.emoji_url }}" alt="{{ e.emoji_name }}" loading="lazy">{% else %}{{ e.emoji_name }}{% endif %}<span class="num">{{ e.c if e.c is defined else e.count }}</span></span>{% endfor %}
+{% for e in (items or [])[:n] %}<span class="chip" title="{{ e.emoji_name }}">{% if e.emoji_url %}<img src="{{ e.emoji_url }}" alt="{{ e.emoji_name }}" loading="lazy">{% else %}{{ e.emoji_name }}{% endif %}<span class="num" title="{{ e.c if e.c is defined else e.count }}">{{ (e.c if e.c is defined else e.count)|compact }}</span></span>{% endfor %}
 {%- endmacro %}
 
 {% macro pager(current, total, url_fn) -%}
