@@ -261,9 +261,9 @@ def profile_base(main, summ, ids):
     try:
         caught = summ.execute("SELECT value FROM meta WHERE key='caught_up'").fetchone()
         if not (caught and caught[0] == "1"):
-            # live_msg fallback — author index exists; prefer truth over mid-rebuild crumbs
+            # While summary rebuilds (or was double-written), trust live author COUNT.
             live_n = main.execute(f"SELECT COUNT(*) FROM messages WHERE author_id IN ({ph})", ids).fetchone()[0]
-            if live_n and live_n > (msg_count or 0):
+            if live_n is not None:
                 msg_count = live_n
     except Exception:
         pass

@@ -38,6 +38,7 @@ class SummaryEngine:
 
     # ---- refresh ----
     def _refresh(self, sid):
+        again = False
         try:
             res = summary.refresh(self.server_db_path(sid), budget_seconds=self.budget)
             self.log.info("summary.refresh sid=%s %s", sid, res)
@@ -57,14 +58,20 @@ class SummaryEngine:
                     self.log.exception("save_last_good_kpis failed sid=%s", sid)
                 if self.after_refresh:
                     self.after_refresh(sid)
-        except Exception:
-            self.log.exception("summary refresh failed sid=%s", sid)
-            again = False
+        except Exception as err:
+            # Lock busy from another process is expected — retry later.
+            if "summary lock busy" in str(err):
+                self.log.info("summary.refresh deferred sid=%s (%s)", sid, err)
+                again = True
+            else:
+                self.log.exception("summary refresh failed sid=%s", sid)
+                again = False
         finally:
             with self._lock:
                 self._running.discard(sid)
         if again:
             self.schedule(sid, force=True)
+
 
     def schedule(self, sid, force=False):
         if self.cloud_enabled():

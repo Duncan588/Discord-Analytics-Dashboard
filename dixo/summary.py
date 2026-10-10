@@ -231,6 +231,26 @@ def refresh(main_db_path, budget_seconds=20.0, batch=20000):
     started = time.monotonic()
     spath = summary_path(main_db_path)
     build_path = spath + ".build"
+    lock_path = spath + ".lock"
+    lock_fd = open(lock_path, "a+")
+    try:
+        import fcntl
+        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except Exception as e:
+        lock_fd.close()
+        raise RuntimeError(f"summary lock busy: {e}") from e
+    try:
+        return _refresh_locked(main_db_path, spath, build_path, budget_seconds, batch, started)
+    finally:
+        try:
+            import fcntl
+            fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        lock_fd.close()
+
+
+def _refresh_locked(main_db_path, spath, build_path, budget_seconds, batch, started):
     connect_summary(spath).close()  # ensure live schema exists for readers
     conn = sqlite3.connect(main_db_path, timeout=60, check_same_thread=False)
     conn.row_factory = sqlite3.Row
