@@ -605,6 +605,7 @@ def init_portal_db():
         "active_started_at": "DATETIME",
         "recent_speed": "REAL DEFAULT 0"
     }
+    add_columns(conn, "servers", {"member_count": "INTEGER"})
     add_columns(conn, "download_tasks", task_migrations)
     add_columns(conn, "download_servers", {"use_default_bot": "INTEGER DEFAULT 0"})
     add_columns(conn, "servers", {"source_task_id": "INTEGER"})
@@ -1471,6 +1472,8 @@ def _downloader_process_alive():
         return found
 
 def ensure_downloader_process():
+    """Start discord_downloader if not running. With update_enabled configs it stays alive polling."""
+
     with _service_lock:
         if any(name == "discord_downloader" and proc.poll() is None for name, proc in _service_processes):
             return

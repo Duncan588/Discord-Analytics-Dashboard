@@ -81,13 +81,20 @@ def heatmap(summ, days=None):
     return grid
 
 
-def kpis(main, summ):
-    """Headline numbers with week-over-week deltas, relative to the latest active day in the data."""
+def kpis(main, summ, member_count=None):
+    """Headline numbers with week-over-week deltas, relative to the latest active day in the data.
+
+    member_count: live Discord roster size (portal presence / servers.member_count).
+    Falls back to COUNT(users) which includes leavers and anyone who ever posted — often higher.
+    """
     last = summ.execute("SELECT MAX(day) FROM msg_hour").fetchone()[0]
     total = summ.execute("SELECT COALESCE(SUM(msg_count),0) FROM user_stats").fetchone()[0]
+    users_seen = main.execute("SELECT count(*) FROM users").fetchone()[0]
+    members = int(member_count) if member_count is not None else users_seen
     res = {"total_msgs": total,
            "total_threads": main.execute("SELECT count(*) FROM threads").fetchone()[0],
-           "total_users": main.execute("SELECT count(*) FROM users").fetchone()[0],
+           "total_users": members,
+           "users_seen": users_seen,
            "total_reactions": summ.execute("SELECT COALESCE(SUM(c),0) FROM msg_react").fetchone()[0],
            "last_day": last}
     if last:

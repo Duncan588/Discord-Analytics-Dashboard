@@ -1,7 +1,10 @@
 {% extends "base.html" %}
 {% import "components/ui.html" as ui %}
-{% block head %}<script src="{{ asset('vendor/ui/chart/chart.umd.min.js') }}" defer></script>{% endblock %}
-{% block body_attrs %}x-data="dashboard()"{% endblock %}
+{% block head %}
+<script src="{{ asset('vendor/ui/chart/chart.umd.min.js') }}" defer></script>
+<script src="{{ asset('js/dixo-home.js') }}" defer></script>
+{% endblock %}
+{% block body_attrs %}x-data="dashboard"{% endblock %}
 {% block nav_actions %}
 <button class="btn btn-ghost" type="button" @click="showVisitors=true" title="{{ tr('nav.visitors') }}">{{ t("nav.visitors") }} <span class="num">{{ site_visitors|length }}</span></button>
 {% endblock %}
@@ -57,6 +60,7 @@
         </div>
       </div>
     </div>
+    <p id="dixo-trend-status" class="faint" style="font-size:12px;margin:0 0 8px"></p>
     <div class="chart"><div x-show="mode==='daily'" style="height:100%"><canvas id="chartDaily" aria-label="daily"></canvas></div><div x-show="mode==='hourly'" x-cloak style="height:100%"><canvas id="chartHourly" aria-label="hourly"></canvas></div></div>
   </div>
   <div class="card">
@@ -111,22 +115,22 @@
   </div>
 </section>
 
-<section class="card" id="analytics" style="margin-top:var(--space-4)" x-data="analyticsPanel()" x-init="boot()">
+<section class="card" id="analytics" style="margin-top:var(--space-4)" x-data="analyticsPanel" x-init="boot(); $el.setAttribute('data-dixo-booted','1')">
   <div class="card-head">
     <div><h2 class="h-card">{{ t("home.analytics") }}</h2>
       <div class="card-sub">{{ t("home.heatmap.hint") }}</div></div>
     <div class="row wrap">
       <div class="seg">
-        <button type="button" :class="grain==='day'&&'on'" @click="setGrain('day')">{{ t("home.grain.day") }}</button>
-        <button type="button" :class="grain==='week'&&'on'" @click="setGrain('week')">{{ t("home.grain.week") }}</button>
-        <button type="button" :class="grain==='month'&&'on'" @click="setGrain('month')">{{ t("home.grain.month") }}</button>
-        <button type="button" :class="grain==='year'&&'on'" @click="setGrain('year')">{{ t("home.grain.year") }}</button>
+        <button type="button" :class="grain==='day'&&'on'" @click="setGrain('day')" data-grain="day">{{ t("home.grain.day") }}</button>
+        <button type="button" :class="grain==='week'&&'on'" @click="setGrain('week')" data-grain="week">{{ t("home.grain.week") }}</button>
+        <button type="button" :class="grain==='month'&&'on'" @click="setGrain('month')" data-grain="month">{{ t("home.grain.month") }}</button>
+        <button type="button" :class="grain==='year'&&'on'" @click="setGrain('year')" data-grain="year">{{ t("home.grain.year") }}</button>
       </div>
       <div class="seg">
-        <button type="button" :class="preset==='30'&&'on'" @click="setPreset(30)">{{ t("home.trend.range30") }}</button>
-        <button type="button" :class="preset==='90'&&'on'" @click="setPreset(90)">{{ t("home.trend.range90") }}</button>
-        <button type="button" :class="preset==='365'&&'on'" @click="setPreset(365)">1Y</button>
-        <button type="button" :class="preset==='all'&&'on'" @click="setPreset('all')">{{ t("home.trend.rangeall") }}</button>
+        <button type="button" :class="preset==='30'&&'on'" @click="setPreset(30)" data-preset="30">{{ t("home.trend.range30") }}</button>
+        <button type="button" :class="preset==='90'&&'on'" @click="setPreset(90)" data-preset="90">{{ t("home.trend.range90") }}</button>
+        <button type="button" :class="preset==='365'&&'on'" @click="setPreset(365)" data-preset="365">1Y</button>
+        <button type="button" :class="preset==='all'&&'on'" @click="setPreset('all')" data-preset="all">{{ t("home.trend.rangeall") }}</button>
         <button type="button" :class="preset==='custom'&&'on'" @click="preset='custom'">{{ t("home.range.custom") }}</button>
       </div>
     </div>
@@ -178,127 +182,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
-window.dashboard = function dashboard() {
-  return {
-    mode: 'daily', range: 90, showVisitors: false, showBoard: false, board: [], page: 0, loading: false, done: false,
-    openBoard() { this.showBoard = true; if (!this.page) this.more(); },
-    more() {
-      if (this.loading || this.done) return; this.loading = true;
-      fetch('/api/v1/leaderboard?page=' + (this.page + 1), {credentials: 'same-origin'}).then(r => r.json()).then(j => {
-        const rows = (j && j.data) || []; this.board = this.board.concat(rows); this.page++; this.done = rows.length < 50; this.loading = false;
-      }).catch(() => { this.loading = false; });
-    },
-    onScroll(el) { if (el.scrollTop + el.clientHeight >= el.scrollHeight - 80) this.more(); },
-    setRange(n) { this.range = n; window.dixoCharts && window.dixoCharts.range(n); },
-  };
-};
-
-window.analyticsPanel = function analyticsPanel() {
-  return {
-    grain: 'day', preset: '90', since: '', until: '', data: null, charts: {}, status: '',
-    boot() { this.reload(); document.addEventListener('dixo:theme', () => this.paint()); document.addEventListener('dixo:lang', () => this.paint()); },
-    setGrain(g) { this.grain = g; this.paint(); },
-    setPreset(p) { this.preset = String(p); if (p !== 'custom') this.reload(); },
-    rangeArgs() {
-      if (this.preset === 'custom') return { since: this.since || null, until: this.until || null };
-      if (this.preset === 'all') return {};
-      const n = parseInt(this.preset, 10); const d = new Date(); d.setDate(d.getDate() - n);
-      return { since: d.toISOString().slice(0, 10) };
-    },
-    reload() {
-      const q = new URLSearchParams(); const r = this.rangeArgs();
-      if (r.since) q.set('since', r.since); if (r.until) q.set('until', r.until);
-      this.status = '…';
-      fetch('/api/v1/analytics?' + q.toString(), { credentials: 'same-origin' })
-        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-        .then(j => { if (!j || !j.data) throw new Error('bad payload'); this.data = j.data; this.status = ''; this.paint(); })
-        .catch(e => { this.status = String(e.message || e); console.error('analytics', e); });
-    },
-    series(kind) {
-      if (!this.data) return [];
-      if (kind === 'messages') return this.data['messages_' + this.grain] || this.data.messages_day || [];
-      if (kind === 'users') return this.data['active_users_' + this.grain] || this.data.active_users_day || [];
-      if (kind === 'threads') return this.data.thread_growth_month || [];
-      if (kind === 'reply') return this.data.reply_rate_week || [];
-      return [];
-    },
-    paint() {
-      if (!this.data) return;
-      window.dixoWhenChart(() => {
-        try {
-          const dark = document.documentElement.getAttribute('data-theme') === 'dark';
-          const grid = { color: dark ? 'rgba(255,255,255,.08)' : 'rgba(0,0,0,.06)', drawTicks: false };
-          const tick = dark ? '#a1a1a6' : '#86868b';
-          Chart.defaults.color = tick;
-          const base = { responsive: true, maintainAspectRatio: false, animation: { duration: 250 },
-            plugins: { legend: { display: false }, tooltip: { backgroundColor: dark ? 'rgba(28,28,30,.95)' : 'rgba(29,29,31,.92)', cornerRadius: 8 } },
-            scales: { y: { beginAtZero: true, grid, border: { display: false }, ticks: { maxTicksLimit: 4 } },
-              x: { grid: { display: false }, border: { display: false }, ticks: { maxTicksLimit: 8, maxRotation: 0, color: tick } } } };
-          const mk = (id, cfg) => { if (this.charts[id]) this.charts[id].destroy(); const el = document.getElementById(id); if (!el) return; this.charts[id] = new Chart(el, cfg); };
-          const msgs = this.series('messages'), users = this.series('users'), thr = this.series('threads'), rep = this.series('reply');
-          mk('anMsgs', { type: 'line', data: { labels: msgs.map(d => d.t), datasets: [{ data: msgs.map(d => d.c), borderColor: '#0a84ff', backgroundColor: 'rgba(10,132,255,.12)', fill: true, tension: .3, pointRadius: 0, borderWidth: 2 }] }, options: base });
-          mk('anUsers', { type: 'bar', data: { labels: users.map(d => d.t), datasets: [{ data: users.map(d => d.c), backgroundColor: '#30d158', borderRadius: 3, maxBarThickness: 14 }] }, options: base });
-          mk('anThreads', { type: 'line', data: { labels: thr.map(d => d.t), datasets: [
-            { label: 'new', data: thr.map(d => d.c), borderColor: '#ff9f0a', tension: .3, pointRadius: 0, borderWidth: 2 },
-            { label: 'cum', data: thr.map(d => d.cum), borderColor: '#64d2ff', borderDash: [4,4], tension: .3, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y1' }
-          ] }, options: Object.assign({}, base, { plugins: Object.assign({}, base.plugins, { legend: { display: true, align: 'end', labels: { boxWidth: 10, usePointStyle: true } } }),
-            scales: Object.assign({}, base.scales, { y1: { position: 'right', grid: { drawOnChartArea: false }, border: { display: false }, ticks: { maxTicksLimit: 4 } } }) }) });
-          mk('anReply', { type: 'line', data: { labels: rep.map(d => d.t), datasets: [{ data: rep.map(d => Math.round((d.reply_rate || 0) * 1000) / 10), borderColor: '#bf5af2', tension: .3, pointRadius: 0, borderWidth: 2 }] },
-            options: Object.assign({}, base, { scales: Object.assign({}, base.scales, { y: Object.assign({}, base.scales.y, { ticks: { callback: v => v + '%' } } }) }) });
-          const box = document.getElementById('anEmoji');
-          if (box) box.innerHTML = (this.data.top_emoji || []).slice(0, 16).map(e => {
-            const img = e.emoji_url ? '<img src="'+e.emoji_url+'" alt="" style="width:18px;height:18px;object-fit:contain">' : '<span>'+e.emoji_name+'</span>';
-            return '<span class="chip">'+img+'<span class="num">'+e.c+'</span></span>';
-          }).join('');
-        } catch (err) { this.status = String(err.message || err); console.error('paint', err); }
-      });
-    }
-  };
-};
-
-window.dixoWhenChart = function (fn) {
-  if (window.Chart) { fn(); return; }
-  var n = 0, t = setInterval(function () {
-    if (window.Chart || ++n > 100) { clearInterval(t); if (window.Chart) fn(); else console.error('Chart.js failed to load'); }
-  }, 50);
-};
-
-(function () {
-  const daily = {{ chart_daily | tojson }}, hourly = {{ chart_hourly | tojson }};
-  function ma(arr, n) { const out = []; let s = 0; arr.forEach((v, i) => { s += v; if (i >= n) s -= arr[i - n]; out.push(i >= n - 1 ? Math.round(s / n) : null); }); return out; }
-  function init() {
-    window.dixoWhenChart(function () {
-      try {
-        Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
-        Chart.defaults.color = '#86868b';
-        const grid = { color: 'rgba(0,0,0,.06)', drawTicks: false }, base = {
-          responsive: true, maintainAspectRatio: false, animation: { duration: 300 },
-          interaction: { intersect: false, mode: 'index' },
-          plugins: { legend: { display: true, align: 'end', labels: { boxWidth: 10, boxHeight: 10, usePointStyle: true } },
-            tooltip: { backgroundColor: 'rgba(29,29,31,.92)', padding: 10, cornerRadius: 8 } },
-          scales: { y: { beginAtZero: true, grid, border: { display: false }, ticks: { padding: 8, maxTicksLimit: 5 } },
-            x: { grid: { display: false }, border: { display: false }, ticks: { maxTicksLimit: 8, maxRotation: 0 } } } };
-        const T = (k, zh) => window.dixoT ? dixoT(k, zh) : zh;
-        const counts = daily.map(d => d.c), avg = ma(counts, 7);
-        const dc = new Chart(document.getElementById('chartDaily'), { type: 'line', data: { labels: daily.map(d => d.day), datasets: [
-          { label: T('home.trend.messages', '消息'), data: counts, borderColor: 'rgba(41,151,255,.55)', backgroundColor: 'rgba(41,151,255,.08)', fill: true, borderWidth: 1.25, pointRadius: 0, tension: .25 },
-          { label: T('home.trend.ma7', '7 日均线'), data: avg, borderColor: '#0066cc', borderWidth: 2, pointRadius: 0, tension: .35 } ] }, options: base });
-        const hc = new Chart(document.getElementById('chartHourly'), { type: 'bar', data: { labels: hourly.map(d => d.hour), datasets: [
-          { label: T('home.trend.messages', '消息'), data: hourly.map(d => d.c), backgroundColor: '#2997ff', borderRadius: 4, maxBarThickness: 18 } ] },
-          options: Object.assign({}, base, { plugins: Object.assign({}, base.plugins, { legend: { display: false } }) }) });
-        function range(n) {
-          const s = n ? Math.max(0, daily.length - n) : 0;
-          dc.data.labels = daily.slice(s).map(d => d.day); dc.data.datasets[0].data = counts.slice(s); dc.data.datasets[1].data = avg.slice(s); dc.update();
-        }
-        range(90);
-        window.dixoCharts = { range };
-        document.addEventListener('dixo:lang', () => { dc.data.datasets[0].label = T('home.trend.messages', '消息'); dc.data.datasets[1].label = T('home.trend.ma7', '7 日均线'); hc.data.datasets[0].label = dc.data.datasets[0].label; dc.update(); hc.update(); });
-      } catch (err) { console.error('trend charts', err); }
-    });
-  }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true }); else init();
-  document.addEventListener('dixo:lang', e => document.querySelectorAll('[data-wd-zh]').forEach(el => el.textContent = el.dataset[e.detail === 'en' ? 'wdEn' : 'wdZh']));
-})();
-</script>
+<script type="application/json" id="dixo-home-data">{{ {"chart_daily": chart_daily, "chart_hourly": chart_hourly} | tojson }}</script>
 {% endblock %}

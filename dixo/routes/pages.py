@@ -9,6 +9,30 @@ globals().update({k: v for k, v in vars(_core).items() if not k.startswith("__")
 bp = Blueprint("pages", __name__)
 
 
+
+def _member_count_for(sid):
+    """Live Discord roster size from portal after whitelist_bot member sync.
+
+    Only trusts servers.member_count (written by sync/prune). Raw presence may still
+    include leavers until a full sync runs — do not use it as the KPI alone.
+    """
+    portal = get_portal_db()
+    try:
+        row = portal.execute("SELECT member_count FROM servers WHERE server_id=?", (str(sid),)).fetchone()
+    except Exception:
+        return None
+    if row is None:
+        return None
+    # sqlite3.Row or tuple
+    val = row[0] if not isinstance(row, dict) else row.get("member_count")
+    if val is None:
+        return None
+    try:
+        n = int(val)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
 @bp.route("/me")
 @login_required
 def my_profile():
@@ -146,6 +170,10 @@ def index():
     u = display_user
     _safe_visitor_write(dixo_visitors.record_site_visit, u, utc_now_iso())
     data = summary_engine.homepage(sid, conn)
+    mc = _member_count_for(sid)
+    if mc is not None:
+        data["users_seen"] = data.get("total_users")
+        data["total_users"] = mc
     visitors = dixo_visitors.recent_site_visitors(get_visitors_db())
     server = get_portal_db().execute("SELECT * FROM servers WHERE server_id=?", (sid,)).fetchone()
     full_leaderboard = data.pop("full_leaderboard", [])
@@ -172,6 +200,10 @@ def search():
     conn = get_db()
     results = conn.execute("SELECT * FROM users WHERE user_id=? OR username LIKE ? OR nickname LIKE ? LIMIT 20", (query, f"%{query}%", f"%{query}%")).fetchall()
     data = summary_engine.homepage(current_server_id(), conn)
+    mc = _member_count_for(current_server_id())
+    if mc is not None:
+        data["users_seen"] = data.get("total_users")
+        data["total_users"] = mc
     data.pop("full_leaderboard", None)
     return render_template("index.html", server_id=current_server_id(), current_user=session["user"], search_results=results, query=query, site_visitors=[], **data)
 

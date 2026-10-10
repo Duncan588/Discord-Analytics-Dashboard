@@ -167,19 +167,43 @@ async def sync_guild_members(guild, request_id=None):
         c.execute("UPDATE member_sync_requests SET status='running',error=NULL WHERE id=?", (request_id,))
         c.commit(); c.close()
     count = 0
+    seen = []
     try:
         # fetch_members 使用 Members Intent 分页获取完整成员名单，不依赖本地缓存。
         async for member in guild.fetch_members(limit=None):
             upsert_member(guild.id, member)
+            seen.append(str(member.id))
             count += 1
             if count % 500 == 0:
                 log.info("成员同步中 guild=%s synced=%s", guild.id, count)
                 await asyncio.sleep(0)
+        # 以 Discord 实时名单为准：删掉已退服的 presence，并写入 servers.member_count。
+        c = db()
+        try:
+            c.execute("ALTER TABLE servers ADD COLUMN member_count INTEGER")
+        except Exception:
+            pass
+        if seen:
+            # chunk NOT IN deletes for large guilds
+            stale = c.execute("SELECT user_id FROM user_server_presence WHERE server_id=?", (str(guild.id),)).fetchall()
+            keep = set(seen)
+            drop = [r[0] for r in stale if str(r[0]) not in keep]
+            for i in range(0, len(drop), 400):
+                chunk = drop[i:i+400]
+                ph = ",".join("?" for _ in chunk)
+                c.execute(f"DELETE FROM user_server_presence WHERE server_id=? AND user_id IN ({ph})", (str(guild.id), *chunk))
+            c.execute(
+                "UPDATE servers SET member_count=?, updated_at=COALESCE(updated_at, ?) WHERE server_id=?",
+                (count, utc_now_iso(), str(guild.id)),
+            )
+            # 若 servers 行尚不存在，不强制插入（下载完成后才会有）；presence 已是权威名单。
+        c.commit()
+        c.close()
         if request_id:
             c = db()
             c.execute("UPDATE member_sync_requests SET status='completed',finished_at=? WHERE id=?", (utc_now_iso(), request_id))
             c.commit(); c.close()
-        log.info("成员同步完成 guild=%s count=%s", guild.id, count)
+        log.info("成员同步完成 guild=%s count=%s pruned=%s", guild.id, count, len(drop) if seen else 0)
         return count
     except Exception as exc:
         if request_id:
@@ -634,9 +658,30 @@ class Bot(discord.Client):
     async def on_member_join(self, member):
         try:
             upsert_member(member.guild.id, member)
+            c = db()
+            try:
+                c.execute("ALTER TABLE servers ADD COLUMN member_count INTEGER")
+            except Exception:
+                pass
+            c.execute("UPDATE servers SET member_count=COALESCE(member_count,0)+1 WHERE server_id=?", (str(member.guild.id),))
+            c.commit(); c.close()
             log.info("新增成员已同步 guild=%s user=%s", member.guild.id, member.id)
         except Exception as exc:
             log.exception("新增成员同步失败 guild=%s user=%s error=%s", member.guild.id, member.id, exc)
+
+    async def on_member_remove(self, member):
+        try:
+            c = db()
+            c.execute("DELETE FROM user_server_presence WHERE user_id=? AND server_id=?", (str(member.id), str(member.guild.id)))
+            try:
+                c.execute("ALTER TABLE servers ADD COLUMN member_count INTEGER")
+            except Exception:
+                pass
+            c.execute("UPDATE servers SET member_count=CASE WHEN COALESCE(member_count,0)>0 THEN member_count-1 ELSE 0 END WHERE server_id=?", (str(member.guild.id),))
+            c.commit(); c.close()
+            log.info("成员离开已同步 guild=%s user=%s", member.guild.id, member.id)
+        except Exception as exc:
+            log.exception("成员离开同步失败 guild=%s user=%s error=%s", member.guild.id, member.id, exc)
 
     async def on_member_update(self, before, after):
         try:
