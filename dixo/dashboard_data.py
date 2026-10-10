@@ -257,9 +257,19 @@ def profile_base(main, summ, ids):
         return [dict(r) for r in summ.execute(
             f"SELECT emoji_name,MAX(emoji_url) emoji_url,SUM(c) c FROM {table} WHERE user_id IN ({ph}) GROUP BY emoji_name ORDER BY c DESC LIMIT 3", ids)]
     rank_row = summ.execute("SELECT count(*)+1 FROM user_stats WHERE msg_count>?", (s["m"],)).fetchone()
-    return {"merged_ids": ids, "msg_count": s["m"], "reaction_received_count": s["rr"], "reaction_given_count": s["rg"],
+    msg_count = s["m"]
+    try:
+        caught = summ.execute("SELECT value FROM meta WHERE key='caught_up'").fetchone()
+        if not (caught and caught[0] == "1"):
+            # live_msg fallback — author index exists; prefer truth over mid-rebuild crumbs
+            live_n = main.execute(f"SELECT COUNT(*) FROM messages WHERE author_id IN ({ph})", ids).fetchone()[0]
+            if live_n and live_n > (msg_count or 0):
+                msg_count = live_n
+    except Exception:
+        pass
+    return {"merged_ids": ids, "msg_count": msg_count, "reaction_received_count": s["rr"], "reaction_given_count": s["rg"],
             "first_msg_at": s["f"], "last_msg_at": s["l"], "thread_count": thread_count, "threads_started": started,
-            "rank": rank_row[0] if s["m"] else None, "active_days": active_days,
+            "rank": rank_row[0] if msg_count else None, "active_days": active_days,
             "chart_daily": daily, "chart_hourly": [{"hour": f"{i:02d}:00", "c": v} for i, v in enumerate(hours)],
             "top_emojis_given": emo("user_emoji_given"), "top_emojis_received": emo("user_emoji_recv")}
 
