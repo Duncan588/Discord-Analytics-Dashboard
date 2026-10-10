@@ -550,6 +550,29 @@ def init_portal_db():
         last_visit DATETIME,
         PRIMARY KEY(server_id, user_id)
     );
+    CREATE TABLE IF NOT EXISTS user_blocks (
+        blocker_id TEXT NOT NULL,
+        blocked_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (blocker_id, blocked_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_blocks_blocker ON user_blocks(blocker_id);
+    CREATE TABLE IF NOT EXISTS favorites (
+        user_id TEXT NOT NULL,
+        guild_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, thread_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_favorites_user_created ON favorites(user_id, created_at DESC);
+    CREATE TABLE IF NOT EXISTS block_interception_counts (
+        guild_id TEXT NOT NULL,
+        sender_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        count INTEGER NOT NULL DEFAULT 0,
+        last_blocked_at TEXT NOT NULL,
+        PRIMARY KEY (guild_id, sender_id, target_id)
+    );
     CREATE TABLE IF NOT EXISTS demo_identities (
         real_user_id TEXT PRIMARY KEY,
         demo_user_id TEXT NOT NULL,

@@ -272,6 +272,9 @@ def user_profile(user_id):
 
     # ---- 机器人用户功能（仅本人主页显示）----
     is_self = session["user"]["id"] == user_id
+    from dixo import social as dixo_social
+    dixo_social.ensure_tables(get_portal_db())
+    i_blocked = (not is_self) and dixo_social.is_blocked(get_portal_db(), session["user"]["id"], user_id)
     my_blocks = []
     my_favorites = []
     blk_page = fav_page = 1
@@ -383,7 +386,7 @@ def user_profile(user_id):
         interactions_outgoing=profile["interactions_outgoing"],
         chart_daily=profile["chart_daily"], chart_hourly=profile["chart_hourly"],
         word_cloud_data=profile["word_cloud_data"], profile=profile,
-        is_self=is_self, my_blocks=my_blocks, my_favorites=my_favorites,
+        is_self=is_self, i_blocked=i_blocked, my_blocks=my_blocks, my_favorites=my_favorites,
         blk_page=blk_page, total_blk_pages=total_blk_pages,
         fav_page=fav_page, total_fav_pages=total_fav_pages,
     )

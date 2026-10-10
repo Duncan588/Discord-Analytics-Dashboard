@@ -4,7 +4,7 @@ import pytest
 
 PAGES = ["/", "/api/leaderboard", "/api/leaderboard?page=2", "/search?q=nova", "/admin", "/servers",
          "/api/v1/summary", "/api/v1/timeseries", "/api/v1/heatmap", "/api/v1/wordcloud", "/api/v1/leaderboard",
-         "/api/v1/top-threads", "/api/v1/hot-messages", "/api/v1/status", "/privacy", "/terms"]
+         "/api/v1/top-threads", "/api/v1/hot-messages", "/api/v1/status", "/api/v1/analytics", "/privacy", "/terms"]
 
 
 @pytest.mark.parametrize("url", PAGES)
@@ -64,3 +64,10 @@ def test_search_fts(client, monkeypatch, demo_db):
     word = sqlite3.connect(demo_db).execute("SELECT content FROM messages WHERE length(content)>20 LIMIT 1").fetchone()[0].split()[1]
     r = client.get(f"/api/ai/v1/guilds/900000000000000001/search?q={word}", headers=h).get_json()
     assert r["indexed"] and r["data"] and word.lower() in r["data"][0]["content"].lower()
+
+
+def test_public_auth_pages_when_logged_out(client):
+    with client.session_transaction() as s:
+        s.clear()
+    for url in ("/welcome", "/login", "/privacy", "/terms"):
+        assert client.get(url).status_code == 200, url

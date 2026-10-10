@@ -32,13 +32,18 @@ def tmp_copy(demo_db, tmp_path):
     return str(dst / "discord_data.db")
 
 
-@pytest.fixture(scope="session")
+_summary_ready = False
+
+@pytest.fixture
 def client(demo_db):
+    global _summary_ready
     if not os.path.exists(os.path.join(ROOT, ".env")):
         shutil.copy(os.path.join(ROOT, ".env.example"), os.path.join(ROOT, ".env"))
     import app as dashboard
     from dixo import summary
-    summary.refresh(demo_db, budget_seconds=0)
+    if not _summary_ready:
+        summary.refresh(demo_db, budget_seconds=0)
+        _summary_ready = True
     c = dashboard.app.test_client()
     admin = sorted(dashboard.ADMIN_IDS)[0] if dashboard.ADMIN_IDS else "891196284998930522"
     with c.session_transaction() as s:
