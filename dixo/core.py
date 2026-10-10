@@ -684,14 +684,12 @@ def init_server_db(path):
         viewer_name TEXT, viewer_avatar TEXT, timestamp DATETIME,
         UNIQUE(target_user_id, viewer_user_id)
     );
-    CREATE INDEX IF NOT EXISTS idx_msg_author ON messages(author_id);
     CREATE INDEX IF NOT EXISTS idx_msg_author_message ON messages(author_id,message_id);
     CREATE INDEX IF NOT EXISTS idx_msg_author_thread ON messages(author_id,thread_id);
     CREATE INDEX IF NOT EXISTS idx_msg_timestamp ON messages(timestamp);
-    CREATE INDEX IF NOT EXISTS idx_msg_thread ON messages(thread_id);
-    CREATE INDEX IF NOT EXISTS idx_react_user ON reactions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_msg_thread_timestamp ON messages(thread_id,timestamp);
     CREATE INDEX IF NOT EXISTS idx_react_user_message ON reactions(user_id,message_id);
-    CREATE INDEX IF NOT EXISTS idx_react_msg ON reactions(message_id);
+    CREATE INDEX IF NOT EXISTS idx_react_msg_user ON reactions(message_id,user_id);
     CREATE INDEX IF NOT EXISTS idx_stats_count ON user_stats(msg_count);
     CREATE INDEX IF NOT EXISTS idx_mentions_author ON mentions(author_id);
     CREATE INDEX IF NOT EXISTS idx_profile_views_target_time ON profile_views(target_user_id,timestamp DESC);

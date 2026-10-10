@@ -95,7 +95,7 @@ def create_dashboard_api(ctx):
     def analytics():
         since = request.args.get("since")
         until = request.args.get("until")
-        return _with(lambda m, s: dashboard_data.analytics_bundle(s, since, until))
+        return _with(lambda m, s: dashboard_data.analytics_bundle(s, since, until, cache_key=ctx.current_server_id()))
 
     @bp.route("/status")
     @ctx.server_required

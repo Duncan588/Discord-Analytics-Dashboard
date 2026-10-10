@@ -51,3 +51,26 @@ def test_migrate_skips_equivalent_prod_indexes(tmp_path, demo_db, capsys):
     names = {r[0] for r in sqlite3.connect(db).execute("SELECT name FROM sqlite_master WHERE type='index'")}
     assert "idx_msg_author_ts" not in names and "idx_msg_thread_ts" not in names
     assert "idx_react_msg_emoji" in names
+
+
+def test_active_users_sql_matches_python(tmp_path, demo_db):
+    import collections
+    db = _prod_db(tmp_path, demo_db)
+    summary.refresh(db, budget_seconds=0)
+    s = sqlite3.connect(summary.summary_path(db))
+    for grain, bucket in dashboard_data._BUCKETS.items():
+        sets = collections.defaultdict(set)
+        for day, uid in s.execute("SELECT day,user_id FROM user_day"):
+            sets[bucket(day)].add(uid)
+        expect = [{"t": k, "c": len(sets[k])} for k in sorted(sets)]
+        assert dashboard_data.series_active_users(s, grain) == expect, grain
+
+
+def test_analytics_bundle_cache_invalidates_on_watermark(tmp_path, demo_db):
+    db = _prod_db(tmp_path, demo_db)
+    summary.refresh(db, budget_seconds=0)
+    s = sqlite3.connect(summary.summary_path(db))
+    a = dashboard_data.analytics_bundle(s, cache_key="t")
+    assert dashboard_data.analytics_bundle(s, cache_key="t") is a
+    s.execute("UPDATE meta SET value=value||'x' WHERE key='msg_wm'"); s.commit()
+    assert dashboard_data.analytics_bundle(s, cache_key="t") is not a

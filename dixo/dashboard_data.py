@@ -280,21 +280,29 @@ def series_messages(summ, grain="day", since=None, until=None):
     return [{"t": k, "c": agg[k]} for k in sorted(agg)]
 
 
+_SQL_BUCKET = {
+    "day": "day",
+    "week": "date(day, 'weekday 0', '-6 days')",   # ISO Monday of that week
+    "month": "substr(day,1,7)",
+    "year": "substr(day,1,4)",
+}
+
+
 def series_active_users(summ, grain="day", since=None, until=None):
-    grain = grain if grain in _BUCKETS else "day"
-    bucket = _BUCKETS[grain]
-    sql = "SELECT day, user_id FROM user_day"
+    """Distinct active members per bucket, aggregated in SQL (user_day is unique per (user, day))."""
+    grain = grain if grain in _SQL_BUCKET else "day"
+    expr = _SQL_BUCKET[grain]
+    agg = "COUNT(*)" if grain == "day" else "COUNT(DISTINCT user_id)"
     where, args = [], []
     if since:
         where.append("day>=?"); args.append(since)
     if until:
         where.append("day<=?"); args.append(until)
+    sql = f"SELECT {expr} t, {agg} c FROM user_day"
     if where:
         sql += " WHERE " + " AND ".join(where)
-    sets = collections.defaultdict(set)
-    for day, uid in summ.execute(sql, args):
-        sets[bucket(day)].add(uid)
-    return [{"t": k, "c": len(sets[k])} for k in sorted(sets)]
+    sql += " GROUP BY t ORDER BY t"
+    return [{"t": t, "c": c} for t, c in summ.execute(sql, args) if t]
 
 
 def series_thread_growth(summ, grain="month", since=None, until=None):
@@ -340,7 +348,33 @@ def top_emoji(summ, limit=20):
     return [{"emoji_name": r[0], "emoji_url": r[1], "c": r[2]} for r in rows]
 
 
-def analytics_bundle(summ, since=None, until=None):
+_BUNDLE_CACHE = {}
+
+
+def _summary_version(summ):
+    try:
+        row = summ.execute("SELECT group_concat(key||'='||value, ';') FROM meta").fetchone()
+        return row[0] if row else ""
+    except Exception:
+        return None
+
+
+def analytics_bundle(summ, since=None, until=None, cache_key=None):
+    """All overview analytics series. Cached per (cache_key, summary watermark, range)."""
+    ver = _summary_version(summ) if cache_key is not None else None
+    if cache_key is not None and ver is not None:
+        hit = _BUNDLE_CACHE.get((cache_key, since, until))
+        if hit and hit[0] == ver:
+            return hit[1]
+    data = _analytics_bundle(summ, since, until)
+    if cache_key is not None and ver is not None:
+        if len(_BUNDLE_CACHE) > 64:
+            _BUNDLE_CACHE.clear()
+        _BUNDLE_CACHE[(cache_key, since, until)] = (ver, data)
+    return data
+
+
+def _analytics_bundle(summ, since=None, until=None):
     return {
         "messages_day": series_messages(summ, "day", since, until),
         "messages_week": series_messages(summ, "week", since, until),

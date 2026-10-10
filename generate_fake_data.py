@@ -232,8 +232,8 @@ CREATE TABLE IF NOT EXISTS claim_requests_v2 (id INTEGER PRIMARY KEY AUTOINCREME
 CREATE TABLE IF NOT EXISTS web_visitors (user_id TEXT PRIMARY KEY, username TEXT, nickname TEXT, avatar_url TEXT, last_visit DATETIME);
 CREATE TABLE IF NOT EXISTS profile_views (id INTEGER PRIMARY KEY AUTOINCREMENT, target_user_id TEXT, viewer_user_id TEXT,
  viewer_name TEXT, viewer_avatar TEXT, timestamp DATETIME, UNIQUE(target_user_id, viewer_user_id));
-CREATE INDEX IF NOT EXISTS idx_msg_author ON messages(author_id);
-CREATE INDEX IF NOT EXISTS idx_msg_thread ON messages(thread_id);
+CREATE INDEX IF NOT EXISTS idx_msg_author_timestamp ON messages(author_id,timestamp);
+CREATE INDEX IF NOT EXISTS idx_msg_thread_timestamp ON messages(thread_id,timestamp);
 """)
 
 for uid, uname, nick in MEMBERS:

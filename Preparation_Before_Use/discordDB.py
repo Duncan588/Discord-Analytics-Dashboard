@@ -46,16 +46,12 @@ def create_tables(cur):
     CREATE TABLE IF NOT EXISTS claim_requests_v2(id INTEGER PRIMARY KEY AUTOINCREMENT,requester_id TEXT,target_id TEXT,target_name TEXT,status INTEGER DEFAULT 0,created_at DATETIME,UNIQUE(requester_id,target_id));
     CREATE TABLE IF NOT EXISTS web_visitors(user_id TEXT PRIMARY KEY,username TEXT,nickname TEXT,avatar_url TEXT,last_visit DATETIME);
     CREATE TABLE IF NOT EXISTS profile_views(id INTEGER PRIMARY KEY AUTOINCREMENT,target_user_id TEXT,viewer_user_id TEXT,viewer_name TEXT,viewer_avatar TEXT,timestamp DATETIME,UNIQUE(target_user_id,viewer_user_id));
-    CREATE INDEX IF NOT EXISTS idx_msg_author ON messages(author_id);
     CREATE INDEX IF NOT EXISTS idx_msg_author_message ON messages(author_id,message_id);
     CREATE INDEX IF NOT EXISTS idx_msg_author_thread ON messages(author_id,thread_id);
     CREATE INDEX IF NOT EXISTS idx_msg_timestamp ON messages(timestamp);
-    CREATE INDEX IF NOT EXISTS idx_msg_thread ON messages(thread_id);
     CREATE INDEX IF NOT EXISTS idx_msg_author_timestamp ON messages(author_id,timestamp);
     CREATE INDEX IF NOT EXISTS idx_msg_thread_timestamp ON messages(thread_id,timestamp);
-    CREATE INDEX IF NOT EXISTS idx_react_user ON reactions(user_id);
     CREATE INDEX IF NOT EXISTS idx_react_user_message ON reactions(user_id,message_id);
-    CREATE INDEX IF NOT EXISTS idx_react_msg ON reactions(message_id);
     CREATE INDEX IF NOT EXISTS idx_react_msg_user ON reactions(message_id,user_id);
     CREATE INDEX IF NOT EXISTS idx_mentions_user ON mentions(mentioned_user_id);
     CREATE INDEX IF NOT EXISTS idx_mentions_author ON mentions(author_id);
@@ -63,7 +59,6 @@ def create_tables(cur):
     CREATE INDEX IF NOT EXISTS idx_stats_count ON user_stats(msg_count);
     CREATE INDEX IF NOT EXISTS idx_msg_hour ON messages(strftime('%H', timestamp));
     CREATE INDEX IF NOT EXISTS idx_msg_day  ON messages(substr(timestamp, 1, 10));
-    CREATE INDEX IF NOT EXISTS idx_react_msg_id ON reactions(message_id, id);
     """)
 
 
