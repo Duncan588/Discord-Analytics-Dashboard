@@ -14,7 +14,7 @@ from . import dashboard_data, summary
 
 
 class SummaryEngine:
-    HOMEPAGE_VERSION = 8
+    HOMEPAGE_VERSION = 9
 
     def __init__(self, server_db_path, connect, cloud_enabled, logger, refresh_interval=10.0, budget=20.0, after_refresh=None):
         self.server_db_path = server_db_path

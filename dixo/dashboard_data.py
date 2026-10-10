@@ -432,8 +432,18 @@ def _month_range(start_ym, end_ym):
     return out
 
 
-def activity_profile(active_months, first_ym, as_of_ym):
-    """Return (tag, info) where info has months_since_last / returned_months / active_months."""
+def _substantial_history(n_active, msg_count):
+    """True when the member had real engagement before going quiet.
+
+    Faded (活跃后消失) needs substance; rare (几乎不活跃) is drive-by / near-zero.
+    Thresholds: ≥2 active months, or ≥50 messages even in a single burst month.
+    """
+    msgs = int(msg_count or 0)
+    return n_active >= 2 or msgs >= 50
+
+
+def activity_profile(active_months, first_ym, as_of_ym, msg_count=0):
+    """Return (tag, info) where info has months_since_last / returned_months."""
     info = {"months_since_last": None, "returned_months": None}
     if not active_months or not first_ym:
         return TAG_RARE, info
@@ -468,14 +478,14 @@ def activity_profile(active_months, first_ym, as_of_ym):
             return TAG_ALWAYS, info
         return TAG_RARE, info
     # silent for >= 2 months, measured from LAST message
-    if n_active >= 3:
+    if _substantial_history(n_active, msg_count):
         return TAG_FADED, info
     return TAG_RARE, info
 
 
-def classify_member_activity(active_months, first_ym, last_ym, as_of_ym):
-    """Tag only (see activity_profile). Faded = silent >=2 months since LAST message."""
-    return activity_profile(active_months, first_ym, as_of_ym)[0]
+def classify_member_activity(active_months, first_ym, last_ym, as_of_ym, msg_count=0):
+    """Tag only (see activity_profile). Faded = silent >=2 months with substantial history."""
+    return activity_profile(active_months, first_ym, as_of_ym, msg_count=msg_count)[0]
 
 
 def member_activity_tags(summ, as_of=None, sample_per_tag=12):
@@ -501,9 +511,13 @@ def member_activity_tags(summ, as_of=None, sample_per_tag=12):
 
     # first/last from user_stats when available
     first_last = {}
+    msg_by_user = {}
     try:
-        for r in summ.execute("SELECT user_id, substr(first_ts,1,7), substr(last_ts,1,7) FROM user_stats"):
+        for r in summ.execute(
+            "SELECT user_id, substr(first_ts,1,7), substr(last_ts,1,7), COALESCE(msg_count,0) FROM user_stats"
+        ):
             first_last[str(r[0])] = (r[1], r[2])
+            msg_by_user[str(r[0])] = int(r[3] or 0)
     except Exception:
         pass
 
@@ -516,19 +530,24 @@ def member_activity_tags(summ, as_of=None, sample_per_tag=12):
         last_ym = (fl[1] if fl and fl[1] else max(months))
         if first_ym > as_of_ym:
             continue
-        tag, info = activity_profile(months, first_ym, as_of_ym)
+        msgs = msg_by_user.get(uid, 0)
+        tag, info = activity_profile(months, first_ym, as_of_ym, msg_count=msgs)
         counts[tag] += 1
         rec = {"user_id": uid, "tag": tag, "first_month": first_ym, "last_month": max(months),
                "active_months": len(months), "months_span": len(_month_range(first_ym, as_of_ym)),
-               "months_since_last": info["months_since_last"], "returned_months": info["returned_months"]}
+               "months_since_last": info["months_since_last"], "returned_months": info["returned_months"],
+               "msg_count": msgs}
         by_tag[tag].append(rec)
         if len(samples[tag]) < sample_per_tag:
             samples[tag].append(rec)
 
     order = [TAG_ALWAYS, TAG_RETURNED, TAG_FADED, TAG_RARE, TAG_NEW]
-    # Sort each tier: most active months first
+    # Sort: message count desc for all tiers except rare (fewest first for cleanup).
     for k in order:
-        by_tag[k].sort(key=lambda r: (-r.get("active_months", 0), r.get("user_id") or ""))
+        if k == TAG_RARE:
+            by_tag[k].sort(key=lambda r: (r.get("msg_count", 0), r.get("user_id") or ""))
+        else:
+            by_tag[k].sort(key=lambda r: (-r.get("msg_count", 0), r.get("user_id") or ""))
         samples[k] = by_tag[k][:sample_per_tag]
     return {
         "as_of": as_of_ym,
