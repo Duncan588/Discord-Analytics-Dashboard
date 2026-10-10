@@ -1572,16 +1572,11 @@ def enqueue_update_polls():
             if interval_ms < 50:
                 interval_ms = interval_ms * 1000
             conn.execute(
-                """INSERT INTO download_tasks(
-                     guild_id,forum_channel_id,created_by,status,total,completed,created_at,message,
-                     config_id,guild_name,forum_name,scheduler_interval,download_interval_ms,mode,phase
-                   ) VALUES(?,?,?,'pending',0,0,?,?,?,?,?,?,?,?,'update','queued')""",
-                (
-                    gid, forum, str(cfg["owner_user_id"]), now(),
-                    "定时轮询：扫描新帖/新回复/新反应",
-                    int(cfg["id"]), cfg["guild_name"] or gid, cfg["forum_name"] or forum,
-                    interval_ms, int(dl_ms or 0),
-                ),
+                "INSERT INTO download_tasks(guild_id,forum_channel_id,created_by,status,total,completed,created_at,message,config_id,guild_name,forum_name,scheduler_interval,download_interval_ms,mode) VALUES(?,?,?,?,0,0,?,?,?,?,?,?,?,?)",
+                (gid, forum, str(cfg["owner_user_id"]), "pending", now(),
+                 "定时轮询：扫描新帖/新回复/新反应", int(cfg["id"]),
+                 cfg["guild_name"] or gid, cfg["forum_name"] or forum,
+                 interval_ms, int(dl_ms or 0), "update"),
             )
             created += 1
             log_step("轮询入队 | config=%s guild=%s forum=%s", cfg["id"], gid, forum)
