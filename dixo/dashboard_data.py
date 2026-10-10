@@ -96,7 +96,9 @@ def kpis(main, summ, member_count=None):
            "total_users": members,
            "users_seen": users_seen,
            "total_reactions": summ.execute("SELECT COALESCE(SUM(c),0) FROM msg_react").fetchone()[0],
-           "last_day": last}
+           "last_day": last,
+           "msgs_7d": 0, "msgs_prev_7d": 0, "active_users_7d": 0, "active_users_prev_7d": 0,
+           "msgs_7d_delta": None, "active_users_7d_delta": None}
     if last:
         end = datetime.strptime(last, "%Y-%m-%d")
         d7 = (end - timedelta(days=6)).strftime("%Y-%m-%d"); d14 = (end - timedelta(days=13)).strftime("%Y-%m-%d")
