@@ -213,8 +213,8 @@ window.dixoWhenChart = window.dixoWhenChart || function (fn) {
       cloud.innerHTML = '<div class="wcloud">' + words.slice(0, 40).sort(function (a, b) { return a.text < b.text ? -1 : 1; }).map(function (w) {
         var r = (w.weight - low) / ((top - low) || 1);
         var px = Math.floor(13 + (38 - 13) * Math.pow(r, 0.6));
-        var color = r > 0.6 ? '#1d1d1f' : (r > 0.25 ? '#0066cc' : '#6e6e73');
-        return '<span style="font-size:' + px + 'px;font-weight:' + (r > 0.35 ? 600 : 500) + ';color:' + color + '" title="' + w.weight + '">' + w.text + '</span>';
+        var cls = r > 0.6 ? 'w-hi' : (r > 0.25 ? 'w-mid' : 'w-lo');
+        return '<span class="' + cls + '" style="font-size:' + px + 'px;font-weight:' + (r > 0.35 ? 600 : 500) + '" title="' + w.weight + '">' + w.text + '</span>';
       }).join('') + '</div>';
     }
     if (bars) {

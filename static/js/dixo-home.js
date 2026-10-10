@@ -178,6 +178,13 @@
         return [];
       },
       renderActivityTags: function () {
+        var zh = document.documentElement.lang !== 'en';
+        function tagNote(f, r) {
+          var sl = r.months_since_last, rm = r.returned_months;
+          if (f === 'returned' && rm != null) return zh ? ('回归 ' + rm + ' 个月') : ('back ' + rm + ' mo');
+          if ((f === 'faded' || f === 'rare') && sl != null) return zh ? (sl === 0 ? '本月有发言' : (sl + ' 个月未发言')) : (sl + ' mo silent');
+          return zh ? ('活跃 ' + (r.active_months || 0) + ' 个月') : ((r.active_months || 0) + ' active mo');
+        }
         var tags = (this.data && this.data.activity_tags) || {};
         var counts = tags.counts || {};
         var labels = tags.labels || {};
@@ -206,7 +213,7 @@
           var rowsHtml = pageRows.map(function (r) {
             var name = r.nickname || r.username || r.user_id;
             var av = r.avatar_url || 'https://cdn.discordapp.com/embed/avatars/0.png';
-            return '<a href="/user/' + r.user_id + '"><img class="avatar av-24" src="' + av + '" alt=""><span class="truncate" style="flex:1">' + name + '</span><span class="tag-pill ' + (pill[filter] || '') + '">' + (r.active_months || 0) + ' mo</span></a>';
+            return '<a href="/user/' + r.user_id + '"><img class="avatar av-24" src="' + av + '" alt=""><span class="truncate" style="flex:1">' + name + '</span><span class="tag-pill ' + (pill[filter] || '') + '">' + tagNote(filter, r) + '</span></a>';
           }).join('') || '<div class="empty">—</div>';
           var pager = '';
           if (all.length > pageSize) {

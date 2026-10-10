@@ -10,7 +10,7 @@
 {% endblock %}
 {% block content %}
 {% set st = summary_state or {} %}
-{% if st.stale %}
+{% if st.stale and (st.progress or 0) < 99 %}
 <div class="banner" role="status"><span>{{ t("state.rebuilding") }}</span><span class="bar"><i style="width:{{ st.progress or 0 }}%"></i></span><span class="mono">{{ st.progress }}%</span></div>
 {% endif %}
 

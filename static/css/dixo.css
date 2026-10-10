@@ -343,3 +343,6 @@ html[data-theme="dark"] .activity-tag-card{background:#1c1c1e;border-color:rgba(
 
 
 html.discord-activity,html.discord-activity body{overflow-x:hidden;overscroll-behavior-x:none;touch-action:pan-y;}
+
+.wcloud .w-hi{color:var(--ink)}.wcloud .w-mid{color:var(--color-primary)}.wcloud .w-lo{color:var(--muted)}
+html[data-theme="dark"] .wcloud .w-mid{color:#4da3ff}

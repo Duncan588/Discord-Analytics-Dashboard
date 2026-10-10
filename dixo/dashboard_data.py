@@ -432,54 +432,50 @@ def _month_range(start_ym, end_ym):
     return out
 
 
-def classify_member_activity(active_months, first_ym, last_ym, as_of_ym):
-    """Classify one member from their set of active YYYY-MM keys.
-
-    Tiers (priority order):
-      new       — first activity within last 2 months of as_of
-      returned  — ≥2 consecutive inactive months in the middle, then active again near as_of
-      always_active — active in ≥70% of months since first, and active in last 2 months
-      faded     — had activity earlier, silent in last 2 months, ≥2 active months historically
-      rare      — otherwise (≤2 active months or <15% coverage)
-    """
+def activity_profile(active_months, first_ym, as_of_ym):
+    """Return (tag, info) where info has months_since_last / returned_months / active_months."""
+    info = {"months_since_last": None, "returned_months": None}
     if not active_months or not first_ym:
-        return TAG_RARE
+        return TAG_RARE, info
     months = _month_range(first_ym, as_of_ym)
     if not months:
-        return TAG_RARE
+        return TAG_RARE, info
     active = set(active_months)
-    n = len(months)
-    n_active = sum(1 for m in months if m in active)
-    recent = months[-2:] if len(months) >= 2 else months
-    recent_hit = sum(1 for m in recent if m in active)
-    # new
-    span_from_first = _month_range(first_ym, as_of_ym)
-    if len(span_from_first) <= 2:
-        return TAG_NEW
-    # returned: gap of ≥2 inactive then activity in last 2 months
-    if recent_hit >= 1 and n >= 4:
-        # find longest trailing gap before last active streak
-        bits = [1 if m in active else 0 for m in months]
-        # look for 0,0 pattern then later 1 near end
-        gap = False
-        for i in range(len(bits) - 2):
-            if bits[i] == 0 and bits[i + 1] == 0:
-                # was there activity before this gap?
-                if any(bits[:i]):
-                    gap = True
-                    break
-        if gap and recent_hit >= 1 and bits[-1] == 1:
-            return TAG_RETURNED
-    ratio = n_active / n if n else 0
-    if recent_hit >= 1 and ratio >= 0.70 and n_active >= 3:
-        return TAG_ALWAYS
-    if recent_hit == 0 and n_active >= 2:
-        return TAG_FADED
-    if n_active <= 2 or ratio < 0.15:
-        return TAG_RARE
-    if recent_hit == 0:
-        return TAG_FADED
-    return TAG_ALWAYS if ratio >= 0.5 else TAG_RARE
+    bits = [1 if m in active else 0 for m in months]
+    n = len(bits)
+    n_active = sum(bits)
+    last_idx = max(i for i, b in enumerate(bits) if b) if n_active else None
+    since_last = (n - 1 - last_idx) if last_idx is not None else n
+    info["months_since_last"] = since_last
+    if n <= 2:
+        return TAG_NEW, info
+    if since_last <= 1:
+        # current streak (allowing the as_of month to be still empty)
+        i = last_idx
+        while i > 0 and bits[i - 1] == 1:
+            i -= 1
+        gap = 0
+        j = i - 1
+        while j >= 0 and bits[j] == 0:
+            gap += 1
+            j -= 1
+        streak = last_idx - i + 1
+        if gap >= 2 and j >= 0 and streak <= 6:
+            info["returned_months"] = streak
+            return TAG_RETURNED, info
+        ratio = n_active / n
+        if n_active >= 3 and ratio >= 0.4:
+            return TAG_ALWAYS, info
+        return TAG_RARE, info
+    # silent for >= 2 months, measured from LAST message
+    if n_active >= 3:
+        return TAG_FADED, info
+    return TAG_RARE, info
+
+
+def classify_member_activity(active_months, first_ym, last_ym, as_of_ym):
+    """Tag only (see activity_profile). Faded = silent >=2 months since LAST message."""
+    return activity_profile(active_months, first_ym, as_of_ym)[0]
 
 
 def member_activity_tags(summ, as_of=None, sample_per_tag=12):
@@ -520,10 +516,11 @@ def member_activity_tags(summ, as_of=None, sample_per_tag=12):
         last_ym = (fl[1] if fl and fl[1] else max(months))
         if first_ym > as_of_ym:
             continue
-        tag = classify_member_activity(months, first_ym, min(last_ym, as_of_ym), as_of_ym)
+        tag, info = activity_profile(months, first_ym, as_of_ym)
         counts[tag] += 1
-        rec = {"user_id": uid, "tag": tag, "first_month": first_ym, "last_month": last_ym,
-               "active_months": len(months), "months_span": len(_month_range(first_ym, as_of_ym))}
+        rec = {"user_id": uid, "tag": tag, "first_month": first_ym, "last_month": max(months),
+               "active_months": len(months), "months_span": len(_month_range(first_ym, as_of_ym)),
+               "months_since_last": info["months_since_last"], "returned_months": info["returned_months"]}
         by_tag[tag].append(rec)
         if len(samples[tag]) < sample_per_tag:
             samples[tag].append(rec)
@@ -633,7 +630,7 @@ def analytics_bundle(summ, since=None, until=None, cache_key=None):
 
 def _analytics_bundle(summ, since=None, until=None):
     until_ym = (until or "")[:7] or None
-    tags = member_activity_tags(summ, as_of=until or since)
+    tags = member_activity_tags(summ, as_of=until)
     return {
         "messages_day": series_messages(summ, "day", since, until),
         "messages_week": series_messages(summ, "week", since, until),
