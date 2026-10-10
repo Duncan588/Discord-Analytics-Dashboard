@@ -191,7 +191,9 @@ def select_server(server_id):
     if str(server_id) not in allowed:
         return "403 Access Denied", 403
     session["server_id"] = str(server_id)
-    return redirect(url_for("pages.index"))
+    remember_server_choice(session["user"]["id"], server_id)
+    # keep Discord Activity context (frame_id/instance_id/platform...) on the hop
+    return redirect(url_for("pages.index", **request.args.to_dict()))
 
 
 @bp.route("/")

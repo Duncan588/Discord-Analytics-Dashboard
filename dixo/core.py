@@ -386,8 +386,40 @@ def get_portal_db():
         g.portal_db = db_connect(PORTAL_DB)
     return g.portal_db
 
+def _ensure_server_pref_table(conn):
+    conn.execute("CREATE TABLE IF NOT EXISTS user_server_pref(user_id TEXT PRIMARY KEY, server_id TEXT NOT NULL, updated_at TEXT)")
+
+
+def remember_server_choice(user_id, server_id):
+    """Persist server pick server-side: Discord Activity (iOS partitioned iframe) may drop
+    the Set-Cookie on the /server/<id> 302, which caused a /server -> / -> /servers loop."""
+    try:
+        conn = get_portal_db()
+        _ensure_server_pref_table(conn)
+        conn.execute("INSERT INTO user_server_pref(user_id,server_id,updated_at) VALUES(?,?,datetime('now')) "
+                     "ON CONFLICT(user_id) DO UPDATE SET server_id=excluded.server_id, updated_at=excluded.updated_at",
+                     (str(user_id), str(server_id)))
+        conn.commit()
+    except Exception as e:  # never block navigation on this
+        logging.getLogger("app").warning("server_pref.write_failed %s", e)
+
+
 def current_server_id():
-    return str(session.get("server_id")) if session.get("server_id") else None
+    if session.get("server_id"):
+        return str(session.get("server_id"))
+    user = session.get("user") or {}
+    if not user.get("id"):
+        return None
+    try:
+        conn = get_portal_db()
+        _ensure_server_pref_table(conn)
+        row = conn.execute("SELECT server_id FROM user_server_pref WHERE user_id=?", (str(user["id"]),)).fetchone()
+    except Exception:
+        row = None
+    if row and row[0]:
+        session["server_id"] = str(row[0])
+        return str(row[0])
+    return None
 
 def server_db_path(server_id):
     return os.path.join(DATA_DIR, str(server_id), "discord_data.db")

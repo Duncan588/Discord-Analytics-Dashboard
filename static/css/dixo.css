@@ -299,13 +299,19 @@ html[data-theme="dark"] .admin-task{background:#2c2c2e;border-color:#3a3a3c}
 html[data-theme="dark"] .admin-task .task-bots > div{background:#1c1c1e;border-color:#3a3a3c}
 
 
-/* Discord Activity + mobile safe areas */
-html.discord-activity body{padding-top:0}
-html.discord-activity .gnav{padding-top:max(env(safe-area-inset-top,0px),12px)}
+/* Discord Activity + mobile safe areas.
+   Discord's mobile Activity chrome (title bar + close/participants) is drawn over the
+   iframe and is NOT reported by env(safe-area-inset-top), so reserve a fixed inset too.
+   --activity-top can be overridden at runtime by discord-activity.js. */
+:root{--activity-top:0px}
+html.discord-activity{--activity-top:max(env(safe-area-inset-top,0px),16px)}
+html.discord-activity.discord-mobile{--activity-top:max(calc(env(safe-area-inset-top,0px) + 12px),64px)}
+html.discord-activity .gnav{padding-top:var(--activity-top)}
 html.discord-activity .page{padding-top:var(--space-5)}
-html.discord-activity .banner{top:calc(52px + max(env(safe-area-inset-top,0px),12px))}
-html.discord-activity .center-page{min-height:calc(100vh - 52px - env(safe-area-inset-top,0px))}
-html.discord-activity .modal{padding-top:max(var(--space-4),env(safe-area-inset-top,0px));padding-bottom:max(var(--space-4),env(safe-area-inset-bottom,0px))}
+html.discord-activity .banner{top:calc(52px + var(--activity-top))}
+html.discord-activity .center-page{min-height:calc(100vh - 52px - var(--activity-top))}
+html.discord-activity .modal{padding-top:calc(var(--activity-top) + var(--space-4));padding-bottom:max(var(--space-4),env(safe-area-inset-bottom,0px))}
+html.discord-activity .menu-panel{max-height:calc(100vh - 52px - var(--activity-top) - 16px);overflow:auto}
 .server-card,.card.server-card{position:relative;z-index:1;pointer-events:auto;-webkit-tap-highlight-color:rgba(0,113,227,.15);touch-action:manipulation;cursor:pointer;min-height:72px}
 .server-card *{pointer-events:none} /* clicks hit the <a> */
 a.btn,button.btn,.kpi.clickable,.seg button,.tabs a{touch-action:manipulation;-webkit-tap-highlight-color:rgba(0,113,227,.12)}

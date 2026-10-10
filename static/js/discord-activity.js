@@ -505,6 +505,14 @@
   // 之前只在登录流程分支里加这个 class，导致登录完成、跳到首页/排行榜/
   // 个人主页等页面之后就再也不会加上，顶部内容就被 Discord 的框架盖住了。
   document.documentElement.classList.add("discord-activity");
+  try {
+    var ctx = new URLSearchParams(window.location.search);
+    var savedCtx = new URLSearchParams(sessionStorage.getItem(ACTIVITY_CONTEXT_KEY) || "");
+    var platform = ctx.get("platform") || savedCtx.get("platform") || "";
+    if (platform === "mobile" || /iPhone|iPad|Android/i.test(navigator.userAgent)) {
+      document.documentElement.classList.add("discord-mobile");
+    }
+  } catch (e) { /* ignore */ }
 
   // 这一步同样要对 Activity 里的每一个页面都生效，不只是登录/欢迎页——
   // 首页/排行榜/个人主页/年度报告上都有指向 discord.com 的外部链接卡片。
