@@ -42,8 +42,21 @@ class SummaryEngine:
             res = summary.refresh(self.server_db_path(sid), budget_seconds=self.budget)
             self.log.info("summary.refresh sid=%s %s", sid, res)
             again = not res["caught_up"]
-            if self.after_refresh and res["caught_up"]:
-                self.after_refresh(sid)
+            if res["caught_up"]:
+                try:
+                    sc = self.summary_conn(sid)
+                    try:
+                        msgs = sc.execute("SELECT COALESCE(SUM(msg_count),0) FROM user_stats").fetchone()[0]
+                        reacts = sc.execute("SELECT COALESCE(SUM(c),0) FROM msg_react").fetchone()[0]
+                        threads = sc.execute("SELECT COUNT(*) FROM thread_stats").fetchone()[0]
+                        dashboard_data.save_last_good_kpis(sc, msgs, reacts, threads)
+                    finally:
+                        sc.close()
+                    self._memo.pop(str(sid), None)
+                except Exception:
+                    self.log.exception("save_last_good_kpis failed sid=%s", sid)
+                if self.after_refresh:
+                    self.after_refresh(sid)
         except Exception:
             self.log.exception("summary refresh failed sid=%s", sid)
             again = False
@@ -75,6 +88,29 @@ class SummaryEngine:
         max_m = main_conn.execute("SELECT MAX(rowid) FROM messages").fetchone()[0] or 0
         max_r = main_conn.execute("SELECT MAX(rowid) FROM reactions").fetchone()[0] or 0
         st.update(max_msg=max_m, max_react=max_r, stale=(st["msg_wm"] < max_m or st["react_wm"] < max_r))
+        # Prefer shadow-build watermarks for the progress banner while a full rebuild runs.
+        build_path = None
+        try:
+            for row in summ_conn.execute("PRAGMA database_list"):
+                if row[1] == "main" and row[2]:
+                    build_path = row[2] + ".build"
+                    break
+        except Exception:
+            build_path = None
+        if build_path and os.path.exists(build_path):
+            try:
+                bc = summary.connect_summary(build_path, readonly=True)
+                try:
+                    bst = summary.state(bc)
+                    if bst["msg_wm"] >= st["msg_wm"]:
+                        st["msg_wm"] = bst["msg_wm"]
+                        st["react_wm"] = bst["react_wm"]
+                        st["shadow"] = True
+                        st["stale"] = True
+                finally:
+                    bc.close()
+            except Exception:
+                pass
         st["progress"] = round(100.0 * st["msg_wm"] / max_m, 1) if max_m else 100.0
         return st
 
@@ -92,7 +128,9 @@ class SummaryEngine:
                 data = memo[1]
             else:
                 data = dashboard_data.homepage(main_conn, summ)
-                self._memo[sid] = (key, data)
+                # Do not memoize mid-rebuild crumbs (e.g. wiped summary at 1% progress).
+                if not st.get("stale") or st.get("progress", 100) >= 95:
+                    self._memo[sid] = (key, data)
             out = dict(data)
             out["summary_state"] = st
             return out

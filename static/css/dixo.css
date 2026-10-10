@@ -13,8 +13,8 @@
   --radius-sm:8px; --radius-md:11px; --radius-lg:18px; --radius-pill:9999px;
 }
 *{box-sizing:border-box}
-html{-webkit-text-size-adjust:100%}
-body{margin:0;background:var(--parchment);color:var(--ink);font:400 15px/1.47 var(--font-text);letter-spacing:-.01em;-webkit-font-smoothing:antialiased}
+html{-webkit-text-size-adjust:100%;overflow-x:hidden;overscroll-behavior-x:none;max-width:100%}
+body{margin:0;overflow-x:hidden;overscroll-behavior-x:none;max-width:100%;background:var(--parchment);color:var(--ink);font:400 15px/1.47 var(--font-text);letter-spacing:-.01em;-webkit-font-smoothing:antialiased}
 a{color:var(--color-link);text-decoration:none}
 a:hover{text-decoration:underline}
 img{max-width:100%}
@@ -45,7 +45,7 @@ img{max-width:100%}
 .av-24{width:24px;height:24px}.av-32{width:32px;height:32px}.av-40{width:40px;height:40px}.av-96{width:96px;height:96px}
 
 /* layout */
-.page{max-width:1280px;margin:0 auto;padding:var(--space-6) var(--space-5) var(--space-8);padding-left:max(var(--space-5),env(safe-area-inset-left,0px));padding-right:max(var(--space-5),env(safe-area-inset-right,0px));padding-bottom:max(var(--space-8),env(safe-area-inset-bottom,0px))}
+.page{max-width:1280px;margin:0 auto;overflow-x:clip;width:100%;padding:var(--space-6) var(--space-5) var(--space-8);padding-left:max(var(--space-5),env(safe-area-inset-left,0px));padding-right:max(var(--space-5),env(safe-area-inset-right,0px));padding-bottom:max(var(--space-8),env(safe-area-inset-bottom,0px))}
 .page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:var(--space-4);margin-bottom:var(--space-5);flex-wrap:wrap}
 .h-display{font:600 40px/1.1 var(--font-display);letter-spacing:-.025em;margin:0}
 .h-section{font:600 21px/1.2 var(--font-display);letter-spacing:-.015em;margin:0}
@@ -340,3 +340,5 @@ html[data-theme="dark"] .tag-returned{background:#0a2540;color:#7ec4ff}
 html[data-theme="dark"] .tag-new{background:#3a2a0a;color:#ffb340}
 html[data-theme="dark"] .activity-tag-card{background:#1c1c1e;border-color:rgba(255,255,255,.08)}
 
+
+html.discord-activity,html.discord-activity body{overflow-x:hidden;overscroll-behavior-x:none;touch-action:pan-y;}

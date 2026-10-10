@@ -4,6 +4,7 @@ Every function takes open connections: `main` (discord_data.db) and `summ` (summ
 No full-table scans on messages/reactions happen here.
 """
 import collections
+import time
 from datetime import datetime, timedelta
 
 from . import textutil
@@ -81,6 +82,33 @@ def heatmap(summ, days=None):
     return grid
 
 
+def _read_last_good(summ):
+    try:
+        rows = dict(summ.execute("SELECT key,value FROM meta WHERE key LIKE 'last_good_%'").fetchall())
+    except Exception:
+        return None
+    if "last_good_msgs" not in rows:
+        return None
+    return {
+        "total_msgs": int(float(rows.get("last_good_msgs") or 0)),
+        "total_reactions": int(float(rows.get("last_good_reacts") or 0)),
+        "total_threads": int(float(rows.get("last_good_threads") or 0)),
+        "last_good_at": rows.get("last_good_at"),
+    }
+
+
+def save_last_good_kpis(summ, total_msgs, total_reactions, total_threads):
+    """Call when summary is caught up so mid-rebuild UI can keep showing real totals."""
+    try:
+        for k, v in (("last_good_msgs", total_msgs), ("last_good_reacts", total_reactions),
+                     ("last_good_threads", total_threads), ("last_good_at", str(time.time()))):
+            summ.execute("INSERT INTO meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                         (k, str(v)))
+        summ.commit()
+    except Exception:
+        pass
+
+
 def kpis(main, summ, member_count=None):
     """Headline numbers with week-over-week deltas, relative to the latest active day in the data.
 
@@ -108,6 +136,18 @@ def kpis(main, summ, member_count=None):
         aup = summ.execute("SELECT count(DISTINCT user_id) FROM user_day WHERE day>=? AND day<?", (d14, d7)).fetchone()[0]
         res.update(msgs_7d=cur, msgs_prev_7d=prev, active_users_7d=au, active_users_prev_7d=aup,
                    msgs_7d_delta=_delta(cur, prev), active_users_7d_delta=_delta(au, aup))
+    # If summary was wiped mid-rebuild, totals can be absurdly low — prefer last-good snapshot.
+    try:
+        st_caught = summ.execute("SELECT value FROM meta WHERE key='caught_up'").fetchone()
+        caught = st_caught and st_caught[0] == "1"
+    except Exception:
+        caught = False
+    good = _read_last_good(summ)
+    if good and not caught and good["total_msgs"] > (res["total_msgs"] or 0) * 2:
+        res["total_msgs"] = good["total_msgs"]
+        res["total_reactions"] = good["total_reactions"]
+        # threads from main are already live-accurate; keep res total_threads
+        res["kpis_from_last_good"] = True
     return res
 
 

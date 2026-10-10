@@ -208,25 +208,74 @@ def delete_generation(main_conn):
     return row[0] if row else 0
 
 
+def _live_meta(spath):
+    """Read meta from the reader-facing summary.db without attaching to main."""
+    if not os.path.exists(spath):
+        return {}
+    c = connect_summary(spath)
+    try:
+        return dict(c.execute("SELECT key,value FROM meta").fetchall())
+    finally:
+        c.close()
+
+
 def refresh(main_db_path, budget_seconds=20.0, batch=20000):
-    """Advance summary.db towards the main DB. Returns dict(caught_up, msg_wm, react_wm, processed)."""
+    """Advance summary.db towards the main DB.
+
+    Full rebuilds (delete_gen / schema / stopwords change) write to ``summary.db.build``
+    and only atomically replace the live ``summary.db`` when caught up. That keeps the
+    last-good KPIs visible while a multi-minute rebuild runs — critical because the
+    continuous downloader DELETEs messages (bumping summary_dirty.gen) and must not
+    wipe the live summary mid-flight.
+    """
     started = time.monotonic()
     spath = summary_path(main_db_path)
-    connect_summary(spath).close()  # create schema / WAL
+    build_path = spath + ".build"
+    connect_summary(spath).close()  # ensure live schema exists for readers
     conn = sqlite3.connect(main_db_path, timeout=60, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     processed = 0
+    used_build = False
     try:
         conn.execute("PRAGMA busy_timeout=60000")
         ensure_dirty_trigger(conn, os.path.abspath(main_db_path))
-        conn.execute("ATTACH DATABASE ? AS s", (spath,))
         gen = str(delete_generation(conn))
-        if _meta_get(conn, "delete_gen") != gen or _meta_get(conn, "schema_version") != str(SCHEMA_VERSION) \
-                or _meta_get(conn, "stopwords_sig") != _stopwords_sig():
-            log.warning("summary full rebuild path=%s gen=%s", main_db_path, gen)
-            with conn:
-                _reset(conn)
-                _meta_set(conn, "delete_gen", gen)
+        live = _live_meta(spath)
+        need_full = (
+            live.get("delete_gen") != gen
+            or live.get("schema_version") != str(SCHEMA_VERSION)
+            or live.get("stopwords_sig") != _stopwords_sig()
+        )
+        if need_full:
+            used_build = True
+            connect_summary(build_path).close()
+            conn.execute("ATTACH DATABASE ? AS s", (build_path,))
+            build_gen = _meta_get(conn, "building_delete_gen")
+            build_caught = _meta_get(conn, "caught_up") == "1"
+            # Continue an in-flight build; only restart if missing / finished / gen jumped a lot.
+            # Ignoring mid-build gen bumps prevents wipe-loops under continuous download DELETEs.
+            restart = (build_gen is None) or (build_caught) or (
+                build_gen != gen and int(_meta_get(conn, "msg_wm", 0) or 0) == 0
+            )
+            if restart and build_gen != gen:
+                log.warning("summary full rebuild (shadow) path=%s gen=%s prev_build_gen=%s",
+                            main_db_path, gen, build_gen)
+                with conn:
+                    _reset(conn)
+                    _meta_set(conn, "building_delete_gen", gen)
+                    _meta_set(conn, "delete_gen", gen)
+                    _meta_set(conn, "caught_up", 0)
+            elif build_gen is None:
+                log.warning("summary full rebuild (shadow) path=%s gen=%s", main_db_path, gen)
+                with conn:
+                    _reset(conn)
+                    _meta_set(conn, "building_delete_gen", gen)
+                    _meta_set(conn, "delete_gen", gen)
+            else:
+                log.info("summary shadow continue path=%s build_gen=%s live_gen=%s wm=%s",
+                         main_db_path, build_gen, gen, _meta_get(conn, "msg_wm", 0))
+        else:
+            conn.execute("ATTACH DATABASE ? AS s", (spath,))
         msg_wm = int(_meta_get(conn, "msg_wm", 0)); react_wm = int(_meta_get(conn, "react_wm", 0))
         while True:
             rows = conn.execute(
@@ -259,8 +308,31 @@ def refresh(main_db_path, budget_seconds=20.0, batch=20000):
         with conn:
             _meta_set(conn, "refreshed_at", time.time())
             _meta_set(conn, "caught_up", int(caught_up))
+            if caught_up:
+                # Stamp the gen we actually finished against (re-read — may have moved).
+                _meta_set(conn, "delete_gen", str(delete_generation(conn)))
+        # Detach before replace so Windows/Linux can rename the file.
+        try:
+            conn.execute("DETACH DATABASE s")
+        except Exception:
+            pass
+        if used_build and caught_up:
+            # Checkpoint WAL then atomic swap into the reader path.
+            try:
+                bc = sqlite3.connect(build_path, timeout=60)
+                bc.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                bc.close()
+            except Exception:
+                pass
+            os.replace(build_path, spath)
+            for suffix in ("-wal", "-shm"):
+                try:
+                    os.remove(build_path + suffix)
+                except FileNotFoundError:
+                    pass
+            log.info("summary shadow swapped path=%s msg_wm=%s", spath, msg_wm)
         return {"caught_up": caught_up, "msg_wm": msg_wm, "react_wm": react_wm, "processed": processed,
-                "max_msg": max_m, "max_react": max_r}
+                "max_msg": max_m, "max_react": max_r, "shadow": used_build}
     finally:
         conn.close()
 

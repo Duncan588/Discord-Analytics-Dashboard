@@ -246,7 +246,7 @@ window.dixoWhenChart = window.dixoWhenChart || function (fn) {
           fillList(document.getElementById('outgoing-list'), j.data.interactions_outgoing);
           fillWords(j.data.word_cloud_data);
         }).catch(function () { if (n > 40) clearInterval(t); });
-    }, 400);
+    }, n < 10 ? 600 : 1500);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { init(); pollExtra(); }, { once: true });
   else { init(); pollExtra(); }
