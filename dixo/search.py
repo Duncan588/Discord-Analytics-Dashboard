@@ -57,7 +57,7 @@ def refresh(main_db_path, budget_seconds=20.0, batch=20000):
     m = sqlite3.connect(main_db_path, timeout=60)
     started = time.monotonic()
     try:
-        summary.ensure_dirty_trigger(m)
+        summary.ensure_dirty_trigger(m, os.path.abspath(main_db_path))
         gen = str(summary.delete_generation(m))
         if _meta(s, "delete_gen") != gen:
             with s:

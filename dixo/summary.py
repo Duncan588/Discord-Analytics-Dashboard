@@ -191,8 +191,16 @@ def _process_reactions(conn, rows):
         [(u, n, urls.get(n), c) for (u, n), c in egiven.items()])
 
 
-def ensure_dirty_trigger(main_conn):
+_TRIGGER_READY = set()
+
+
+def ensure_dirty_trigger(main_conn, key=None):
+    """Create summary_dirty + triggers once per process per DB (avoids a write txn on every refresh)."""
+    if key is not None and key in _TRIGGER_READY:
+        return
     main_conn.executescript(DIRTY_DDL)
+    if key is not None:
+        _TRIGGER_READY.add(key)
 
 
 def delete_generation(main_conn):
@@ -210,7 +218,7 @@ def refresh(main_db_path, budget_seconds=20.0, batch=20000):
     processed = 0
     try:
         conn.execute("PRAGMA busy_timeout=60000")
-        ensure_dirty_trigger(conn)
+        ensure_dirty_trigger(conn, os.path.abspath(main_db_path))
         conn.execute("ATTACH DATABASE ? AS s", (spath,))
         gen = str(delete_generation(conn))
         if _meta_get(conn, "delete_gen") != gen or _meta_get(conn, "schema_version") != str(SCHEMA_VERSION) \
