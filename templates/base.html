@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>{% block title %}{{ current_server.name if current_server else "Dixo" }} · {{ tr("nav.archive") }}{% endblock %}</title>
+  <meta name="discord-client-id" content="{{ discord_client_id }}">
+  <link rel="stylesheet" href="{{ asset('css/dixo.css') }}">
+  <script src="{{ asset('js/discord-activity.js') }}" defer></script>
+  <script>window.DIXO_I18N = {{ i18n_en() | tojson }};</script>
+  <script src="{{ asset('js/dixo-i18n.js') }}" defer></script>
+  <script src="{{ asset('vendor/ui/alpine/cdn.min.js') }}" defer></script>
+  {% block head %}{% endblock %}
+</head>
+<body {% block body_attrs %}{% endblock %}>
+  {% set fallback_avatar = 'https://cdn.discordapp.com/embed/avatars/0.png' %}
+  <header class="gnav">
+    <div class="gnav-inner">
+      <a class="brand min0" href="/">
+        <img src="{{ (current_server.icon_url if current_server and current_server.icon_url) or fallback_avatar }}" alt="" onerror="this.src='{{ fallback_avatar }}'">
+        <span class="name">{{ current_server.name if current_server else "Discord" }}</span><span class="sub">{{ t("nav.archive") }}</span>
+      </a>
+      <form class="gnav-search" action="/search" method="get" role="search">
+        <label class="sr-only" for="q">{{ tr("search.placeholder") }}</label>
+        <input id="q" type="search" name="q" value="{{ query|default('') }}" placeholder="{{ tr('search.placeholder') }}" data-i18n-attr="placeholder:search.placeholder">
+      </form>
+      <div class="gnav-actions">
+        {% block nav_actions %}{% endblock %}
+        <details class="menu">
+          <summary aria-label="menu"><img class="avatar av-32" src="{{ current_user.avatar if current_user and current_user.avatar else fallback_avatar }}" alt="" onerror="this.src='{{ fallback_avatar }}'"></summary>
+          <div class="menu-panel">
+            <a href="/">{{ t("nav.home") }}</a>
+            <a href="/me">{{ t("nav.my_profile") }}</a>
+            <a href="/servers">{{ t("nav.switch_server") }}</a>
+            {% if admin_level %}<a href="/admin">{{ t("nav.admin") }}</a>{% endif %}
+            <button type="button" data-language-toggle>{{ t("nav.language") }}</button>
+            <a class="danger" href="/logout">{{ t("nav.logout") }}</a>
+          </div>
+        </details>
+      </div>
+    </div>
+  </header>
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+  {% block modals %}{% endblock %}
+  {% block scripts %}{% endblock %}
+</body>
+</html>

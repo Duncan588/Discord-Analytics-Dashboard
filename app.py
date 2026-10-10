@@ -47,6 +47,8 @@ from shared.timeutil import parse_utc_datetime, to_local_datetime, utc_now_iso
 from shared.cloud_db import cloud_enabled, remote_exists, remote_file_stat
 from dixo import textutil as dixo_textutil
 from dixo import visitors as dixo_visitors
+from dixo import assets as dixo_assets
+from dixo import i18n as dixo_i18n
 from types import SimpleNamespace
 from dixo.api import create_ai_api, create_dashboard_api
 from dixo.engines import ProfileEngine as DixoProfileEngine, SummaryEngine
@@ -122,6 +124,8 @@ app = Flask(__name__)
 app.secret_key = SECRET_KEY
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)
 app.permanent_session_lifetime = timedelta(days=30)
+dixo_i18n.init_app(app)
+dixo_assets.init_app(app)
 app.config["MAX_CONTENT_LENGTH"] = int(os.getenv("MAX_UPLOAD_BYTES", str(2 * 1024 * 1024 * 1024)))
 
 # 版本化静态资源（?v=xxx）内容不变，可交给浏览器长期缓存
