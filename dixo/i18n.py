@@ -254,6 +254,13 @@ MESSAGES = {
     "admin.merges_empty": ("暂无合并关系。", "No merges."),
     "admin.reset": ("清空当前服务器认领数据", "Clear claim data for this server"),
     "admin.reset_confirm": ("确定清空当前服务器的认领和合并数据？", "Clear all claims and merges for this server?"),
+
+    "admin.uid_ph": ("Discord User ID", "Discord User ID"),
+    "admin.token_ph": ("Discord Token", "Discord Token"),
+    "admin.guild_icon": ("服务器图标", "Server icon"),
+    "admin.forum": ("Forum", "Forum"),
+    "admin.seconds": ("秒", "s"),
+    "admin.scanned_n": ("已扫描", "scanned"),
     # admin JS strings
     "adminjs.pause": ("暂停下载", "Pause"), "adminjs.cancel": ("取消任务", "Cancel"), "adminjs.resume": ("继续下载", "Resume"),
     "adminjs.delete": ("删除下载", "Delete"),

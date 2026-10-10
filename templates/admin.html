@@ -1,380 +1,271 @@
 {% extends "base.html" %}
 {% block title %}{{ tr("admin.title") }} · {{ tr("nav.archive") }}{% endblock %}
+{% block head %}
+<script>window.DIXO_ADMIN_CSRF = {{ csrf_token()|tojson }};</script>
+<script src="{{ asset('js/dixo-admin.js') }}" defer></script>
+{% endblock %}
 {% block content %}
+
 {% with messages = get_flashed_messages(with_categories=true) %}
 {% if messages %}
 {% set has_error = messages | selectattr(0, 'equalto', 'error') | list | length > 0 %}
-<div id="flash-modal" class="modal" role="dialog">
+<div id="flash-modal" class="modal" role="dialog" aria-modal="true">
   <div class="modal-box" style="max-width:520px;padding:var(--space-5)">
-    <div class="flex items-start justify-between gap-3 mb-3">
-      <h3 class="text-base sm:text-lg font-bold {{ '' if has_error else '' }}">{{ '机器人权限检查失败' if has_error else '操作完成' }}</h3>
-      <button type="button" onclick="document.getElementById('flash-modal').remove()" class="btn btn-ghost !min-h-9 !w-9 !p-0">×</button>
+    <div class="row between" style="margin-bottom:var(--space-3)">
+      <h3 class="h-card">{% if has_error %}{{ t("admin.flash_error") }}{% else %}{{ t("admin.flash_ok") }}{% endif %}</h3>
+      <button type="button" class="x" onclick="document.getElementById('flash-modal').remove()" aria-label="close">×</button>
     </div>
-    <div class="space-y-2 text-sm text-gray-200 whitespace-pre-line">{% for category, message in messages %}<div>{{ message }}</div>{% endfor %}</div>
-    {% if has_error %}<p class="mt-4 text-xs muted">请给机器人授予权限、邀请机器人加入服务器，或取消选择后重新保存。</p>{% endif %}
-    <button type="button" onclick="document.getElementById('flash-modal').remove()" class="btn btn-primary w-full sm:w-auto sm:min-w-28 mt-5">知道了</button>
+    <div class="stack" style="gap:8px;font-size:14px;white-space:pre-line">{% for category, message in messages %}<div>{{ message }}</div>{% endfor %}</div>
+    {% if has_error %}<p class="hint" style="margin-top:var(--space-3)">{{ t("admin.flash_hint") }}</p>{% endif %}
+    <button type="button" class="btn btn-primary" style="margin-top:var(--space-4)" onclick="document.getElementById('flash-modal').remove()">{{ t("admin.ok") }}</button>
   </div>
 </div>
 {% endif %}{% endwith %}
 
 <div class="page-head">
-  <div><div class="eyebrow">{{ t("nav.admin") }}</div><h1 class="h-display">{{ t("admin.title") }}</h1>
-  <p class="muted" style="margin-top:6px">{{ t("admin.sub") }}</p></div>
+  <div>
+    <div class="eyebrow">{{ t("nav.admin") }}</div>
+    <h1 class="h-display">{{ t("admin.title") }}</h1>
+    <p class="muted" style="margin-top:6px">{{ t("admin.sub") }}</p>
+  </div>
   <a class="btn btn-ghost" href="/admin/bot-features">{{ t("nav.bot_features") }}</a>
 </div>
 
 {% if admin_level == 1 %}
-<section class="card" style="margin-bottom:var(--space-4)">
-  <h2 class="text-lg font-bold mb-2">白名单用户</h2>
-  <p class="muted text-sm mb-4">白名单用于 JSON 导入和下载配额管理；普通用户查看已收录数据不需要白名单。</p>
-  <form method="post" action="/admin/whitelist/add" class="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2 mb-5">
+<section class="card admin-sec">
+  <div class="card-head">
+    <div><h2 class="h-card">{{ t("admin.wl") }}</h2><div class="card-sub">{{ t("admin.wl_hint") }}</div></div>
+  </div>
+  <form method="post" action="/admin/whitelist/add" class="admin-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <input name="user_id" required pattern="[0-9]+" placeholder="Discord User ID" class="field">
-    <button class="btn btn-primary w-full sm:w-auto">添加白名单</button>
+    <input name="user_id" required pattern="[0-9]+" class="field" placeholder="{{ tr('admin.uid_ph') }}" data-i18n-attr="placeholder:admin.uid_ph">
+    <button class="btn btn-primary" type="submit">{{ t("admin.wl_add") }}</button>
   </form>
-  <div class="space-y-2">
-  {% for w in whitelist %}
-    <div class="  p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-      <div class="min-w-0"><b>{{ w.username }}</b><span class="muted font-mono text-xs ml-2 break-all">{{ w.user_id }}</span></div>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:w-auto">
-        <form method="post" action="/admin/quota" class="flex gap-2">
+  <div>
+    {% for w in whitelist %}
+    <div class="admin-item">
+      <div class="min0"><b>{{ w.username }}</b> <span class="mono faint" style="font-size:12px">{{ w.user_id }}</span></div>
+      <div class="actions">
+        <form method="post" action="/admin/quota" class="admin-form" style="margin:0">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <input type="number" min="1" max="100" name="quota" value="{{ w.quota }}" class="field !w-24">
           <input type="hidden" name="user_id" value="{{ w.user_id }}">
-          <button class="btn btn-success flex-1 sm:flex-none">保存配额</button>
+          <input type="number" min="1" max="100" name="quota" value="{{ w.quota }}" class="field narrow">
+          <button class="btn btn-success" type="submit">{{ t("admin.quota_save") }}</button>
         </form>
-        <form method="post" action="/admin/whitelist/delete/{{ w.user_id }}" onsubmit="return confirm('确定删除该白名单用户？');">
+        <form method="post" action="/admin/whitelist/delete/{{ w.user_id }}" data-confirm-key="admin.wl_confirm" data-confirm-zh="{{ tr('admin.wl_confirm') }}">
           <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-          <button class="btn btn-danger w-full">删除</button>
+          <button class="btn btn-danger" type="submit">{{ t("admin.delete") }}</button>
         </form>
       </div>
     </div>
-  {% else %}<p class="muted">暂无白名单用户</p>{% endfor %}
+    {% else %}<div class="empty">{{ t("admin.wl_empty") }}</div>{% endfor %}
   </div>
 </section>
 {% endif %}
 
-<section class="card" style="margin-bottom:var(--space-4)">
-  <h2 class="text-lg font-bold mb-2">我的下载机器人</h2>
-  <p class="muted text-sm mb-4">在下方输入 Bot Token 或 User Token 添加下载账号。</p>
-  <form method="post" action="/admin/bot/add" class="grid grid-cols-1 sm:grid-cols-[auto_1fr_auto] gap-2 mb-2">
+<section class="card admin-sec">
+  <div class="card-head">
+    <div><h2 class="h-card">{{ t("admin.bots") }}</h2><div class="card-sub">{{ t("admin.bots_hint") }}</div></div>
+  </div>
+  <form method="post" action="/admin/bot/add" class="admin-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <select name="token_type" class="field sm:!w-44" aria-label="账号类型">
+    <select name="token_type" class="field token-type" aria-label="{{ tr('admin.token_type') }}">
       <option value="bot">Bot Token</option>
       <option value="user">User Token</option>
     </select>
-    <input name="token" required type="password" placeholder="Discord Token" class="field">
-    <button class="btn btn-primary w-full sm:w-auto">验证并添加</button>
+    <input name="token" required type="password" class="field" placeholder="{{ tr('admin.token_ph') }}" data-i18n-attr="placeholder:admin.token_ph" autocomplete="off">
+    <button class="btn btn-primary" type="submit">{{ t("admin.bot_add") }}</button>
   </form>
-  <p class="hint mb-4">User Token 仅用于 DiscordChatExporter/REST 下载。Discord 对自动化用户账号有限制，请优先使用 Bot Token；任何 Token 都等同密码，切勿分享。</p>
-  <div class="space-y-2">
-  {% for b in bots %}
-    <div class="  p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-      <span class="truncate">{{ b.name }} <span class=" text-xs">{{ 'User' if b.token_type == 'user' else 'Bot' }}</span> <span class="faint">#{{ b.id }}</span></span>
-      <form method="post" action="/admin/bot/delete/{{ b.id }}" onsubmit="return confirm('确定删除这个下载机器人？');">
+  <p class="hint" style="margin-top:-8px;margin-bottom:var(--space-3)">{{ t("admin.token_warn") }}</p>
+  <div>
+    {% for b in bots %}
+    <div class="admin-item">
+      <div class="min0 truncate">{{ b.name }} <span class="chip">{{ 'User' if b.token_type == 'user' else 'Bot' }}</span> <span class="faint">#{{ b.id }}</span></div>
+      <form method="post" action="/admin/bot/delete/{{ b.id }}" data-confirm-key="admin.bot_confirm" data-confirm-zh="{{ tr('admin.bot_confirm') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button class="btn btn-danger w-full sm:w-auto">删除机器人</button>
+        <button class="btn btn-danger" type="submit">{{ t("admin.bot_del") }}</button>
       </form>
     </div>
-  {% else %}<p class="muted">暂无下载机器人。</p>{% endfor %}
+    {% else %}<div class="empty">{{ t("admin.bots_empty") }}</div>{% endfor %}
   </div>
 </section>
 
-<section class="card" style="margin-bottom:var(--space-4)">
-  <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-5">
-    <div><h2 class="text-lg font-bold">Discord 数据下载配置</h2><p class="muted text-sm mt-1">每个机器人按批次下载帖子，多机器人并行。</p></div>
-    <span class="text-xs  badge  px-3 py-2">并行下载</span>
+<section class="card admin-sec">
+  <div class="card-head">
+    <div><h2 class="h-card">{{ t("admin.cfg") }}</h2><div class="card-sub">{{ t("admin.cfg_hint") }}</div></div>
+    <span class="badge">{{ t("admin.parallel") }}</span>
   </div>
-  <form method="post" action="/admin/download-server" class="space-y-3 mb-5">
+  <form method="post" action="/admin/download-server" class="stack" style="gap:var(--space-3);margin-bottom:var(--space-4)">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+    <div class="grid g-2">
       <div class="sub-card">
-        <div class="eyebrow">服务器</div>
-        <div class="flex items-center gap-2">
-          <img id="guildIcon" src="https://cdn.discordapp.com/embed/avatars/0.png" class="w-10 h-10  object-cover shrink-0" alt="服务器图标">
-          <select id="guild" name="guild_id" required class="field flex-1"><option>正在读取服务器…</option></select>
+        <div class="eyebrow">{{ t("admin.server") }}</div>
+        <div class="row" style="margin-top:8px">
+          <img id="guildIcon" class="admin-guild-icon" src="https://cdn.discordapp.com/embed/avatars/0.png" alt="{{ tr('admin.guild_icon') }}">
+          <select id="guild" name="guild_id" required class="field" style="flex:1"><option>{{ tr("admin.loading_guilds") }}</option></select>
         </div>
       </div>
       <div class="sub-card">
-        <div class="eyebrow">Forum</div>
-        <select id="forum" name="forum_channel_id" required class="field"><option>请先选择服务器</option></select>
+        <div class="eyebrow">{{ t("admin.forum") }}</div>
+        <select id="forum" name="forum_channel_id" required class="field" style="margin-top:8px"><option>{{ tr("admin.pick_server_first") }}</option></select>
       </div>
     </div>
 
     <div class="sub-card">
-      <div class="eyebrow">机器人</div>
-      <div class="flex flex-wrap items-center gap-x-5 gap-y-3 text-sm">
-        <label class="inline-flex items-center gap-2  font-semibold"><input type="checkbox" name="use_default_bot" value="1">默认下载机器人</label>
-        {% for b in bots %}<label class="inline-flex items-center gap-2"><input type="checkbox" name="bot_ids" value="{{ b.id }}">{{ b.name }}</label>{% endfor %}
+      <div class="eyebrow">{{ t("admin.bots_label") }}</div>
+      <div class="admin-checks" style="margin-top:10px">
+        <label><input type="checkbox" name="use_default_bot" value="1"> <b>{{ t("admin.default_bot") }}</b></label>
+        {% for b in bots %}<label><input type="checkbox" name="bot_ids" value="{{ b.id }}"> {{ b.name }}</label>{% endfor %}
       </div>
-      <p class="hint mt-2">选择要参与下载的机器人；第一个负责扫描帖子，其余并行下载。</p>
+      <p class="hint">{{ t("admin.bots_pick_hint") }}</p>
     </div>
 
     <div class="sub-card">
-      <div class="eyebrow">服务器数据更新</div>
-      <label class="flex items-center gap-3 cursor-pointer">
-        <input type="checkbox" name="update_enabled" value="1" class="w-5 h-5">
-        <span class="font-semibold">服务器数据更新</span>
+      <div class="eyebrow">{{ t("admin.update") }}</div>
+      <label class="admin-toggle" style="margin-top:10px">
+        <input type="checkbox" name="update_enabled" value="1">
+        <span>{{ t("admin.update") }}</span>
       </label>
-      <p class="hint mt-2">开启后只下载新增或有变化的帖子。</p>
+      <p class="hint">{{ t("admin.update_hint") }}</p>
     </div>
 
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+    <div class="grid g-2">
       <div class="sub-card">
-        <div class="eyebrow">机器人下载速度</div>
-        <div class="flex items-center gap-2">
+        <div class="eyebrow">{{ t("admin.speed") }}</div>
+        <div class="row" style="margin-top:8px">
           <input name="download_interval_ms" type="number" min="0" max="60000" step="1" value="0" class="field" inputmode="numeric">
-          <span class="text-xs muted shrink-0">毫秒</span>
+          <span class="faint" style="font-size:12px;flex:none">{{ t("admin.ms") }}</span>
         </div>
-        <p class="hint mt-2">同一机器人在两个帖子之间的等待时间（毫秒），0 为不等待。</p>
+        <p class="hint">{{ t("admin.speed_hint") }}</p>
       </div>
       <div class="sub-card">
-        <div class="eyebrow">任务调度检查间隔</div>
-        <div class="flex items-center gap-2">
+        <div class="eyebrow">{{ t("admin.sched") }}</div>
+        <div class="row" style="margin-top:8px">
           <input name="scheduler_interval" type="number" min="50" max="60000" step="1" value="250" class="field" inputmode="numeric">
-          <span class="text-xs muted shrink-0">毫秒</span>
+          <span class="faint" style="font-size:12px;flex:none">{{ t("admin.ms") }}</span>
         </div>
-        <p class="hint mt-2">下载器轮询任务队列的间隔（毫秒）。</p>
+        <p class="hint">{{ t("admin.sched_hint") }}</p>
       </div>
     </div>
 
-    <button class="btn btn-primary w-full">保存配置</button>
+    <button class="btn btn-primary" type="submit" style="width:100%">{{ t("admin.cfg_save") }}</button>
   </form>
 
-  <div class="space-y-2">
-  {% for d in download_servers %}
-    <div class="  p-3 sm:p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-      <div class="min-w-0 flex items-center gap-3">
-        <img src="{{ d.icon_url or 'https://cdn.discordapp.com/embed/avatars/0.png' }}" class="w-9 h-9  shrink-0" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'">
-        <div class="min-w-0"><b class="block truncate">{{ d.server_display_name or d.guild_name }}</b><div class="muted text-sm mt-1 truncate">{{ d.forum_name }}</div><div class="muted text-xs mt-1 truncate">{{ d.bot_names|join('、') }} · 下载间隔 {{ d.download_interval_ms or 0 }} 毫秒 · 调度检查 {{ (d.scheduler_interval if d.scheduler_interval and d.scheduler_interval >= 50 else ((d.scheduler_interval or 1) * 1000)) }} 毫秒 · {{ '服务器数据更新' if d.update_enabled else '更新关闭' }}</div></div>
+  <div>
+    {% for d in download_servers %}
+    <div class="admin-item">
+      <div class="row min0" style="flex:1">
+        <img class="admin-guild-icon sm" src="{{ d.icon_url or 'https://cdn.discordapp.com/embed/avatars/0.png' }}" alt="" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'">
+        <div class="min0">
+          <b class="truncate" style="display:block">{{ d.server_display_name or d.guild_name }}</b>
+          <div class="muted" style="font-size:13px">{{ d.forum_name }}</div>
+          <div class="faint" style="font-size:12px;margin-top:2px">{{ d.bot_names|join(' · ') }} · {{ t("admin.interval") }} {{ d.download_interval_ms or 0 }} {{ t("admin.ms") }} · {{ t("admin.sched_short") }} {{ (d.scheduler_interval if d.scheduler_interval and d.scheduler_interval >= 50 else ((d.scheduler_interval or 1) * 1000)) }} {{ t("admin.ms") }} · {% if d.update_enabled %}{{ t("admin.update") }}{% else %}{{ t("admin.update_off") }}{% endif %}</div>
+        </div>
       </div>
-      <form method="post" action="/admin/download-server/delete/{{ d.id }}" onsubmit="return confirm('确定删除这个下载配置？不会删除已经导入的分析数据库。');">
+      <form method="post" action="/admin/download-server/delete/{{ d.id }}" data-confirm-key="admin.cfg_confirm" data-confirm-zh="{{ tr('admin.cfg_confirm') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-        <button class="btn btn-danger w-full md:w-auto">删除配置</button>
+        <button class="btn btn-danger" type="submit">{{ t("admin.cfg_del") }}</button>
       </form>
     </div>
-  {% else %}<p class="muted">暂无下载配置。</p>{% endfor %}
+    {% else %}<div class="empty">{{ t("admin.cfg_empty") }}</div>{% endfor %}
   </div>
 </section>
 
-<section class="card" style="margin-bottom:var(--space-4)">
-  <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
-    <div><h2 class="text-lg font-bold">服务器成员名单</h2><p class="muted text-sm mt-1">由白名单机器人自动维护，新成员实时入库。</p></div>
-    <span class="text-xs muted   px-3 py-2">由 whitelist_bot.py 自动维护</span>
+<section class="card admin-sec">
+  <div class="card-head">
+    <div><h2 class="h-card">{{ t("admin.members") }}</h2><div class="card-sub">{{ t("admin.members_hint") }}</div></div>
+    <span class="chip">{{ t("admin.members_auto") }}</span>
   </div>
-  <form method="post" action="/admin/member-sync" class="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2">
+  <form method="post" action="/admin/member-sync" class="admin-form" style="margin:0">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <select name="guild_id" required class="field">
       {% for d in download_servers %}<option value="{{ d.guild_id }}">{{ d.server_display_name or d.guild_name }} · {{ d.forum_name }}</option>{% endfor %}
-      {% if not download_servers %}<option value="">请先配置下载服务器</option>{% endif %}
+      {% if not download_servers %}<option value="">{{ tr("admin.need_cfg") }}</option>{% endif %}
     </select>
-    <button class="btn btn-ghost w-full sm:w-auto">立即更新成员名单</button>
+    <button class="btn btn-ghost" type="submit">{{ t("admin.members_sync") }}</button>
   </form>
 </section>
 
-<section class="card" style="margin-bottom:var(--space-4)">
-  <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-2 mb-4">
-    <div><h2 class="text-lg font-bold">下载任务</h2><p class="muted text-sm mt-1">支持暂停 / 继续 / 删除；继续时只处理未完成帖子。</p></div>
-    {% if admin_level == 2 %}<span class="text-xs  badge  px-3 py-2 shrink-0">同时下载 {{ user_quota }} 个服务器</span>{% endif %}
+<section class="card admin-sec">
+  <div class="card-head">
+    <div><h2 class="h-card">{{ t("admin.tasks") }}</h2><div class="card-sub">{{ t("admin.tasks_hint") }}</div></div>
+    {% if admin_level == 2 %}<span class="badge">{{ t("admin.quota_n") }} {{ user_quota }}</span>{% endif %}
   </div>
-  <form method="post" action="/admin/download-task" class="grid grid-cols-1 sm:grid-cols-[1fr_auto] gap-2 mb-5">
+  <form method="post" action="/admin/download-task" class="admin-form">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <select name="config_id" required class="field">
-      {% for d in download_servers %}<option value="{{ d.id }}">{{ d.server_display_name or d.guild_name }} · {{ d.forum_name }} · {{ d.bot_names|join('、') }}</option>
-      {% else %}<option value="">请先配置下载 Forum</option>{% endfor %}
+      {% for d in download_servers %}<option value="{{ d.id }}">{{ d.server_display_name or d.guild_name }} · {{ d.forum_name }} · {{ d.bot_names|join(' · ') }}</option>
+      {% else %}<option value="">{{ tr("admin.need_forum") }}</option>{% endfor %}
     </select>
-    <button class="btn btn-primary w-full sm:w-auto">创建下载任务</button>
+    <button class="btn btn-primary" type="submit">{{ t("admin.task_create") }}</button>
   </form>
 
-  <div id="downloadTasks" class="space-y-3">
-  {% for t in tasks %}
-    <div class="  p-3 sm:p-4" data-task-id="{{ t.id }}" data-status="{{ t.status }}">
-      <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-        <div class="min-w-0">
-          <div class="task-title"><b>任务 #{{ t.id }}</b><span class="text-gray-200 ml-2">{{ t.server_display_name }}</span><span class="muted ml-2">{{ t.forum_display_name }}</span></div>
-          <div class="text-xs faint mt-1">创建者：{{ t.creator_name }}</div>
+  <div id="downloadTasks">
+    {% for task in tasks %}
+    <div class="admin-task" data-task-id="{{ task.id }}" data-status="{{ task.status }}">
+      <div class="row between" style="align-items:flex-start;flex-wrap:wrap;gap:var(--space-3)">
+        <div class="min0">
+          <div><b>{{ t("admin.task") }} #{{ task.id }}</b> <span style="margin-left:6px">{{ task.server_display_name }}</span> <span class="muted" style="margin-left:6px">{{ task.forum_display_name }}</span></div>
+          <div class="faint" style="font-size:12px;margin-top:4px">{{ t("admin.creator") }}：{{ task.creator_name }}</div>
         </div>
-        <div class="task-actions grid grid-cols-1 sm:grid-cols-3 gap-2 w-full sm:w-auto shrink-0"></div>
+        <div class="task-actions"></div>
       </div>
-      <div class="mt-3 h-2 bg-[#36393f] rounded-full overflow-hidden"><div class="task-progress h-full bg-[#5865f2]" style="width:{{ ((t.completed/t.total*100) if t.total else 0)|round(1) }}%"></div></div>
-      <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-3 text-xs">
-        <div class="  p-2"><div class="muted">阶段</div><div class="task-phase font-bold text-gray-200">{{ t.phase or t.status }}</div></div>
-        <div class="  p-2"><div class="muted">已下载 / 总数</div><div class="task-count font-bold text-gray-200">{% if t.phase == 'scanning' %}{{ t.scan_processed or 0 }} 已扫描{% else %}{{ t.completed }}/{{ t.total }}{% endif %}</div></div>
-        <div class="  p-2"><div class="muted">已运行时间</div><div class="task-elapsed font-bold text-gray-200">{{ t.elapsed_seconds or 0 }} 秒</div></div>
-        <div class="  p-2"><div class="muted">预计剩余</div><div class="task-eta font-bold text-gray-200">{{ t.estimated_seconds or 0 }} 秒</div></div>
+      <div class="progress"><i class="task-progress" style="width:{{ ((task.completed/task.total*100) if task.total else 0)|round(1) }}%"></i></div>
+      <div class="stats4">
+        <div><div class="muted">{{ t("admin.phase") }}</div><b class="task-phase">{{ task.phase or task.status }}</b></div>
+        <div><div class="muted">{{ t("admin.count") }}</div><b class="task-count">{% if task.phase == 'scanning' %}{{ task.scan_processed or 0 }} {{ tr("admin.scanned_n") }}{% else %}{{ task.completed }}/{{ task.total }}{% endif %}</b></div>
+        <div><div class="muted">{{ t("admin.elapsed") }}</div><b class="task-elapsed">{{ task.elapsed_seconds or 0 }} {{ tr("admin.seconds") }}</b></div>
+        <div><div class="muted">{{ t("admin.eta") }}</div><b class="task-eta">{{ task.estimated_seconds or 0 }} {{ tr("admin.seconds") }}</b></div>
       </div>
-      <div class="task-scan text-xs muted mt-2 break-words">扫描：{{ t.scan_processed or 0 }} · 已发现：{{ t.scan_discovered or 0 }} · 活跃机器人：{{ t.active_bots or 0 }}</div>
-      <div class="task-bots grid grid-cols-1 sm:grid-cols-2 gap-1 mt-2"></div>
-      <div class="task-add-bot hidden mt-3 flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">
-        <select class="task-add-bot-select field flex-1"><option value="">选择要加入的机器人</option></select>
-        <button type="button" class="task-add-bot-button btn btn-success w-full sm:w-auto">加入机器人</button>
-        <span class="task-add-bot-message text-xs muted self-center"></span>
+      <div class="task-scan faint" style="font-size:12px;margin-top:8px">{{ tr("adminjs.scan") }}：{{ task.scan_processed or 0 }} · {{ tr("adminjs.found") }}：{{ task.scan_discovered or 0 }} · {{ tr("adminjs.active_bots") }}：{{ task.active_bots or 0 }}</div>
+      <div class="task-bots"></div>
+      <div class="task-add-bot hidden">
+        <select class="task-add-bot-select field" style="flex:1;min-width:160px"><option value="">{{ tr("adminjs.pick_bot") }}</option></select>
+        <button type="button" class="task-add-bot-button btn btn-success">{{ t("admin.join_bot") }}</button>
+        <span class="task-add-bot-message faint" style="font-size:12px"></span>
       </div>
-      <div class="task-message text-xs muted mt-2 break-words">{{ t.message or t.status }}</div>
-      {% if t.error %}<div class="task-error text-yellow-300 text-sm mt-2 whitespace-pre-line break-words">{{ t.error }}</div>{% endif %}
+      <div class="task-message faint" style="font-size:12px;margin-top:8px;word-break:break-word">{{ task.message or task.status }}</div>
+      {% if task.error %}<div class="task-error">{{ task.error }}</div>{% endif %}
     </div>
-  {% else %}<p class="muted">暂无下载任务。</p>{% endfor %}
+    {% else %}<div class="empty">{{ t("admin.tasks_empty") }}</div>{% endfor %}
   </div>
 </section>
 
-<section class="card" style="margin-bottom:var(--space-4)">
-  <h2 class="text-lg font-bold mb-4 ">待审核的合并申请</h2>
+<section class="card admin-sec">
+  <div class="card-head"><h2 class="h-card">{{ t("admin.pending") }}</h2></div>
   {% for req in pending_requests %}
-  <div class="  p-3 sm:p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-2">
-    <div class="flex items-center gap-3 min-w-0"><img src="{{ req.req_avatar or 'https://cdn.discordapp.com/embed/avatars/0.png' }}" class="w-9 h-9 rounded-full shrink-0"><div class="min-w-0"><b>{{ req.req_name }}</b><div class="text-sm muted break-words">申请认领 {{ req.target_name }} · {{ req.target_id }}</div></div></div>
-    <form method="post" action="/admin/approve/{{ req.id }}" class="w-full sm:w-auto">
+  <div class="admin-claim">
+    <div class="row min0">
+      <img class="avatar" src="{{ req.req_avatar or 'https://cdn.discordapp.com/embed/avatars/0.png' }}" width="36" height="36" alt="">
+      <div class="min0"><b>{{ req.req_name }}</b><div class="muted" style="font-size:13px">{{ t("admin.claims") }} {{ req.target_name }} · {{ req.target_id }}</div></div>
+    </div>
+    <form method="post" action="/admin/approve/{{ req.id }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button class="btn btn-success w-full sm:w-auto">通过</button>
+      <button class="btn btn-success" type="submit">{{ t("admin.approve") }}</button>
     </form>
   </div>
-  {% else %}<p class="muted">暂无待审核申请。</p>{% endfor %}
+  {% else %}<div class="empty">{{ t("admin.pending_empty") }}</div>{% endfor %}
 </section>
 
-<section class="card" style="margin-bottom:var(--space-4)">
-  <h2 class="text-lg font-bold mb-4 ">已生效的合并关系</h2>
+<section class="card admin-sec">
+  <div class="card-head"><h2 class="h-card">{{ t("admin.merges") }}</h2></div>
   {% for m in active_merges %}
-  <div class="  p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-2">
-    <span class="break-all">{{ m.target_id }} → {{ m.parent_name or m.parent_id }}</span>
-    <form method="post" action="/admin/unmerge/{{ m.target_id }}" class="w-full sm:w-auto" onsubmit="return confirm('确定解除？')">
+  <div class="admin-claim">
+    <span class="mono" style="font-size:13px;word-break:break-all">{{ m.target_id }} → {{ m.parent_name or m.parent_id }}</span>
+    <form method="post" action="/admin/unmerge/{{ m.target_id }}" data-confirm-key="admin.unmerge_confirm" data-confirm-zh="{{ tr('admin.unmerge_confirm') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button class="btn btn-danger w-full sm:w-auto">解除</button>
+      <button class="btn btn-danger" type="submit">{{ t("admin.unmerge") }}</button>
     </form>
   </div>
-  {% else %}<p class="muted">暂无合并关系。</p>{% endfor %}
+  {% else %}<div class="empty">{{ t("admin.merges_empty") }}</div>{% endfor %}
+
+  <div class="admin-danger-zone">
+    <form method="post" action="/admin/reset_all_claims" data-confirm-key="admin.reset_confirm" data-confirm-zh="{{ tr('admin.reset_confirm') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button class="btn btn-danger" type="submit">{{ t("admin.reset") }}</button>
+    </form>
+  </div>
 </section>
-
-<section class="border-t border-gray-700 pt-4">
-  <form method="post" action="/admin/reset_all_claims" class="w-full sm:w-auto" onsubmit="return confirm('确定清空当前服务器的认领和合并数据？')">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <button class="btn btn-danger w-full sm:w-auto">清空当前服务器认领数据</button>
-  </form>
-</section>
-
-<script>
-let resources={forums:{}};
-const CSRF_TOKEN={{ csrf_token()|tojson }};
-
-function esc(value){
-  return String(value==null?'':value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-function csrfField(){
-  return `<input type="hidden" name="csrf_token" value="${esc(CSRF_TOKEN)}">`;
-}
-
-function actionButton(action,label,cls,confirmText=''){
-  const confirmAttr=confirmText?` onsubmit="return confirm('${confirmText.replaceAll("'","\\\\'")}')"`:'';
-  return `<form method="post" action="/admin/download-task/${encodeURIComponent(action.id)}/${encodeURIComponent(action.path)}"${confirmAttr}>${csrfField()}<button class="btn ${cls} w-full sm:w-auto">${esc(label)}</button></form>`;
-}
-function renderTaskActions(el,t){
-  let html='';
-  if(['pending','running'].includes(t.status)){
-    html+=`<form method="post" action="/admin/download-task/${encodeURIComponent(t.id)}/pause">${csrfField()}<button class="btn btn-warning w-full sm:w-auto">暂停下载</button></form>`;
-    html+=`<form method="post" action="/admin/download-task/${encodeURIComponent(t.id)}/cancel">${csrfField()}<button class="btn btn-ghost w-full sm:w-auto">取消任务</button></form>`;
-  }else if(t.status==='paused'){
-    html+=`<form method="post" action="/admin/download-task/${encodeURIComponent(t.id)}/resume">${csrfField()}<button class="btn btn-success w-full sm:w-auto">继续下载</button></form>`;
-  }
-  html+=`<form method="post" action="/admin/download-task/${encodeURIComponent(t.id)}/delete" onsubmit="return confirm('删除后会彻底清空该下载任务的临时文件；如果该任务是当前服务器分析数据来源，还会删除对应分析数据库和用户访问记录。确定继续？')">${csrfField()}<button class="btn btn-danger w-full sm:w-auto">删除下载</button></form>`;
-  el.innerHTML=html;
-}
-function phaseLabel(t){
-  const m={queued:'排队中',scanning:'扫描 Discord',downloading:'下载中',importing:'实时写入数据库',paused:'已暂停',cancelled:'已取消',completed:'已完成',failed:'失败'};
-  return m[t.phase]||m[t.status]||t.phase||t.status;
-}
-function formatDuration(sec){
-  sec=Math.max(0,Number(sec||0));
-  const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60), s=Math.floor(sec%60);
-  if(h)return `${h} 小时 ${m} 分`;
-  if(m)return `${m} 分 ${s} 秒`;
-  return `${s} 秒`;
-}
-function formatEta(sec){
-  sec=Math.max(0,Number(sec||0));
-  if(!sec)return '计算中';
-  if(sec<60)return `${Math.round(sec)} 秒`;
-  const m=Math.floor(sec/60),s=Math.round(sec%60);
-  if(m<60)return `${m} 分 ${s} 秒`;
-  return `${Math.floor(m/60)} 小时 ${m%60} 分`;
-}
-function updateTaskCard(t){
-  const e=document.querySelector(`[data-task-id="${t.id}"]`);
-  if(!e)return;
-  let percent=0;
-  if(t.phase==='scanning'){
-    const denom=Math.max(Number(t.scan_total_estimate||0),Number(t.scan_discovered||0),Number(t.scan_processed||0));
-    percent=denom?Math.min(95,Number(t.scan_processed||0)/denom*100):3;
-  }else if(t.total){percent=Math.min(100,Number(t.completed||0)/Number(t.total)*100)}
-  e.querySelector('.task-progress').style.width=percent+'%';
-  e.querySelector('.task-phase').textContent=phaseLabel(t);
-  if(t.phase==='scanning'){ e.querySelector('.task-count').textContent=(t.scan_processed||0)+' 已扫描'; }else{ e.querySelector('.task-count').textContent=(t.completed||0)+'/'+(t.total||0); }
-  e.querySelector('.task-elapsed').textContent=formatDuration(t.elapsed_seconds);
-  e.querySelector('.task-eta').textContent=t.phase==='scanning'?'扫描中':formatEta(t.estimated_seconds);
-  e.querySelector('.task-scan').textContent=`扫描：${t.scan_processed||0} · 已发现：${t.scan_discovered||0} · 活跃机器人：${t.active_bots||0}`;
-  e.querySelector('.task-message').textContent=t.message||t.status;
-  const err=e.querySelector('.task-error');
-  if(err)err.textContent=t.error||'';
-  const bots=e.querySelector('.task-bots');
-  bots.innerHTML=(t.bot_progress||[]).map(b=>`<div class="  px-2 py-1 flex justify-between gap-2"><span class="truncate">${esc(b.name)}</span><span class="muted shrink-0">${esc(b.count)}</span></div>`).join('');
-  const addBox=e.querySelector('.task-add-bot');
-  const addSelect=e.querySelector('.task-add-bot-select');
-  const addButton=e.querySelector('.task-add-bot-button');
-  const available=t.available_bots||[];
-  addSelect.innerHTML='<option value="">选择要加入的机器人</option>'+available.map(b=>`<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('');
-  addBox.classList.toggle('hidden', !['pending','running'].includes(t.status) || !available.length);
-  addButton.disabled=!available.length;
-  addButton.onclick=()=>addBotToTask(t.id,addSelect,addButton,addBox.querySelector('.task-add-bot-message'));
-  renderTaskActions(e.querySelector('.task-actions'),t);
-}
-async function addBotToTask(taskId,select,button,message){
-  const botId=select.value;
-  if(!botId){message.textContent='请先选择机器人';return;}
-  button.disabled=true; message.textContent='正在验证权限…';
-  try{
-    const body=new URLSearchParams({csrf_token:CSRF_TOKEN,bot_id:botId});
-    const r=await fetch(`/admin/download-task/${encodeURIComponent(taskId)}/bot/add`,{method:'POST',headers:{'X-Requested-With':'XMLHttpRequest','Accept':'application/json'},body});
-    const data=await r.json();
-    if(!r.ok||!data.ok)throw new Error(data.message||data.error||'加入机器人失败');
-    message.textContent=data.message||'已加入，下载器将自动启动';
-    setTimeout(refreshTasks,500);
-  }catch(err){message.textContent=err.message||'加入机器人失败';button.disabled=false;}
-}
-async function refreshTasks(){
-  try{
-    const r=await fetch('/admin/download-tasks/status',{cache:'no-store'});
-    const ts=await r.json();
-    let active=false;
-    for(const t of ts){ updateTaskCard(t); active ||= ['pending','running'].includes(t.status) || ['scanning','downloading','importing','queued'].includes(t.phase); }
-    if(active)setTimeout(refreshTasks,1000);
-  }catch(e){setTimeout(refreshTasks,5000)}
-}
-
-async function loadResources(){
-  try{
-    const r=await fetch('/api/managed-discord-resources',{cache:'no-store'});
-    resources=await r.json();
-    const g=document.querySelector('#guild');
-    g.innerHTML='<option value="">选择服务器</option>'+resources.guilds.map(x=>`<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('');
-    g.onchange=loadForums;
-    if(resources.guilds.length){ g.value=resources.guilds[0].id; loadForums(); }
-  }catch(e){document.querySelector('#guild').innerHTML='<option>请重新登录 Discord</option>'}
-}
-function loadForums(){
-  const guildId=document.querySelector('#guild').value;
-  const guild=resources.guilds.find(x=>String(x.id)===String(guildId));
-  const icon=document.querySelector('#guildIcon');
-  icon.src=(guild&&guild.icon_url)||'https://cdn.discordapp.com/embed/avatars/0.png';
-  icon.onerror=()=>{icon.src='https://cdn.discordapp.com/embed/avatars/0.png'};
-  const fs=resources.forums[guildId]||[];
-  document.querySelector('#forum').innerHTML=fs.length?fs.map(x=>`<option value="${esc(x.id)}">${esc(x.name)}</option>`).join(''):'<option value="">没有可访问论坛频道</option>';
-}
-document.querySelectorAll('[data-task-id]').forEach(e=>{
-  renderTaskActions(e.querySelector('.task-actions'),{id:e.dataset.taskId,status:e.dataset.status});
-});
-(async()=>{await loadResources();if(document.querySelector('[data-task-id]'))refreshTasks()})();
-document.querySelectorAll('input[name="bot_ids"]').forEach(cb=>cb.addEventListener('change',()=>{
-  const selected=[...document.querySelectorAll('input[name="bot_ids"]:checked')];
-  
-}));
-</script>
 
 {% endblock %}
 {% block footer %}{% endblock %}

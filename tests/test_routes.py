@@ -71,3 +71,13 @@ def test_public_auth_pages_when_logged_out(client):
         s.clear()
     for url in ("/welcome", "/login", "/privacy", "/terms"):
         assert client.get(url).status_code == 200, url
+
+
+def test_admin_page_uses_dixo(client):
+    html = client.get("/admin").get_data(as_text=True)
+    assert "dixo.css" in html or "dixo-" in html  # hashed asset name
+    assert "dixo-admin.js" in html or "dixo-admin" in html
+    assert "dixo-theme.js" in html or "dixo-theme" in html
+    assert "#5865f2" not in html and "#36393f" not in html and "text-gray-" not in html
+    assert "js/i18n.js" not in html
+    assert 'data-i18n="admin.title"' in html
