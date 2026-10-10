@@ -110,6 +110,44 @@
     {% else %}<div class="empty">{{ t("common.empty") }}</div>{% endfor %}
   </div>
 </section>
+
+<section class="card" id="analytics" style="margin-top:var(--space-4)" x-data="analyticsPanel()" x-init="boot()">
+  <div class="card-head">
+    <div><h2 class="h-card">{{ t("home.analytics") }}</h2>
+      <div class="card-sub">{{ t("home.heatmap.hint") }}</div></div>
+    <div class="row wrap">
+      <div class="seg">
+        <button type="button" :class="grain==='day'&&'on'" @click="setGrain('day')">{{ t("home.grain.day") }}</button>
+        <button type="button" :class="grain==='week'&&'on'" @click="setGrain('week')">{{ t("home.grain.week") }}</button>
+        <button type="button" :class="grain==='month'&&'on'" @click="setGrain('month')">{{ t("home.grain.month") }}</button>
+        <button type="button" :class="grain==='year'&&'on'" @click="setGrain('year')">{{ t("home.grain.year") }}</button>
+      </div>
+      <div class="seg">
+        <button type="button" :class="preset==='30'&&'on'" @click="setPreset(30)">{{ t("home.trend.range30") }}</button>
+        <button type="button" :class="preset==='90'&&'on'" @click="setPreset(90)">{{ t("home.trend.range90") }}</button>
+        <button type="button" :class="preset==='365'&&'on'" @click="setPreset(365)">1Y</button>
+        <button type="button" :class="preset==='all'&&'on'" @click="setPreset('all')">{{ t("home.trend.rangeall") }}</button>
+        <button type="button" :class="preset==='custom'&&'on'" @click="preset='custom'">{{ t("home.range.custom") }}</button>
+      </div>
+    </div>
+  </div>
+  <div class="row wrap" x-show="preset==='custom'" x-cloak style="margin-bottom:var(--space-3)">
+    <label class="muted" style="font-size:13px">{{ t("home.since") }} <input class="field" type="date" x-model="since" style="width:auto;display:inline-block"></label>
+    <label class="muted" style="font-size:13px">{{ t("home.until") }} <input class="field" type="date" x-model="until" style="width:auto;display:inline-block"></label>
+    <button class="btn btn-primary" type="button" @click="reload()">{{ t("home.apply") }}</button>
+  </div>
+  <div class="grid g-2">
+    <div><div class="eyebrow" style="margin-bottom:8px">{{ t("home.chart.messages") }}</div><div class="chart sm"><canvas id="anMsgs"></canvas></div></div>
+    <div><div class="eyebrow" style="margin-bottom:8px">{{ t("home.chart.active_users") }}</div><div class="chart sm"><canvas id="anUsers"></canvas></div></div>
+    <div><div class="eyebrow" style="margin-bottom:8px">{{ t("home.chart.threads") }}</div><div class="chart sm"><canvas id="anThreads"></canvas></div></div>
+    <div><div class="eyebrow" style="margin-bottom:8px">{{ t("home.chart.reply_rate") }}</div><div class="chart sm"><canvas id="anReply"></canvas></div></div>
+  </div>
+  <div style="margin-top:var(--space-4)">
+    <div class="eyebrow" style="margin-bottom:8px">{{ t("home.chart.emoji") }}</div>
+    <div class="row wrap" id="anEmoji"></div>
+  </div>
+</section>
+
 {% endblock %}
 
 {% block modals %}
@@ -154,6 +192,63 @@ function dashboard() {
     setRange(n) { this.range = n; window.dixoCharts && window.dixoCharts.range(n); },
   };
 }
+
+function analyticsPanel() {
+  return {
+    grain: 'day', preset: '90', since: '', until: '', data: null, charts: {},
+    boot() { this.reload(); document.addEventListener('dixo:theme', () => this.paint()); document.addEventListener('dixo:lang', () => this.paint()); },
+    setGrain(g) { this.grain = g; this.paint(); },
+    setPreset(p) { this.preset = String(p); if (p !== 'custom') this.reload(); },
+    rangeArgs() {
+      if (this.preset === 'custom') return { since: this.since || null, until: this.until || null };
+      if (this.preset === 'all') return {};
+      const n = parseInt(this.preset, 10); const d = new Date(); d.setDate(d.getDate() - n);
+      return { since: d.toISOString().slice(0, 10) };
+    },
+    reload() {
+      const q = new URLSearchParams(); const r = this.rangeArgs();
+      if (r.since) q.set('since', r.since); if (r.until) q.set('until', r.until);
+      fetch('/api/v1/analytics?' + q.toString(), { credentials: 'same-origin' })
+        .then(r => r.json()).then(j => { this.data = (j && j.data) || null; this.paint(); });
+    },
+    series(kind) {
+      if (!this.data) return [];
+      if (kind === 'messages') return this.data['messages_' + this.grain] || this.data.messages_day || [];
+      if (kind === 'users') return this.data['active_users_' + this.grain] || this.data.active_users_day || [];
+      if (kind === 'threads') return this.data.thread_growth_month || [];
+      if (kind === 'reply') return this.data.reply_rate_week || [];
+      return [];
+    },
+    paint() {
+      if (!window.Chart || !this.data) return;
+      const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+      const grid = { color: dark ? 'rgba(255,255,255,.08)' : 'rgba(0,0,0,.06)', drawTicks: false };
+      const tick = dark ? '#a1a1a6' : '#86868b';
+      Chart.defaults.color = tick;
+      const base = { responsive: true, maintainAspectRatio: false, animation: { duration: 250 },
+        plugins: { legend: { display: false }, tooltip: { backgroundColor: dark ? 'rgba(28,28,30,.95)' : 'rgba(29,29,31,.92)', cornerRadius: 8 } },
+        scales: { y: { beginAtZero: true, grid, border: { display: false }, ticks: { maxTicksLimit: 4 } },
+          x: { grid: { display: false }, border: { display: false }, ticks: { maxTicksLimit: 8, maxRotation: 0, color: tick } } } };
+      const mk = (id, cfg) => { if (this.charts[id]) this.charts[id].destroy(); const el = document.getElementById(id); if (!el) return; this.charts[id] = new Chart(el, cfg); };
+      const msgs = this.series('messages'), users = this.series('users'), thr = this.series('threads'), rep = this.series('reply');
+      mk('anMsgs', { type: 'line', data: { labels: msgs.map(d => d.t), datasets: [{ data: msgs.map(d => d.c), borderColor: '#0a84ff', backgroundColor: 'rgba(10,132,255,.12)', fill: true, tension: .3, pointRadius: 0, borderWidth: 2 }] }, options: base });
+      mk('anUsers', { type: 'bar', data: { labels: users.map(d => d.t), datasets: [{ data: users.map(d => d.c), backgroundColor: '#30d158', borderRadius: 3, maxBarThickness: 14 }] }, options: base });
+      mk('anThreads', { type: 'line', data: { labels: thr.map(d => d.t), datasets: [
+        { label: 'new', data: thr.map(d => d.c), borderColor: '#ff9f0a', tension: .3, pointRadius: 0, borderWidth: 2 },
+        { label: 'cum', data: thr.map(d => d.cum), borderColor: '#64d2ff', borderDash: [4,4], tension: .3, pointRadius: 0, borderWidth: 1.5, yAxisID: 'y1' }
+      ] }, options: Object.assign({}, base, { plugins: Object.assign({}, base.plugins, { legend: { display: true, align: 'end', labels: { boxWidth: 10, usePointStyle: true } } }),
+        scales: Object.assign({}, base.scales, { y1: { position: 'right', grid: { drawOnChartArea: false }, border: { display: false }, ticks: { maxTicksLimit: 4 } } }) }) });
+      mk('anReply', { type: 'line', data: { labels: rep.map(d => d.t), datasets: [{ data: rep.map(d => Math.round((d.reply_rate || 0) * 1000) / 10), borderColor: '#bf5af2', tension: .3, pointRadius: 0, borderWidth: 2 }] },
+        options: Object.assign({}, base, { scales: Object.assign({}, base.scales, { y: Object.assign({}, base.scales.y, { ticks: { callback: v => v + '%' } } }) }) });
+      const box = document.getElementById('anEmoji');
+      if (box) box.innerHTML = (this.data.top_emoji || []).slice(0, 16).map(e => {
+        const img = e.emoji_url ? `<img src="${e.emoji_url}" alt="" style="width:18px;height:18px;object-fit:contain">` : `<span>${e.emoji_name}</span>`;
+        return `<span class="chip">${img}<span class="num">${e.c}</span></span>`;
+      }).join('');
+    }
+  };
+}
+
 (function () {
   const daily = {{ chart_daily | tojson }}, hourly = {{ chart_hourly | tojson }};
   function ma(arr, n) { const out = []; let s = 0; arr.forEach((v, i) => { s += v; if (i >= n) s -= arr[i - n]; out.push(i >= n - 1 ? Math.round(s / n) : null); }); return out; }

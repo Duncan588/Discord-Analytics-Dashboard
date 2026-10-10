@@ -1,54 +1,22 @@
-<!DOCTYPE html>
-<html lang="zh">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>服务条款 - 抽象派档案馆</title>
-<meta name="discord-client-id" content="{{ discord_client_id }}">
-<script src="/static/js/discord-activity.js?v=20260821-9" defer></script>
-<script src="/static/js/i18n.js?v=20260821-3" defer></script>
-<link rel="stylesheet" href="/static/css/fallback.css?v=20260821-1">
-<link rel="stylesheet" href="/static/css/tailwind-static.css?v=20260821-1">
-<style>
-  body{background:#36393f;color:#fff;font-family:"Microsoft YaHei",sans-serif}
-  .section{background:linear-gradient(145deg,#2f3136,#292b2f);border:1px solid #40444b;border-radius:1rem;padding:1.25rem;box-shadow:0 10px 30px rgba(0,0,0,.12)}
-  @media(min-width:640px){.section{padding:1.75rem}}
-  .legal h2{font-size:1.05rem;font-weight:700;color:#fff;margin:1.4rem 0 .6rem}
-  .legal p,.legal li{font-size:.875rem;color:#b9bbbe;line-height:1.75}
-  .legal ul{list-style:disc;padding-left:1.4rem;margin:.4rem 0}
-  .lang-switch{display:flex;gap:.5rem;margin-bottom:1rem}
-  .lang-switch button{font-size:.8rem;padding:.3rem .9rem;border-radius:.6rem;border:1px solid #40444b;background:#202225;color:#b9bbbe;cursor:pointer}
-  .lang-switch button.active{background:#5865f2;color:#fff;border-color:#5865f2}
-</style>
-</head>
-<body class="min-h-screen p-2 sm:p-4 md:p-8">
-<div class="w-full max-w-4xl mx-auto space-y-4">
-
-<header class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+{% extends "base.html" %}
+{% block title %}{{ tr("nav.terms") }} · {{ tr("nav.archive") }}{% endblock %}
+{% block page_class %} narrow{% endblock %}
+{% block content %}
+<div class="page-head">
   <div>
-    <h1 class="text-xl sm:text-2xl font-bold">服务条款</h1>
-    <p class="text-gray-500 mt-1 text-sm">最近更新：2026-09-16 · 使用「抽象派档案馆」即表示你同意以下条款。</p>
+    <h1 class="h-display" style="font-size:32px">{{ t("nav.terms") }}</h1>
+    <p class="muted" style="margin-top:6px;font-size:14px">{{ t("legal.terms_sub") }}</p>
   </div>
-  <div class="space-x-3 text-sm">
-    <a href="/privacy" class="text-blue-400 hover:underline">隐私政策</a>
-    <a href="/welcome" class="text-blue-400 hover:underline">返回首页</a>
-  </div>
-</header>
-
-<div class="section legal">
-  <div class="lang-switch">
-    <button type="button" onclick="switchLang('zh')" id="btn-zh" class="active">中文</button>
-    <button type="button" onclick="switchLang('en')" id="btn-en">English</button>
-  </div>
-
-  <!-- ==================== 中文 ==================== -->
-  <div id="lang-zh">
-    <h2>1. 服务说明</h2>
+  <div class="row"><a href="/privacy">{{ t("nav.privacy") }}</a><a href="/welcome">{{ t("login.back") }}</a></div>
+</div>
+<section class="card legal">
+  <div data-lang="zh">
+<h2>1. 服务说明</h2>
     <p>「抽象派档案馆」（下称"本站"）为 Discord 社区提供消息数据分析服务，包括：词云、排行榜、互动关系、活跃趋势、年度报告，以及机器人提供的收藏、拉黑拦截、成员同步、数据下载等功能。本站与 Discord 官方无隶属关系。</p>
 
     <h2>2. 账户与访问权限</h2>
     <ul>
-      <li>你必须通过 Discord OAuth 登录；登录即表示你授权本站获取你的 Discord ID、用户名、头像与服务器列表（详见<a href="/privacy" class="text-blue-400 hover:underline">隐私政策</a>）；</li>
+      <li>你必须通过 Discord OAuth 登录；登录即表示你授权本站获取你的 Discord ID、用户名、头像与服务器列表（详见<a href="/privacy" >隐私政策</a>）；</li>
       <li>服务器数据的访问权限由管理员或服务器所有者授予；权限级别（管理员 / 白名单用户）决定你可以执行的操作；</li>
       <li>禁止共享账户、绕过权限控制访问未被授权的服务器数据。</li>
     </ul>
@@ -88,17 +56,19 @@
     <p>功能更新（尤其是机器人新增收集或拦截行为）时，本条款会随之更新并修改"最近更新"日期。重大变更会在站内公告。继续使用即视为接受更新后的条款。</p>
 
     <h2>9. 联系方式</h2>
-    <p>对条款的疑问请在 Discord 服务器内联系管理员。相关数据处理见<a href="/privacy" class="text-blue-400 hover:underline">隐私政策</a>。</p>
+    <p>对条款的疑问请在 Discord 服务器内联系管理员。相关数据处理见<a href="/privacy" >隐私政策</a>。</p>
   </div>
 
   <!-- ==================== English ==================== -->
-  <div id="lang-en" style="display:none">
-    <h2>1. About the Service</h2>
+  <div
+  </div>
+  <div data-lang="en" hidden>
+<h2>1. About the Service</h2>
     <p>"抽象派档案馆" (the "Site") provides message analytics for Discord communities, including word clouds, leaderboards, interaction graphs, activity trends, yearly reports, and bot features such as favorites, block interception, member sync and data download. The Site is not affiliated with Discord Inc.</p>
 
     <h2>2. Accounts &amp; Access</h2>
     <ul>
-      <li>You must log in via Discord OAuth; by logging in you authorize the Site to obtain your Discord ID, username, avatar and guild list (see the <a href="/privacy" class="text-blue-400 hover:underline">Privacy Policy</a>);</li>
+      <li>You must log in via Discord OAuth; by logging in you authorize the Site to obtain your Discord ID, username, avatar and guild list (see the <a href="/privacy" >Privacy Policy</a>);</li>
       <li>Access to server data is granted by administrators or server owners; your permission level (admin / whitelisted user) determines what you can do;</li>
       <li>Do not share accounts or bypass permission controls to access unauthorized server data.</li>
     </ul>
@@ -138,18 +108,8 @@
     <p>These terms are updated as features change — in particular whenever the bot adds new collection or interception behaviors — and the "Last updated" date is refreshed accordingly. Significant changes will be announced on the Site. Continued use constitutes acceptance.</p>
 
     <h2>9. Contact</h2>
-    <p>For questions about these terms, contact an administrator in the Discord server. Data handling is described in the <a href="/privacy" class="text-blue-400 hover:underline">Privacy Policy</a>.</p>
+    <p>For questions about these terms, contact an administrator in the Discord server. Data handling is described in the <a href="/privacy" >Privacy Policy</a>.</p>
+  
   </div>
-</div>
-
-</div>
-<script>
-function switchLang(lang){
-  document.getElementById('lang-zh').style.display = lang==='zh' ? '' : 'none';
-  document.getElementById('lang-en').style.display = lang==='en' ? '' : 'none';
-  document.getElementById('btn-zh').classList.toggle('active', lang==='zh');
-  document.getElementById('btn-en').classList.toggle('active', lang==='en');
-}
-</script>
-</body>
-</html>
+</section>
+{% endblock %}

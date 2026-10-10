@@ -20,6 +20,7 @@
         el.setAttribute(attr, l === "en" && en[k] ? en[k] : el.getAttribute(store));
       });
     });
+    document.querySelectorAll("[data-lang]").forEach(function (el) { el.hidden = el.getAttribute("data-lang") !== l; });
     document.dispatchEvent(new CustomEvent("dixo:lang", { detail: l }));
   }
   window.dixoLang = lang;

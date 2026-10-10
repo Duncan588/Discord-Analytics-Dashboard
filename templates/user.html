@@ -14,6 +14,21 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="target_id" value="{{ user.user_id }}">
       <button class="btn btn-ghost" type="submit">{{ t("user.claim") }}</button>
     </form>
+    {% if i_blocked %}
+    <form action="/api/social/unblock" method="post" onsubmit="return confirm(this.dataset.msg);" data-msg="{{ tr('user.unblock_confirm') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="user_id" value="{{ user.user_id }}">
+      <input type="hidden" name="next" value="{{ request.path }}">
+      <button class="btn btn-ghost" type="submit">{{ t("user.unblock") }}</button>
+    </form>
+    {% else %}
+    <form action="/api/social/block" method="post" onsubmit="return confirm(this.dataset.msg);" data-msg="{{ tr('user.block_confirm') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="user_id" value="{{ user.user_id }}">
+      <input type="hidden" name="next" value="{{ request.path }}">
+      <button class="btn btn-danger" type="submit">{{ t("user.block") }}</button>
+    </form>
+    {% endif %}
     {% endif %}
     {% if is_self %}<a class="btn btn-primary" href="/report" target="_blank" data-report-link>{{ t("user.report") }}</a>{% endif %}
   </div>
@@ -72,7 +87,12 @@
   <div class="card">
     <div class="card-head"><h2 class="h-card">{{ t("user.blocks") }}</h2><span class="faint mono" style="font-size:12px">{{ blk_page }}/{{ total_blk_pages }}</span></div>
     <ul class="list">
-      {% for b in my_blocks %}<li>{{ ui.avatar(b.avatar_url, 32) }}<div class="min0" style="flex:1"><div class="truncate">{{ b.name }}</div><div class="faint" style="font-size:12px">{{ b.created_at }}</div></div><div style="text-align:right"><span class="chip">🛡 {{ b.intercepted }} {{ t("user.intercepted") }}</span><div class="faint" style="font-size:11px">{{ b.last_blocked_at }}</div></div></li>
+      {% for b in my_blocks %}<li>{{ ui.avatar(b.avatar_url, 32) }}<div class="min0" style="flex:1"><a class="truncate" style="display:block;color:var(--ink);font-weight:500" href="/user/{{ b.blocked_id }}">{{ b.name }}</a><div class="faint" style="font-size:12px">{{ b.created_at }}</div></div><div style="text-align:right"><span class="chip">🛡 {{ b.intercepted }} {{ t("user.intercepted") }}</span><div class="faint" style="font-size:11px">{{ b.last_blocked_at }}</div>
+        <form action="/api/social/unblock" method="post" style="margin-top:6px" onsubmit="return confirm(this.dataset.msg);" data-msg="{{ tr('user.unblock_confirm') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="user_id" value="{{ b.blocked_id }}">
+          <input type="hidden" name="next" value="{{ request.path }}?blk_page={{ blk_page }}&fav_page={{ fav_page }}">
+          <button class="btn btn-ghost" type="submit" style="height:28px;font-size:12px">{{ t("user.unblock") }}</button>
+        </form></div></li>
       {% else %}<li class="empty">{{ t("user.blocks.empty") }}</li>{% endfor %}
     </ul>
     {% macro blk_url(n) %}?blk_page={{ n }}&fav_page={{ fav_page }}{% endmacro %}
@@ -80,7 +100,18 @@
   </div>
   <div class="card">
     <div class="card-head"><h2 class="h-card">{{ t("user.favorites") }}</h2><span class="faint mono" style="font-size:12px">{{ fav_page }}/{{ total_fav_pages }}</span></div>
-    {% for f in my_favorites %}<a class="post" href="https://discord.com/channels/{{ f.guild_id }}/{{ f.thread_id }}" target="_blank" rel="noopener"><div class="post-title truncate">📌 {{ f.thread_name }}</div><div class="post-meta">{{ f.guild_name }} · {{ f.created_at }}</div></a>
+    {% for f in my_favorites %}<div class="post" style="display:flex;gap:12px;align-items:flex-start">
+      <a href="https://discord.com/channels/{{ f.guild_id }}/{{ f.thread_id }}" target="_blank" rel="noopener" style="flex:1;min-width:0;color:inherit">
+        <div class="post-title truncate">📌 {{ f.thread_name }}</div>
+        <div class="post-meta">{{ f.guild_name }} · {{ f.created_at }}</div>
+      </a>
+      <form action="/api/social/unfavorite" method="post" onsubmit="return confirm(this.dataset.msg);" data-msg="{{ tr('user.unfavorite_confirm') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="thread_id" value="{{ f.thread_id }}"><input type="hidden" name="guild_id" value="{{ f.guild_id }}">
+        <input type="hidden" name="next" value="{{ request.path }}?blk_page={{ blk_page }}&fav_page={{ fav_page }}">
+        <button class="btn btn-ghost" type="submit" style="height:28px;font-size:12px">{{ t("user.unfavorite") }}</button>
+      </form>
+    </div>
     {% else %}<div class="empty">{{ t("user.favorites.empty") }}</div>{% endfor %}
     {% macro fav_url(n) %}?fav_page={{ n }}&blk_page={{ blk_page }}{% endmacro %}
     {{ ui.pager(fav_page, total_fav_pages, fav_url) }}
@@ -99,11 +130,18 @@
   <div style="border-top:1px solid var(--hairline);margin-top:var(--space-3)"></div>
   {% if active_tab == 'threads' %}
     {% for th in my_threads %}
-    <a class="post" href="https://discord.com/channels/{{ server_id }}/{{ th.thread_id }}" target="_blank" rel="noopener">
-      <div class="row between"><span class="post-title truncate">{{ th.name }}</span><span class="faint" style="font-size:12px;flex:none">{{ th.created_at | datetimeformat }}</span></div>
+    <div class="post">
+      <div class="row between"><a class="post-title truncate" style="color:inherit" href="https://discord.com/channels/{{ server_id }}/{{ th.thread_id }}" target="_blank" rel="noopener">{{ th.name }}</a><span class="faint" style="font-size:12px;flex:none">{{ th.created_at | datetimeformat }}</span></div>
       <div class="post-text clamp-2">{{ th.first_content }}</div>
-      <div class="post-meta"><span class="chip">💬 {{ th.reply_count }}</span>{% if th.top_emoji_url %}<span class="chip"><img src="{{ th.top_emoji_url }}" alt="">{{ th.top_emoji_count }}</span>{% endif %}</div>
-    </a>
+      <div class="post-meta"><span class="chip">💬 {{ th.reply_count }}</span>{% if th.top_emoji_url %}<span class="chip"><img src="{{ th.top_emoji_url }}" alt="">{{ th.top_emoji_count }}</span>{% endif %}
+      {% if is_self %}
+      <form action="/api/social/favorite" method="post" style="display:inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="thread_id" value="{{ th.thread_id }}"><input type="hidden" name="guild_id" value="{{ server_id }}">
+        <input type="hidden" name="next" value="{{ request.path }}?tab=threads&page={{ current_page }}&sort={{ current_sort }}">
+        <button class="btn btn-ghost" type="submit" style="height:26px;font-size:12px">📌 {{ t("user.favorite") }}</button>
+      </form>{% endif %}</div>
+    </div>
     {% else %}<div class="empty">{{ t("user.threads.empty") }}</div>{% endfor %}
     {{ ui.pager(current_page, total_thread_pages, tab_url) }}
   {% else %}

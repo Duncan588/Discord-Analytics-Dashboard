@@ -1,54 +1,17 @@
-<!DOCTYPE html>
-<html lang="zh">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>隐私政策 - 抽象派档案馆</title>
-<meta name="discord-client-id" content="{{ discord_client_id }}">
-<script src="/static/js/discord-activity.js?v=20260821-9" defer></script>
-<script src="/static/js/i18n.js?v=20260821-3" defer></script>
-<link rel="stylesheet" href="/static/css/fallback.css?v=20260821-1">
-<link rel="stylesheet" href="/static/css/tailwind-static.css?v=20260821-1">
-<style>
-  body{background:#36393f;color:#fff;font-family:"Microsoft YaHei",sans-serif}
-  .section{background:linear-gradient(145deg,#2f3136,#292b2f);border:1px solid #40444b;border-radius:1rem;padding:1.25rem;box-shadow:0 10px 30px rgba(0,0,0,.12)}
-  @media(min-width:640px){.section{padding:1.75rem}}
-  .legal h2{font-size:1.05rem;font-weight:700;color:#fff;margin:1.4rem 0 .6rem}
-  .legal h3{font-size:.95rem;font-weight:700;color:#c7c9cb;margin:1rem 0 .4rem}
-  .legal p,.legal li{font-size:.875rem;color:#b9bbbe;line-height:1.75}
-  .legal ul{list-style:disc;padding-left:1.4rem;margin:.4rem 0}
-  .legal table{width:100%;font-size:.82rem;border-collapse:collapse;margin:.6rem 0}
-  .legal th,.legal td{border:1px solid #40444b;padding:.5rem .7rem;text-align:left;color:#b9bbbe}
-  .legal th{background:#202225;color:#8f9297}
-  .legal code{background:#202225;border:1px solid #40444b;border-radius:.3rem;padding:.05rem .35rem;font-size:.8em}
-  .lang-switch{display:flex;gap:.5rem;margin-bottom:1rem}
-  .lang-switch button{font-size:.8rem;padding:.3rem .9rem;border-radius:.6rem;border:1px solid #40444b;background:#202225;color:#b9bbbe;cursor:pointer}
-  .lang-switch button.active{background:#5865f2;color:#fff;border-color:#5865f2}
-</style>
-</head>
-<body class="min-h-screen p-2 sm:p-4 md:p-8">
-<div class="w-full max-w-4xl mx-auto space-y-4">
-
-<header class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+{% extends "base.html" %}
+{% block title %}{{ tr("nav.privacy") }} · {{ tr("nav.archive") }}{% endblock %}
+{% block page_class %} narrow{% endblock %}
+{% block content %}
+<div class="page-head">
   <div>
-    <h1 class="text-xl sm:text-2xl font-bold">隐私政策</h1>
-    <p class="text-gray-500 mt-1 text-sm">最近更新：2026-09-16 · 本政策说明「抽象派档案馆」收集哪些数据、如何使用与保护。</p>
+    <h1 class="h-display" style="font-size:32px">{{ t("nav.privacy") }}</h1>
+    <p class="muted" style="margin-top:6px;font-size:14px">{{ t("legal.privacy_sub") }}</p>
   </div>
-  <div class="space-x-3 text-sm">
-    <a href="/terms" class="text-blue-400 hover:underline">服务条款</a>
-    <a href="/welcome" class="text-blue-400 hover:underline">返回首页</a>
-  </div>
-</header>
-
-<div class="section legal">
-  <div class="lang-switch">
-    <button type="button" onclick="switchLang('zh')" id="btn-zh" class="active">中文</button>
-    <button type="button" onclick="switchLang('en')" id="btn-en">English</button>
-  </div>
-
-  <!-- ==================== 中文 ==================== -->
-  <div id="lang-zh">
-    <h2>1. 我们是谁</h2>
+  <div class="row"><a href="/terms">{{ t("nav.terms") }}</a><a href="/welcome">{{ t("login.back") }}</a></div>
+</div>
+<section class="card legal">
+  <div data-lang="zh">
+<h2>1. 我们是谁</h2>
     <p>「抽象派档案馆」（下称"本站"）是一个 Discord 社区数据分析看板，由社区管理员运营，通过 Discord 机器人收集服务器内公开频道与论坛（Forum）的讨论数据，并以统计图表的形式展示。本政策说明本站收集、使用、存储和保护数据的方式。</p>
 
     <h2>2. 我们收集的数据</h2>
@@ -129,8 +92,10 @@
   </div>
 
   <!-- ==================== English ==================== -->
-  <div id="lang-en" style="display:none">
-    <h2>1. Who We Are</h2>
+  <div
+  </div>
+  <div data-lang="en" hidden>
+<h2>1. Who We Are</h2>
     <p>"抽象派档案馆" (the "Site") is a Discord community analytics dashboard operated by community administrators. It collects discussion data from public channels and Forum posts in authorized Discord servers via Discord bots, and presents it as statistical dashboards. This policy explains what we collect, how we use it, and how we protect it.</p>
 
     <h2>2. Data We Collect</h2>
@@ -208,17 +173,7 @@
 
     <h2>9. Policy Updates</h2>
     <p>Whenever the bot starts collecting new types of content or data handling changes, we will update the "Last updated" date on this page and describe the additions truthfully. Continued use of the Site constitutes acceptance of the updated policy.</p>
+  
   </div>
-</div>
-
-</div>
-<script>
-function switchLang(lang){
-  document.getElementById('lang-zh').style.display = lang==='zh' ? '' : 'none';
-  document.getElementById('lang-en').style.display = lang==='en' ? '' : 'none';
-  document.getElementById('btn-zh').classList.toggle('active', lang==='zh');
-  document.getElementById('btn-en').classList.toggle('active', lang==='en');
-}
-</script>
-</body>
-</html>
+</section>
+{% endblock %}
