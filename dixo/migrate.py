@@ -31,6 +31,21 @@ INDEXES = [
 ]
 
 
+def _spec_sig(spec):
+    table, cols = spec.split("(", 1)
+    return (table.strip(), tuple(c.strip() for c in cols.rstrip(")").split(",")))
+
+
+def _index_signatures(conn):
+    """(table, leading columns) -> existing index name, so equivalent indexes are not duplicated."""
+    out = {}
+    for name, table in conn.execute("SELECT name, tbl_name FROM sqlite_master WHERE type='index' AND name NOT LIKE 'sqlite_%'"):
+        cols = tuple(r[2] for r in conn.execute(f"PRAGMA index_info('{name}')"))
+        if cols and None not in cols:
+            out.setdefault((table, cols), name)
+    return out
+
+
 def server_dbs(portal_path, guild=None):
     conn = sqlite3.connect(portal_path)
     try:
@@ -53,9 +68,14 @@ def migrate_db(path, dry_run=False, with_search=False):
     conn = sqlite3.connect(path, timeout=120)
     conn.execute("PRAGMA busy_timeout=120000")
     have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+    sigs = _index_signatures(conn)
     for name, spec in INDEXES:
         if name in have:
             print(f"   index {name}: exists")
+            continue
+        twin = sigs.get(_spec_sig(spec))
+        if twin:
+            print(f"   index {name}: equivalent {twin} exists, skipped")
             continue
         print(f"   index {name}: {'WOULD CREATE' if dry_run else 'creating'} ON {spec}")
         if not dry_run:
