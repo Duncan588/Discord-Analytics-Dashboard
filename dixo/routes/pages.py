@@ -307,9 +307,20 @@ def user_profile(user_id):
                 f"JOIN threads t ON m.thread_id=t.thread_id WHERE m.author_id IN ({ph}) "
                 f"ORDER BY m.timestamp DESC LIMIT ? OFFSET ?"
             )
-        messages = process_messages(conn, conn.execute(
-            message_query, (*merged_ids, ITEMS_PER_PAGE, offset)
-        ).fetchall())
+        hot_ids = _hot_message_ids(sid, conn, merged_ids, ITEMS_PER_PAGE, offset) if sort_by == "hot" else None
+        if hot_ids is not None:
+            rows = []
+            if hot_ids:
+                hph = ",".join("?" for _ in hot_ids)
+                got = {str(r["message_id"]): r for r in conn.execute(
+                    f"SELECT m.*,t.name thread_name,(SELECT count(*) FROM reactions WHERE message_id=m.message_id) total_reactions "
+                    f"FROM messages m JOIN threads t ON m.thread_id=t.thread_id WHERE m.message_id IN ({hph})", hot_ids)}
+                rows = [got[i] for i in hot_ids if i in got]
+            messages = process_messages(conn, rows)
+        else:
+            messages = process_messages(conn, conn.execute(
+                message_query, (*merged_ids, ITEMS_PER_PAGE, offset)
+            ).fetchall())
     # Keep the thread lookup bounded to the user's own candidate messages;
     # reaction icons are fetched in one batch below instead of one query per
     # returned thread.
@@ -596,3 +607,45 @@ def report():
         "result": result,
     }
     return render_template("report.html", user=db_user, server_id=sid, word_cloud_data=format_word_cloud(get_word_cloud_counter(texts), 50), percentile=95, **result)
+
+HOT_FAST_MIN_MSGS = 20000
+
+
+def _hot_message_ids(sid, conn, merged_ids, limit, offset):
+    """Top-reacted message ids for prolific users via summary.msg_react (c DESC index).
+
+    The correlated COUNT(*) per message is O(user messages) (~10s for 200K+).
+    Returns None to fall back to the exact SQL for smaller users.
+    """
+    summ = summary_engine.summary_conn(sid)
+    try:
+        ph = ",".join("?" for _ in merged_ids)
+        total = summ.execute(f"SELECT COALESCE(SUM(msg_count),0) FROM user_stats WHERE user_id IN ({ph})", merged_ids).fetchone()[0]
+        if total < HOT_FAST_MIN_MSGS:
+            return None
+        want = offset + limit
+        found, last_c, last_id, scanned = [], None, None, 0
+        while len(found) < want and scanned < 400000:
+            if last_c is None:
+                batch = summ.execute("SELECT message_id,c FROM msg_react ORDER BY c DESC,message_id LIMIT 4000").fetchall()
+            else:
+                batch = summ.execute("SELECT message_id,c FROM msg_react WHERE c<? OR (c=? AND message_id>?) "
+                                     "ORDER BY c DESC,message_id LIMIT 4000", (last_c, last_c, last_id)).fetchall()
+            if not batch:
+                break
+            scanned += len(batch)
+            last_c, last_id = batch[-1][1], batch[-1][0]
+            ids = [str(r[0]) for r in batch]
+            for i in range(0, len(ids), 800):
+                chunk = ids[i:i + 800]
+                cph = ",".join("?" for _ in chunk)
+                mine = {str(r[0]) for r in conn.execute(
+                    f"SELECT message_id FROM messages WHERE message_id IN ({cph}) AND author_id IN ({ph})", (*chunk, *merged_ids))}
+                found.extend(m for m in chunk if m in mine)
+        if len(found) < want:
+            return None  # ran out of reacted messages / scan cap → exact SQL pads with 0-reaction rows
+        return found[offset:want]
+    except Exception:
+        return None
+    finally:
+        summ.close()

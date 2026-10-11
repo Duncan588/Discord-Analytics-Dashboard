@@ -346,3 +346,11 @@ html.discord-activity,html.discord-activity body{overflow-x:hidden;overscroll-be
 
 .wcloud .w-hi{color:var(--ink)}.wcloud .w-mid{color:var(--color-primary)}.wcloud .w-lo{color:var(--muted)}
 html[data-theme="dark"] .wcloud .w-mid{color:#4da3ff}
+
+#analytics.is-loading canvas,#analytics.is-loading .activity-tag-list{opacity:.45;transition:opacity .15s}
+#analytics.is-loading .seg button.on::after{content:"";display:inline-block;width:8px;height:8px;margin-left:6px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:dixo-spin .7s linear infinite;vertical-align:-1px}
+#records.is-loading{opacity:.5;pointer-events:none;transition:opacity .1s}
+a.is-pending::after{content:"";display:inline-block;width:8px;height:8px;margin-left:6px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:dixo-spin .7s linear infinite;vertical-align:-1px}
+@keyframes dixo-spin{to{transform:rotate(360deg)}}
+
+[hidden]{display:none!important}
