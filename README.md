@@ -103,8 +103,8 @@ venv/bin/python app.py
    Run `venv/bin/python app.py` under systemd behind an nginx reverse proxy.
 3. 在管理后台添加下载 Bot、服务器 Forum 配置并开启「持续更新」，下载器会常驻轮询。
    In the admin console add download bots and a forum config with *update enabled*; the downloader then polls continuously.
-4. （可选）Discord Activity：在 [Discord 开发者平台](https://discord.com/developers/applications) 启用 Activities，配置 URL Mapping（`/` → 你的 `PUBLIC_BASE_URL` 域名）与 OAuth2 回调；运维细节见 [`MAINTENANCE.md`](./MAINTENANCE.md)。
-   (Optional) Discord Activity: enable Activities, URL Mapping (`/` → your `PUBLIC_BASE_URL` host) and OAuth2 in the Developer Portal; ops notes in [`MAINTENANCE.md`](./MAINTENANCE.md).
+4. （可选）Discord Activity：在 [Discord 开发者平台](https://discord.com/developers/applications) 启用 Activities，配置 URL Mapping（`/` → 你的 `PUBLIC_BASE_URL` 域名）与 OAuth2 回调。
+   (Optional) Discord Activity: enable Activities, URL Mapping (`/` → your `PUBLIC_BASE_URL` host) and OAuth2 in the Developer Portal.
 
 > 大库提示：SQLite `VACUUM` 需要约等于数据库大小的空闲磁盘；汇总表会在后台增量 / 影子重建，期间首页显示上次正确值。
 > Large DBs: `VACUUM` needs free disk roughly equal to the DB size; summaries rebuild in the background while the last-good values stay on screen.
@@ -168,7 +168,7 @@ data/                   # 运行时数据库与日志（不入库）· runtime D
 
 技术栈 / Stack: Python · Flask ≥ 3.1 · SQLite · discord.py ≥ 2.4 · Discord Embedded App SDK · Chart.js · Alpine.js · jieba · DiscordChatExporter.
 
-下载器的详细状态字段见 [`BOT_DOWNLOAD_LOGIC.md`](./BOT_DOWNLOAD_LOGIC.md)。Downloader state details: [`BOT_DOWNLOAD_LOGIC.md`](./BOT_DOWNLOAD_LOGIC.md).
+API 详细说明见 [`docs/AI_API.md`](./docs/AI_API.md)。Full API reference: [`docs/AI_API.md`](./docs/AI_API.md).
 
 ---
 
