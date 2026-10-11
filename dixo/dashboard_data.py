@@ -639,7 +639,7 @@ def analytics_bundle(summ, since=None, until=None, cache_key=None):
         hit = _BUNDLE_CACHE.get((cache_key, since, until))
         if hit and hit[0] == ver:
             return hit[1]
-    data = _analytics_bundle(summ, since, until)
+    data = _analytics_bundle(summ, since, until, memo=(cache_key, ver) if (cache_key is not None and ver is not None) else None)
     if cache_key is not None and ver is not None:
         if len(_BUNDLE_CACHE) > 64:
             _BUNDLE_CACHE.clear()
@@ -647,9 +647,27 @@ def analytics_bundle(summ, since=None, until=None, cache_key=None):
     return data
 
 
-def _analytics_bundle(summ, since=None, until=None):
+_STATIC_CACHE = {}
+
+
+def _memo(memo, name, fn):
+    """Range-independent parts (tags, heatmap, word cloud...) computed once per summary version."""
+    if memo is None:
+        return fn()
+    key = (memo[0], name)
+    hit = _STATIC_CACHE.get(key)
+    if hit and hit[0] == memo[1]:
+        return hit[1]
+    val = fn()
+    if len(_STATIC_CACHE) > 128:
+        _STATIC_CACHE.clear()
+    _STATIC_CACHE[key] = (memo[1], val)
+    return val
+
+
+def _analytics_bundle(summ, since=None, until=None, memo=None):
     until_ym = (until or "")[:7] or None
-    tags = member_activity_tags(summ, as_of=until)
+    tags = _memo(memo, ("tags", until), lambda: member_activity_tags(summ, as_of=until))
     return {
         "messages_day": series_messages(summ, "day", since, until),
         "messages_week": series_messages(summ, "week", since, until),
@@ -660,9 +678,9 @@ def _analytics_bundle(summ, since=None, until=None):
         "active_users_month": series_active_users(summ, "month", since, until),
         "thread_growth_month": series_thread_growth(summ, "month", since, until),
         "reply_rate_week": series_reply_rate(summ, "week", since, until),
-        "top_emoji": top_emoji(summ, 20),
-        "heatmap": heatmap(summ),
-        "word_cloud": word_cloud(summ, 40),
+        "top_emoji": _memo(memo, "emoji", lambda: top_emoji(summ, 20)),
+        "heatmap": _memo(memo, "heat", lambda: heatmap(summ)),
+        "word_cloud": _memo(memo, "words", lambda: word_cloud(summ, 40)),
         "activity_tags": tags,
-        "activity_tags_monthly": activity_tag_monthly_series(summ, None, None),  # full history; trend presets do not clip this
+        "activity_tags_monthly": _memo(memo, "tagm", lambda: activity_tag_monthly_series(summ, None, None)),  # full history; trend presets do not clip this
     }

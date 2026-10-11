@@ -120,9 +120,27 @@
     });
   }
 
+  // Visual "on" state without depending on Alpine (standalone boot path had none).
+  function syncSegButtons(ctl) {
+    var root = document.getElementById('analytics');
+    if (!root) return;
+    root.querySelectorAll('[data-grain]').forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-grain') === ctl.grain); });
+    root.querySelectorAll('[data-preset]').forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-preset') === String(ctl.preset)); });
+  }
+
+  // Chart instances live OUTSIDE any reactive state. Alpine used to wrap them in a
+  // Proxy, and the next destroy()/re-create threw "Cannot read properties of null
+  // (reading 'save')", which killed every later paint (range switch looked dead).
+  var CHARTS = {};
+  function freshChart(el, cfg) {
+    var old = window.Chart && Chart.getChart ? Chart.getChart(el) : null;
+    if (old) { try { old.stop(); old.destroy(); } catch (e) { /* ignore */ } }
+    return new Chart(el, cfg);
+  }
+
   function analyticsController() {
     return {
-      grain: 'day', preset: '90', since: '', until: '', data: null, charts: {}, status: '', tagFilter: 'always_active', tagPage: 1, tagPageSize: 40,
+      grain: 'day', preset: '90', since: '', until: '', data: null, charts: CHARTS, status: '', tagFilter: 'always_active', tagPage: 1, tagPageSize: 40,
       boot: function () {
         this.reload();
         document.addEventListener('dixo:theme', this.paint.bind(this));
@@ -132,6 +150,7 @@
           btn.addEventListener('click', function () {
             self.tagFilter = btn.getAttribute('data-tag-filter');
             self.tagPage = 1;
+            document.querySelectorAll('[data-tag-filter]').forEach(function (b) { b.classList.toggle('on', b === btn); });
             self.renderActivityTags();
           });
         });
@@ -148,26 +167,51 @@
           });
         }
       },
-      setGrain: function (g) { this.grain = g; this.paint(); },
-      setPreset: function (p) { this.preset = String(p); if (p !== 'custom') this.reload(); },
+      setGrain: function (g) { this.grain = g; syncSegButtons(this); this.paint(); },
+      setPreset: function (p) {
+        this.preset = String(p); syncSegButtons(this);
+        var box = document.getElementById('anCustom'); if (box) box.hidden = this.preset !== 'custom';
+        if (this.preset !== 'custom') this.reload();
+      },
       rangeArgs: function () {
         if (this.preset === 'custom') return { since: this.since || null, until: this.until || null };
         if (this.preset === 'all') return {};
         var n = parseInt(this.preset, 10); var d = new Date(); d.setDate(d.getDate() - n);
         return { since: d.toISOString().slice(0, 10) };
       },
+      setStatus: function (msg) {
+        this.status = msg;
+        var el = document.getElementById('anStatus');
+        if (el) { el.textContent = msg || ''; el.hidden = !msg || msg === '…'; }
+      },
       reload: function () {
         var q = new URLSearchParams(); var r = this.rangeArgs();
         if (r.since) q.set('since', r.since); if (r.until) q.set('until', r.until);
-        this.status = '…';
+        this.setStatus('…');
         var self = this;
-        fetch('/api/v1/analytics?' + q.toString(), { credentials: 'same-origin' })
+        // Out-of-order guard: a slow earlier range must never overwrite a newer one.
+        var seq = (this._seq = (this._seq || 0) + 1);
+        if (this._abort) { try { this._abort.abort(); } catch (e) { /* ignore */ } }
+        this._abort = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+        var root = document.getElementById('analytics');
+        if (root) { root.classList.add('is-loading'); root.setAttribute('aria-busy', 'true'); }
+        syncSegButtons(self);
+        fetch('/api/v1/analytics?' + q.toString(),
+              { credentials: 'same-origin', signal: this._abort ? this._abort.signal : undefined })
           .then(function (res) { if (!res.ok) throw new Error('HTTP ' + res.status); return res.json(); })
           .then(function (j) {
+            if (seq !== self._seq) return;
             if (!j || !j.data) throw new Error('bad payload');
-            self.data = j.data; self.status = ''; self.paint();
+            self.data = j.data; self.setStatus(''); self.paint();
           })
-          .catch(function (e) { self.status = String(e.message || e); console.error('[dixo] analytics', e); });
+          .catch(function (e) {
+            if (seq !== self._seq || (e && e.name === 'AbortError')) return;
+            self.setStatus(String(e.message || e)); console.error('[dixo] analytics', e);
+          })
+          .then(function () {
+            if (seq !== self._seq) return;
+            if (root) { root.classList.remove('is-loading'); root.removeAttribute('aria-busy'); }
+          });
       },
       series: function (kind) {
         if (!this.data) return [];
@@ -229,12 +273,11 @@
         whenChart(function () {
           var el = document.getElementById('anTagsMonth');
           if (!el || !window.Chart) return;
-          if (self.charts.anTagsMonth) self.charts.anTagsMonth.destroy();
           var dark = document.documentElement.getAttribute('data-theme') === 'dark';
           var base = baseOpts(dark);
           // denser ticks when many months
           base.scales.x.ticks.maxTicksLimit = Math.min(24, Math.max(6, Math.floor(series.length / 2) || 6));
-          self.charts.anTagsMonth = new Chart(el, {
+          CHARTS.anTagsMonth = freshChart(el, {
             type: 'bar',
             data: {
               labels: series.map(function (d) { return d.t; }),
@@ -263,9 +306,8 @@
             base.plugins.legend.display = false;
             Chart.defaults.color = dark ? '#a1a1a6' : '#86868b';
             function mk(id, cfg) {
-              if (self.charts[id]) self.charts[id].destroy();
               var el = document.getElementById(id); if (!el) return;
-              self.charts[id] = new Chart(el, cfg);
+              CHARTS[id] = freshChart(el, cfg);
             }
             var msgs = self.series('messages'), users = self.series('users'), thr = self.series('threads'), rep = self.series('reply');
             mk('anMsgs', { type: 'line', data: { labels: msgs.map(function (d) { return d.t; }), datasets: [{ data: msgs.map(function (d) { return d.c; }), borderColor: '#0a84ff', backgroundColor: 'rgba(10,132,255,.12)', fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2 }] }, options: base });
@@ -331,29 +373,28 @@
   document.addEventListener('alpine:init', function () {
     if (!window.Alpine) return;
     Alpine.data('dashboard', dashboardController);
-    Alpine.data('analyticsPanel', analyticsController);
   });
 
   function bootStandaloneAnalytics() {
-    // If Alpine never starts nested x-init, still fetch+paint once.
+    // Deep-analysis panel is plain DOM (x-ignore): one owner, no Alpine race.
     var root = document.getElementById('analytics');
     if (!root || root.getAttribute('data-dixo-booted')) return;
-    // Wait briefly for Alpine; if status never appears and no charts, force boot.
-    setTimeout(function () {
-      if (root.getAttribute('data-dixo-booted')) return;
-      if (root._x_dataStack) return; // Alpine owns it
-      root.setAttribute('data-dixo-booted', '1');
-      var ctl = analyticsController();
-      // bind minimal controls via query
-      root.querySelectorAll('[data-grain]').forEach(function (btn) {
-        btn.addEventListener('click', function () { ctl.setGrain(btn.getAttribute('data-grain')); });
-      });
-      root.querySelectorAll('[data-preset]').forEach(function (btn) {
-        btn.addEventListener('click', function () { ctl.setPreset(btn.getAttribute('data-preset')); });
-      });
-      ctl.boot();
-      window.__dixoAnalytics = ctl;
-    }, 800);
+    root.setAttribute('data-dixo-booted', '1');
+    var ctl = analyticsController();
+    root.querySelectorAll('[data-grain]').forEach(function (btn) {
+      btn.addEventListener('click', function () { ctl.setGrain(btn.getAttribute('data-grain')); });
+    });
+    root.querySelectorAll('[data-preset]').forEach(function (btn) {
+      btn.addEventListener('click', function () { ctl.setPreset(btn.getAttribute('data-preset')); });
+    });
+    var apply = document.getElementById('anApply');
+    if (apply) apply.addEventListener('click', function () {
+      ctl.since = (document.getElementById('anSince') || {}).value || '';
+      ctl.until = (document.getElementById('anUntil') || {}).value || '';
+      ctl.reload();
+    });
+    ctl.boot();
+    window.__dixoAnalytics = ctl;
   }
 
   function onReady() {

@@ -115,32 +115,32 @@
   </div>
 </section>
 
-<section class="card" id="analytics" style="margin-top:var(--space-4)" x-data="analyticsPanel" x-init="boot(); $el.setAttribute('data-dixo-booted','1')">
+<section class="card" id="analytics" style="margin-top:var(--space-4)" x-ignore>
   <div class="card-head">
     <div><h2 class="h-card">{{ t("home.analytics") }}</h2>
       <div class="card-sub">{{ t("home.heatmap.hint") }}</div></div>
     <div class="row wrap">
       <div class="seg">
-        <button type="button" :class="grain==='day'&&'on'" @click="setGrain('day')" data-grain="day">{{ t("home.grain.day") }}</button>
-        <button type="button" :class="grain==='week'&&'on'" @click="setGrain('week')" data-grain="week">{{ t("home.grain.week") }}</button>
-        <button type="button" :class="grain==='month'&&'on'" @click="setGrain('month')" data-grain="month">{{ t("home.grain.month") }}</button>
-        <button type="button" :class="grain==='year'&&'on'" @click="setGrain('year')" data-grain="year">{{ t("home.grain.year") }}</button>
+        <button type="button" class="on" data-grain="day">{{ t("home.grain.day") }}</button>
+        <button type="button" data-grain="week">{{ t("home.grain.week") }}</button>
+        <button type="button" data-grain="month">{{ t("home.grain.month") }}</button>
+        <button type="button" data-grain="year">{{ t("home.grain.year") }}</button>
       </div>
       <div class="seg">
-        <button type="button" :class="preset==='30'&&'on'" @click="setPreset(30)" data-preset="30">{{ t("home.trend.range30") }}</button>
-        <button type="button" :class="preset==='90'&&'on'" @click="setPreset(90)" data-preset="90">{{ t("home.trend.range90") }}</button>
-        <button type="button" :class="preset==='365'&&'on'" @click="setPreset(365)" data-preset="365">1Y</button>
-        <button type="button" :class="preset==='all'&&'on'" @click="setPreset('all')" data-preset="all">{{ t("home.trend.rangeall") }}</button>
-        <button type="button" :class="preset==='custom'&&'on'" @click="preset='custom'">{{ t("home.range.custom") }}</button>
+        <button type="button" data-preset="30">{{ t("home.trend.range30") }}</button>
+        <button type="button" class="on" data-preset="90">{{ t("home.trend.range90") }}</button>
+        <button type="button" data-preset="365">1Y</button>
+        <button type="button" data-preset="all">{{ t("home.trend.rangeall") }}</button>
+        <button type="button" data-preset="custom">{{ t("home.range.custom") }}</button>
       </div>
     </div>
   </div>
-  <div class="row wrap" x-show="preset==='custom'" x-cloak style="margin-bottom:var(--space-3)">
-    <label class="muted" style="font-size:13px">{{ t("home.since") }} <input class="field" type="date" x-model="since" style="width:auto;display:inline-block"></label>
-    <label class="muted" style="font-size:13px">{{ t("home.until") }} <input class="field" type="date" x-model="until" style="width:auto;display:inline-block"></label>
-    <button class="btn btn-primary" type="button" @click="reload()">{{ t("home.apply") }}</button>
+  <div class="row wrap" id="anCustom" hidden style="margin-bottom:var(--space-3)">
+    <label class="muted" style="font-size:13px">{{ t("home.since") }} <input class="field" type="date" id="anSince" style="width:auto;display:inline-block"></label>
+    <label class="muted" style="font-size:13px">{{ t("home.until") }} <input class="field" type="date" id="anUntil" style="width:auto;display:inline-block"></label>
+    <button class="btn btn-primary" type="button" id="anApply">{{ t("home.apply") }}</button>
   </div>
-  <p class="faint" style="font-size:12px;margin:0 0 10px" x-text="status" x-show="status"></p>
+  <p class="faint" id="anStatus" style="font-size:12px;margin:0 0 10px" hidden></p>
   <div class="grid g-2 chart-pad-x">
     <div><div class="eyebrow" style="margin-bottom:8px">{{ t("home.chart.messages") }}</div><div class="chart sm"><canvas id="anMsgs"></canvas></div></div>
     <div><div class="eyebrow" style="margin-bottom:8px">{{ t("home.chart.active_users") }}</div><div class="chart sm"><canvas id="anUsers"></canvas></div></div>
@@ -156,11 +156,11 @@
       <div><h3 class="h-card">{{ t("home.activity_tags") }}</h3>
         <div class="card-sub">{{ t("home.activity_tags.hint") }} · {{ t("home.activity_tags.full") }}</div></div>
       <div class="seg">
-        <button type="button" class="on" data-tag-filter="always_active" @click="tagFilter='always_active'">{{ t("home.tag.always") }}</button>
-        <button type="button" data-tag-filter="returned" @click="tagFilter='returned'">{{ t("home.tag.returned") }}</button>
-        <button type="button" data-tag-filter="faded" @click="tagFilter='faded'">{{ t("home.tag.faded") }}</button>
-        <button type="button" data-tag-filter="rare" @click="tagFilter='rare'">{{ t("home.tag.rare") }}</button>
-        <button type="button" data-tag-filter="new" @click="tagFilter='new'">{{ t("home.tag.new") }}</button>
+        <button type="button" class="on" data-tag-filter="always_active">{{ t("home.tag.always") }}</button>
+        <button type="button" data-tag-filter="returned">{{ t("home.tag.returned") }}</button>
+        <button type="button" data-tag-filter="faded">{{ t("home.tag.faded") }}</button>
+        <button type="button" data-tag-filter="rare">{{ t("home.tag.rare") }}</button>
+        <button type="button" data-tag-filter="new">{{ t("home.tag.new") }}</button>
       </div>
     </div>
     <div class="activity-tags" id="anTagCounts"></div>
