@@ -49,6 +49,7 @@ from shared.env import load_local_env
 from shared.portal import touch_user_presence, upsert_portal_user
 from shared.sqlite_utils import connect_sqlite
 from shared.timeutil import parse_utc_datetime, utc_now_iso
+from shared.notify_policy import should_notify_finish, is_auto_poll
 
 load_local_env(os.path.join(BASE_DIR, '.env'))
 
@@ -950,12 +951,19 @@ class Bot(discord.Client):
         c = db()
         rows = c.execute("SELECT * FROM download_tasks WHERE status IN ('completed','failed') AND notified_at IS NULL ORDER BY id LIMIT 20").fetchall()
         for r in rows:
+            prev = c.execute(
+                "SELECT status FROM download_tasks WHERE guild_id=? AND forum_channel_id=? AND id<? ORDER BY id DESC LIMIT 1",
+                (r['guild_id'], r['forum_channel_id'], r['id'])).fetchone()
+            if not should_notify_finish(r, prev['status'] if prev else None):
+                # 自动轮询任务（mode=update）静默：只记已处理，不发私信
+                c.execute("UPDATE download_tasks SET notified_at=? WHERE id=?", (utc_now_iso(), r['id']))
+                continue
             try:
                 user = await self.fetch_user(int(r['created_by']))
                 if r['status'] == 'completed':
                     text = f"Discord 数据下载任务 #{r['id']} 已完成。\n服务器：{r['guild_id']}\n共下载：{r['completed']}/{r['total']} 个帖子。\n耗时：{r['elapsed_seconds'] or 0} 秒。"
                 else:
-                    text = f"Discord 数据下载任务 #{r['id']} 下载失败。\n服务器：{r['guild_id']}\n原因：{r['error'] or '未知错误'}"
+                    text = ("[自动轮询] " if is_auto_poll(r) else "") + f"Discord 数据下载任务 #{r['id']} 下载失败。\n服务器：{r['guild_id']}\n原因：{r['error'] or '未知错误'}"
                 await user.send(text)
                 c.execute("UPDATE download_tasks SET notified_at=? WHERE id=?", (utc_now_iso(), r['id']))
             except Exception as exc:

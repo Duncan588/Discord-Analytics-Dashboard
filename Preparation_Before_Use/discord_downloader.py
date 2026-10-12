@@ -33,6 +33,7 @@ from shared.env import load_local_env
 from shared.portal import touch_user_presence, upsert_portal_user
 from shared.sqlite_utils import add_columns, connect_sqlite, is_missing_table_error
 from shared.task_timing import calculate_task_timing
+from shared.notify_policy import should_notify_start
 from shared.timeutil import utc_now_iso as now
 
 load_local_env(BASE_DIR / ".env")
@@ -1066,7 +1067,10 @@ def run_task(task, dce):
     resume=bool(task['scan_completed'])
     scan_resume=not resume and bool(task['scan_cursor'])
 
-    notify_task_started(task, len(bots), resume)
+    if should_notify_start(task):
+        notify_task_started(task, len(bots), resume)
+    else:
+        log_step("任务 #%s | 自动轮询任务，跳过开始通知", task_id)
 
     # 中央任务队列：每个 Worker 一次拿一个小批次帖子，并使用自己的 Token
     # 启动一个 DCE 进程。批次内仍按帖子 ID 分文件，导入链路无需变化。
