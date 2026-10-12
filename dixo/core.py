@@ -1695,9 +1695,9 @@ def start_background_services():
     try:
         conn=db_connect(PORTAL_DB)
         row=conn.execute("SELECT 1 FROM download_tasks WHERE status IN ('pending','running') AND delete_requested=0 LIMIT 1").fetchone()
-        poll=conn.execute("SELECT 1 FROM download_configs WHERE enabled=1 AND update_enabled=1 LIMIT 1").fetchone()
         conn.close()
-        if row or poll:
+        # 实时数据由 whitelist_bot 网关监听写入；下载器只在有任务（手动/上线补齐）时运行。
+        if row:
             ensure_downloader_process()
         else:
             app.logger.info("服务未启动 name=discord_downloader：没有下载任务")
@@ -1713,15 +1713,6 @@ def _has_active_download_tasks():
     finally:
         conn.close()
 
-def _has_update_poll_configs():
-    conn = db_connect(PORTAL_DB)
-    try:
-        return bool(conn.execute(
-            "SELECT 1 FROM download_configs WHERE enabled=1 AND update_enabled=1 LIMIT 1"
-        ).fetchone())
-    finally:
-        conn.close()
-
 def _ensure_whitelist_process():
     with _service_lock:
         if any(name == "whitelist_bot" and proc.poll() is None for name, proc in _service_processes):
@@ -1733,7 +1724,7 @@ def _service_watchdog():
     """Keep child services available after an unexpected process exit."""
     while not _service_stop.wait(5):
         try:
-            if (_has_active_download_tasks() or _has_update_poll_configs()) and not _downloader_process_alive():
+            if _has_active_download_tasks() and not _downloader_process_alive():
                 app.logger.warning("检测到下载任务仍在运行但下载器进程已退出，自动恢复下载器")
                 ensure_downloader_process()
             _ensure_whitelist_process()
