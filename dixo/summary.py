@@ -1,9 +1,10 @@
 """Incremental summary tables (replace the homepage/profile pickle caches).
 
 Layout: data/servers/<gid>/summary.db  (derived data only; safe to delete -> full rebuild)
-The main discord_data.db is only READ, except for one tiny, additive change:
-  table summary_dirty(gen) + AFTER DELETE triggers on messages/reactions that bump
-  `gen`; consumers (summary.db, search.db) rebuild when the generation they saw changes.
+The main discord_data.db is only READ, except for small, additive changes
+(shared/ingest_db.py): table summary_dirty(gen) + AFTER DELETE triggers that bump
+`gen` for deletes WITHOUT a matching ingest_tombstones row (-> full rebuild), while
+tombstoned deletes (gateway listener, backfill re-import) are subtracted incrementally.
 messages/reactions are append-only (INSERT OR IGNORE / INSERT), so rowid is a
 monotonic watermark: each refresh only reads rows with rowid > watermark.
 
@@ -18,6 +19,8 @@ import sqlite3
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+
+from shared.ingest_db import DIRTY_DDL  # tombstone-aware delete triggers
 
 from . import textutil
 
@@ -45,18 +48,12 @@ CREATE TABLE IF NOT EXISTS user_emoji_given(user_id TEXT NOT NULL, emoji_name TE
 CREATE TABLE IF NOT EXISTS word(word TEXT PRIMARY KEY, c INTEGER NOT NULL DEFAULT 0) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS idx_word_c ON word(c DESC);
 CREATE TABLE IF NOT EXISTS profile_extra(user_id TEXT PRIMARY KEY, wm INTEGER, built_at REAL, data TEXT) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS msg_holes(rid INTEGER PRIMARY KEY);
 """
 DATA_TABLES = ("msg_hour", "user_stats", "user_day", "user_hour", "thread_stats", "msg_react",
-               "user_emoji_recv", "user_emoji_given", "word", "profile_extra")
+               "user_emoji_recv", "user_emoji_given", "word", "profile_extra", "msg_holes")
 
-DIRTY_DDL = """
-CREATE TABLE IF NOT EXISTS summary_dirty(id INTEGER PRIMARY KEY CHECK(id=1), gen INTEGER NOT NULL DEFAULT 0);
-INSERT OR IGNORE INTO summary_dirty(id,gen) VALUES(1,0);
-CREATE TRIGGER IF NOT EXISTS trg_summary_dirty_msg AFTER DELETE ON messages
-  BEGIN UPDATE summary_dirty SET gen=gen+1 WHERE id=1; END;
-CREATE TRIGGER IF NOT EXISTS trg_summary_dirty_react AFTER DELETE ON reactions
-  BEGIN UPDATE summary_dirty SET gen=gen+1 WHERE id=1; END;
-"""
+
 
 
 def summary_path(main_db_path):
@@ -113,6 +110,8 @@ def _reset(conn):
         conn.execute(f"DELETE FROM s.{t}")
     _meta_set(conn, "msg_wm", 0)
     _meta_set(conn, "react_wm", 0)
+    r = conn.execute("SELECT MAX(id) FROM main.ingest_tombstones").fetchone()
+    _meta_set(conn, "tomb_wm", (r[0] if r else 0) or 0)
     _meta_set(conn, "schema_version", SCHEMA_VERSION)
     _meta_set(conn, "stopwords_sig", _stopwords_sig())
 
@@ -121,13 +120,15 @@ def _stopwords_sig():
     return f"{len(textutil.ZH_STOP)}:{len(textutil.EN_STOP)}:v1"
 
 
-def _process_messages(conn, rows):
+def _process_messages(conn, rows, sign=1):
     hour = collections.Counter(); uday = collections.Counter(); uhour = collections.Counter()
     ustat = {}; tstat = {}; words = collections.Counter()
     extra = textutil.extra_stopwords()
     for r in rows:
         author = r["author_id"]; tid = r["thread_id"]; ts_raw = r["timestamp"] or ""
         dt = _parse_ts(ts_raw)
+        if sign < 0:
+            ts_raw = ""  # removals never move first/last timestamps
         if dt is not None:
             day = dt.strftime("%Y-%m-%d"); h = dt.hour
             hour[(day, h)] += 1
@@ -147,6 +148,14 @@ def _process_messages(conn, rows):
             if ts_raw and (t[4] is None or ts_raw > t[4]): t[4] = ts_raw
         if r["content"]:
             words.update(textutil.tokenize(r["content"], extra))
+    if sign < 0:
+        for c in (hour, uday, uhour, words):
+            for k in list(c):
+                c[k] = -c[k]
+        for v in list(ustat.values()) + list(tstat.values()):
+            v[0] = -v[0]
+        for v in tstat.values():
+            v[1] = v[2] = v[3] = v[4] = None
     _upsert_add(conn, "msg_hour", ["day", "hour"], ["c"], [(d, h, c) for (d, h), c in hour.items()])
     _upsert_add(conn, "user_day", ["user_id", "day"], ["c"], [(u, d, c) for (u, d), c in uday.items()])
     _upsert_add(conn, "user_hour", ["user_id", "hour"], ["c"], [(u, h, c) for (u, h), c in uhour.items()])
@@ -167,7 +176,7 @@ def _process_messages(conn, rows):
         [(t, v[0], v[1], v[2], v[3], v[4]) for t, v in tstat.items()])
 
 
-def _process_reactions(conn, rows):
+def _process_reactions(conn, rows, sign=1):
     mr = collections.Counter(); recv = collections.Counter(); given = collections.Counter()
     erecv = collections.Counter(); egiven = collections.Counter(); urls = {}
     for r in rows:
@@ -178,6 +187,10 @@ def _process_reactions(conn, rows):
             recv[r["author_id"]] += 1; erecv[(r["author_id"], name)] += 1
         if r["user_id"]:
             given[r["user_id"]] += 1; egiven[(r["user_id"], name)] += 1
+    if sign < 0:
+        for c in (mr, recv, given, erecv, egiven):
+            for k in list(c):
+                c[k] = -c[k]
     _upsert_add(conn, "msg_react", ["message_id"], ["c"], list(mr.items()))
     _upsert_add(conn, "user_stats", ["user_id"], ["react_recv"], list(recv.items()))
     _upsert_add(conn, "user_stats", ["user_id"], ["react_given"], list(given.items()))
@@ -250,6 +263,61 @@ def refresh(main_db_path, budget_seconds=20.0, batch=20000):
         lock_fd.close()
 
 
+def _apply_tombstones(conn, msg_wm, react_wm, batch):
+    """Subtract rows removed via shared.ingest_db (gateway deletes, backfill re-imports).
+
+    A tombstone is applied only if its row had been counted (src_rowid <= watermark and,
+    for messages, not a known hole). messages has no AUTOINCREMENT, so a deleted max
+    rowid can be reused by a later insert at or below msg_wm: such rowids are recorded
+    in s.msg_holes and any row that reappears there is counted by the hole pass.
+    """
+    done = 0
+    tomb_wm = int(_meta_get(conn, "tomb_wm", 0) or 0)
+    while True:
+        rows = conn.execute(
+            "SELECT id,kind,src_rowid,message_id,thread_id,author_id,content,timestamp,user_id,emoji_name,emoji_url "
+            "FROM main.ingest_tombstones WHERE id>? ORDER BY id LIMIT ?", (tomb_wm, batch)).fetchall()
+        if not rows:
+            break
+        with conn:
+            msgs, reacts = [], []
+            for r in rows:
+                if r["kind"] == "message":
+                    if r["src_rowid"] <= msg_wm and not conn.execute(
+                            "SELECT 1 FROM s.msg_holes WHERE rid=?", (r["src_rowid"],)).fetchone():
+                        msgs.append(r)
+                        conn.execute("INSERT OR IGNORE INTO s.msg_holes(rid) VALUES(?)", (r["src_rowid"],))
+                elif r["kind"] == "reaction":
+                    if r["src_rowid"] <= react_wm:
+                        reacts.append(r)
+            if msgs:
+                _process_messages(conn, msgs, sign=-1)
+            if reacts:
+                _process_reactions(conn, reacts, sign=-1)
+            if msgs or reacts:
+                _prune_zero(conn)
+            tomb_wm = rows[-1]["id"]
+            _meta_set(conn, "tomb_wm", tomb_wm)
+        done += len(rows)
+    # hole pass: rows that re-used a counted-then-deleted rowid
+    refill = conn.execute(
+        "SELECT m.rowid,m.message_id,m.thread_id,m.author_id,m.content,m.timestamp FROM s.msg_holes h "
+        "JOIN main.messages m ON m.rowid=h.rid").fetchall()
+    if refill:
+        with conn:
+            _process_messages(conn, refill)
+            conn.executemany("DELETE FROM s.msg_holes WHERE rid=?", [(r["rowid"],) for r in refill])
+        done += len(refill)
+    return done
+
+
+def _prune_zero(conn):
+    for t in ("msg_hour", "user_day", "user_hour", "word", "msg_react", "user_emoji_recv", "user_emoji_given"):
+        conn.execute(f"DELETE FROM s.{t} WHERE c<=0")
+    conn.execute("DELETE FROM s.thread_stats WHERE msg_count<=0")
+    conn.execute("DELETE FROM s.user_stats WHERE msg_count<=0 AND react_recv<=0 AND react_given<=0")
+
+
 def _refresh_locked(main_db_path, spath, build_path, budget_seconds, batch, started):
     connect_summary(spath).close()  # ensure live schema exists for readers
     conn = sqlite3.connect(main_db_path, timeout=60, check_same_thread=False)
@@ -297,6 +365,7 @@ def _refresh_locked(main_db_path, spath, build_path, budget_seconds, batch, star
         else:
             conn.execute("ATTACH DATABASE ? AS s", (spath,))
         msg_wm = int(_meta_get(conn, "msg_wm", 0)); react_wm = int(_meta_get(conn, "react_wm", 0))
+        processed += _apply_tombstones(conn, msg_wm, react_wm, batch)
         while True:
             rows = conn.execute(
                 "SELECT rowid,message_id,thread_id,author_id,content,timestamp FROM messages WHERE rowid>? ORDER BY rowid LIMIT ?",

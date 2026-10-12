@@ -33,6 +33,9 @@ from shared.env import load_local_env
 from shared.portal import touch_user_presence, upsert_portal_user
 from shared.sqlite_utils import add_columns, connect_sqlite, is_missing_table_error
 from shared.task_timing import calculate_task_timing
+from shared import ingest_db
+from shared.timeutil import parse_utc_datetime
+from shared.notify_policy import should_notify_start
 from shared.timeutil import utc_now_iso as now
 
 load_local_env(BASE_DIR / ".env")
@@ -938,27 +941,47 @@ def delete_task_server_data(task_id, guild_id):
         log_step("任务 #%s | 删除扫描缓存时表不存在 | guild=%s", task_id, guild_id)
 
 
-def _remove_thread_from_server_db(db_path, thread_id):
+def _remove_thread_from_server_db(db_path, thread_id, keep_after=None):
+    """Remove a thread before re-import. Uses tombstones (shared.ingest_db) so the summary
+    subtracts incrementally instead of doing a full rebuild. Messages newer than
+    ``keep_after`` (written live by the gateway listener while DCE was exporting) are kept."""
     if not db_path.exists():
         return
-    conn=sqlite3.connect(db_path,timeout=120)
+    conn=ingest_db.connect(db_path)
     try:
-        ids=[r[0] for r in conn.execute("SELECT message_id FROM messages WHERE thread_id=?",(str(thread_id),)).fetchall()]
-        if ids:
-            ph=','.join('?'*len(ids))
-            for table in ('reactions','attachments','mentions'):
-                conn.execute(f"DELETE FROM {table} WHERE message_id IN ({ph})",ids)
-            conn.execute(f"DELETE FROM messages WHERE message_id IN ({ph})",ids)
-        conn.execute("DELETE FROM threads WHERE thread_id=?",(str(thread_id),))
+        ids=[]
+        for r in conn.execute("SELECT message_id,timestamp FROM messages WHERE thread_id=?",(str(thread_id),)):
+            if keep_after is not None:
+                ts=parse_utc_datetime(r[1]) if r[1] else None
+                if ts is not None and ts>keep_after:
+                    continue
+            ids.append(r[0])
+        ingest_db.tombstone_delete_messages(conn, ids)
+        if keep_after is None:
+            conn.execute("DELETE FROM threads WHERE thread_id=?",(str(thread_id),))
         conn.commit()
     finally:
         conn.close()
 
 
+def _json_max_timestamp(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data=json.load(fh)
+        vals=[parse_utc_datetime(m.get("timestamp")) for m in data.get("messages") or [] if m.get("timestamp")]
+        vals=[v for v in vals if v is not None]
+        return max(vals) if vals else None
+    except Exception as exc:
+        log_step("读取导出 JSON 最新时间失败 | path=%s | error=%s", path, exc)
+        return None
+
+
 def import_one_json(path, guild_id, thread_id, last_active_at):
     db_path = server_db_for(guild_id)
     # 更新帖子时整帖替换，避免 Discord 删除/编辑消息后旧数据残留。
-    _remove_thread_from_server_db(db_path, thread_id)
+    # 网关实时写入的、比导出文件更新的消息保留（导出期间到达的新消息）。
+    keep_after=_json_max_timestamp(path)
+    _remove_thread_from_server_db(db_path, thread_id, keep_after=keep_after)
     result = import_json_incremental(str(path), str(db_path), server_id=guild_id)
     conn = sqlite3.connect(db_path, timeout=120)
     try:
@@ -1066,7 +1089,10 @@ def run_task(task, dce):
     resume=bool(task['scan_completed'])
     scan_resume=not resume and bool(task['scan_cursor'])
 
-    notify_task_started(task, len(bots), resume)
+    if should_notify_start(task):
+        notify_task_started(task, len(bots), resume)
+    else:
+        log_step("任务 #%s | 自动轮询任务，跳过开始通知", task_id)
 
     # 中央任务队列：每个 Worker 一次拿一个小批次帖子，并使用自己的 Token
     # 启动一个 DCE 进程。批次内仍按帖子 ID 分文件，导入链路无需变化。
@@ -1540,8 +1566,13 @@ def any_update_enabled():
         conn.close()
 
 
-def enqueue_update_polls():
-    """For each update-enabled config, queue a mode=update task if none is pending/running.
+def enqueue_update_polls(message="网关上线补齐：扫描离线期间的新帖/新回复/新反应", min_gap_sec=600):
+    """Backfill only: queue one mode=update task per update-enabled config.
+
+    Called once when the gateway listener (whitelist_bot) starts or reconnects,
+    to cover the offline gap. Live data arrives through the gateway, so there is no
+    continuous polling any more. Skips a forum with a pending/running task or one
+    created less than ``min_gap_sec`` ago.
 
     Keeps the existing download_task_items list: update mode skips unchanged threads
     via existing_thread_active / last_active_at, and only re-exports threads with new
@@ -1565,6 +1596,15 @@ def enqueue_update_polls():
             ).fetchone()
             if busy:
                 continue
+            recent = conn.execute(
+                "SELECT created_at FROM download_tasks WHERE guild_id=? AND forum_channel_id=? AND mode='update' ORDER BY id DESC LIMIT 1",
+                (gid, forum),
+            ).fetchone()
+            if recent and recent[0]:
+                prev = parse_utc_datetime(recent[0])
+                if prev is not None and (datetime.now(timezone.utc) - prev).total_seconds() < min_gap_sec:
+                    log_step("补齐跳过 | config=%s 最近 %ss 内已有补齐任务", cfg["id"], min_gap_sec)
+                    continue
             interval = cfg["scheduler_interval"] if "scheduler_interval" in cfg.keys() else 1000
             dl_ms = cfg["download_interval_ms"] if "download_interval_ms" in cfg.keys() else 0
             # Match admin_download_task_add column set so migrations stay happy.
@@ -1574,12 +1614,12 @@ def enqueue_update_polls():
             conn.execute(
                 "INSERT INTO download_tasks(guild_id,forum_channel_id,created_by,status,total,completed,created_at,message,config_id,guild_name,forum_name,scheduler_interval,download_interval_ms,mode) VALUES(?,?,?,?,0,0,?,?,?,?,?,?,?,?)",
                 (gid, forum, str(cfg["owner_user_id"]), "pending", now(),
-                 "定时轮询：扫描新帖/新回复/新反应", int(cfg["id"]),
+                 message, int(cfg["id"]),
                  cfg["guild_name"] or gid, cfg["forum_name"] or forum,
                  interval_ms, int(dl_ms or 0), "update"),
             )
             created += 1
-            log_step("轮询入队 | config=%s guild=%s forum=%s", cfg["id"], gid, forum)
+            log_step("补齐入队 | config=%s guild=%s forum=%s", cfg["id"], gid, forum)
         conn.commit()
     finally:
         conn.close()
@@ -1615,15 +1655,7 @@ def main_once():
                     pool = main_once._pool
                 active[tid] = pool.submit(run_task, task, dce)
         if not active and not pending_tasks(1):
-            n = enqueue_update_polls()
-            if n:
-                log_step("空闲轮询已入队 %s 个更新任务", n)
-                continue
-            if any_update_enabled():
-                idle = max(15, int(os.getenv("DOWNLOAD_POLL_IDLE_SEC", "60")))
-                log_step("无待处理任务，%ss 后再次轮询（update_enabled 配置仍在）", idle)
-                time.sleep(idle)
-                continue
+            # 实时数据由网关监听写入；下载器只处理手动任务与上线补齐任务，空闲即退出。
             log_step("没有剩余下载任务，下载器退出")
             return False
         active_intervals=[]
@@ -1645,12 +1677,9 @@ def main_once():
 
 
 if __name__ == "__main__":
-    # Continuous mode: keep process alive while update_enabled configs exist.
-    forever = os.getenv("DOWNLOAD_POLL_FOREVER", "1").strip() not in ("0", "false", "False")
-    while True:
+    if "--enqueue-backfill" in sys.argv[1:]:
+        # Called by the gateway listener on start/reconnect; the app watchdog then
+        # starts the downloader for the pending task.
+        print(enqueue_update_polls())
+    else:
         main_once()
-        if not forever or not any_update_enabled():
-            break
-        idle = max(15, int(os.getenv("DOWNLOAD_POLL_IDLE_SEC", "60")))
-        log_step("下载器主循环结束，%ss 后重启轮询", idle)
-        time.sleep(idle)

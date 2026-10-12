@@ -49,6 +49,8 @@ from shared.env import load_local_env
 from shared.portal import touch_user_presence, upsert_portal_user
 from shared.sqlite_utils import connect_sqlite
 from shared.timeutil import parse_utc_datetime, utc_now_iso
+from shared.notify_policy import should_notify_finish, is_auto_poll
+from shared.gateway_ingest import GatewayIngest
 
 load_local_env(os.path.join(BASE_DIR, '.env'))
 
@@ -404,6 +406,8 @@ class Bot(discord.Client):
         super().__init__(intents=intents)
         self.tree = app_commands.CommandTree(self)
         self.db: Optional[SQLitePool] = None  # 收藏功能使用的异步连接
+        # 网关实时入库：on_message/编辑/删除/反应直接写 data/servers/<gid>/discord_data.db
+        self.ingest = GatewayIngest(BASE_DIR, DB)
 
     async def setup_hook(self):
         # 收藏建表（与白名单共用 portal.db，白名单表由同步 db() 建表）
@@ -654,6 +658,34 @@ class Bot(discord.Client):
             await self.check_permissions()
         except Exception:
             log.exception("权限自检执行失败")
+        try:
+            for line in await asyncio.to_thread(self.ingest.presence_report, self):
+                log.info("网关入库自检 %s | message_content=%s", line, intents.message_content)
+            # on_ready 在首次登录和无法 RESUME 的重连后触发：补齐离线期间的数据（静默任务）。
+            await asyncio.to_thread(self.ingest.enqueue_backfill)
+        except Exception:
+            log.exception("网关入库自检/补齐入队失败")
+
+    async def on_raw_message_edit(self, payload):
+        await self.ingest.on_raw_message_edit(payload, self)
+
+    async def on_raw_message_delete(self, payload):
+        await self.ingest.on_raw_message_delete(payload, self)
+
+    async def on_raw_bulk_message_delete(self, payload):
+        await self.ingest.on_raw_bulk_message_delete(payload, self)
+
+    async def on_raw_reaction_add(self, payload):
+        await self.ingest.on_raw_reaction_add(payload, self)
+
+    async def on_raw_reaction_remove(self, payload):
+        await self.ingest.on_raw_reaction_remove(payload, self)
+
+    async def on_raw_reaction_clear(self, payload):
+        await self.ingest.on_raw_reaction_clear(payload, self)
+
+    async def on_raw_reaction_clear_emoji(self, payload):
+        await self.ingest.on_raw_reaction_clear_emoji(payload, self)
 
     async def on_member_join(self, member):
         try:
@@ -828,6 +860,8 @@ class Bot(discord.Client):
         # 私信不走拦截
         if not message.guild:
             return
+        # 先入库（被拦截删除的消息随后由 on_raw_message_delete 以墓碑方式移除）
+        await self.ingest.on_message(message)
 
         # 第三方 bot 消息：检查是否由被拉黑用户触发（在楼主帖内调用其他机器人）
         if message.author.bot:
@@ -950,12 +984,19 @@ class Bot(discord.Client):
         c = db()
         rows = c.execute("SELECT * FROM download_tasks WHERE status IN ('completed','failed') AND notified_at IS NULL ORDER BY id LIMIT 20").fetchall()
         for r in rows:
+            prev = c.execute(
+                "SELECT status FROM download_tasks WHERE guild_id=? AND forum_channel_id=? AND id<? ORDER BY id DESC LIMIT 1",
+                (r['guild_id'], r['forum_channel_id'], r['id'])).fetchone()
+            if not should_notify_finish(r, prev['status'] if prev else None):
+                # 自动轮询任务（mode=update）静默：只记已处理，不发私信
+                c.execute("UPDATE download_tasks SET notified_at=? WHERE id=?", (utc_now_iso(), r['id']))
+                continue
             try:
                 user = await self.fetch_user(int(r['created_by']))
                 if r['status'] == 'completed':
                     text = f"Discord 数据下载任务 #{r['id']} 已完成。\n服务器：{r['guild_id']}\n共下载：{r['completed']}/{r['total']} 个帖子。\n耗时：{r['elapsed_seconds'] or 0} 秒。"
                 else:
-                    text = f"Discord 数据下载任务 #{r['id']} 下载失败。\n服务器：{r['guild_id']}\n原因：{r['error'] or '未知错误'}"
+                    text = ("[自动轮询] " if is_auto_poll(r) else "") + f"Discord 数据下载任务 #{r['id']} 下载失败。\n服务器：{r['guild_id']}\n原因：{r['error'] or '未知错误'}"
                 await user.send(text)
                 c.execute("UPDATE download_tasks SET notified_at=? WHERE id=?", (utc_now_iso(), r['id']))
             except Exception as exc:
