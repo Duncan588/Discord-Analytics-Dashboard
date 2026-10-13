@@ -51,6 +51,7 @@ from shared.sqlite_utils import connect_sqlite
 from shared.timeutil import parse_utc_datetime, utc_now_iso
 from shared.notify_policy import should_notify_finish, is_auto_poll
 from shared.gateway_ingest import GatewayIngest
+from shared import block_policy
 
 load_local_env(os.path.join(BASE_DIR, '.env'))
 
@@ -616,6 +617,7 @@ class Bot(discord.Client):
             if not perms.view_channel: lacking.append("view_channel")
             if not perms.read_message_history: lacking.append("read_message_history")
             if not perms.send_messages: lacking.append("send_messages")
+            if not perms.manage_messages: lacking.append("manage_messages（拉黑拦截删除消息需要）")
             if lacking:
                 problems.append((guild, lacking))
                 log.warning("权限不足 guild=%s(%s) 缺少: %s", guild.name, guild.id, ", ".join(lacking))
@@ -668,6 +670,10 @@ class Bot(discord.Client):
 
     async def on_raw_message_edit(self, payload):
         await self.ingest.on_raw_message_edit(payload, self)
+        try:
+            await self._enforce_blocks_on_edit(payload)
+        except Exception:
+            log.exception("编辑消息拉黑拦截失败 message=%s", payload.message_id)
 
     async def on_raw_message_delete(self, payload):
         await self.ingest.on_raw_message_delete(payload, self)
@@ -818,31 +824,29 @@ class Bot(discord.Client):
             return
 
         owner_id = message.channel.owner_id
-        if not owner_id or owner_id == invoker.id:
+        targets = block_policy.collect_targets(
+            invoker.id, owner_id=owner_id, reply_author_id=await self._reply_author_id(message),
+            mention_ids=[u.id for u in message.mentions if not u.bot])
+        hit = block_policy.pick(await self._block_pairs(invoker.id, targets), invoker.id, targets)
+        if not hit:
             return
-
-        relation = await self._block_relation_ids(invoker.id, owner_id)
-        if not relation:
-            return
+        target_id, relation = hit
+        who = "帖子楼主" if target_id == owner_id else "对方"
 
         channel_mention = message.channel.mention
         if relation == "sender_blocked_recipient":
-            reason = "你已将帖子楼主拉黑，机器人命令的执行结果被自动删除。"
+            reason = f"你已将{who}拉黑，机器人命令的执行结果被自动删除。"
         elif relation == "recipient_blocked_sender":
-            reason = "帖子楼主已将你拉黑，机器人命令的执行结果被自动删除。"
+            reason = f"{who}已将你拉黑，机器人命令的执行结果被自动删除。"
         else:
-            reason = "你与帖子楼主处于相互拉黑状态，机器人命令的执行结果被自动删除。"
+            reason = f"你与{who}处于相互拉黑状态，机器人命令的执行结果被自动删除。"
 
-        try:
-            await message.delete()
-        except discord.Forbidden:
-            pass  # 无删帖权限时静默
-        except discord.HTTPException as exc:
-            log.warning("删除第三方 bot 被拦截回复失败 guild=%s message=%s error=%s",
-                        message.guild.id if message.guild else 0, message.id, exc)
+        ok = await self._delete_intercepted(message, "third-party-bot")
+        log.info("拉黑拦截(第三方bot) guild=%s channel=%s invoker=%s target=%s relation=%s deleted=%s",
+                 message.guild.id if message.guild else 0, message.channel.id, invoker.id, target_id, relation, ok)
 
         if message.guild:
-            await self._increment_block_count(message.guild.id, invoker.id, owner_id)
+            await self._increment_block_count(message.guild.id, invoker.id, target_id)
 
         try:
             dm = await invoker.create_dm()
@@ -868,96 +872,115 @@ class Bot(discord.Client):
             await self._handle_third_party_bot_message(message)
             return
 
-        recipient_id: Optional[int] = None
+        await self._enforce_blocks(message)
 
-        # 1. 判定直接引用回复 (Reply)
-        if message.reference and message.reference.message_id:
-            try:
-                ref_msg = message.reference.resolved
-                if not isinstance(ref_msg, discord.Message):
-                    ref_msg = await message.channel.fetch_message(message.reference.message_id)
-                if ref_msg:
-                    recipient_id = ref_msg.author.id
-            except Exception:
-                pass
-
-        # 2. 判定 Forum Thread：帖内普通跟帖 -> 默认目标为发帖楼主（楼主非本人时）
-        if recipient_id is None and isinstance(message.channel, discord.Thread):
-            parent = message.channel.parent
-            if parent is not None and parent.type == discord.ChannelType.forum:
-                owner_id = message.channel.owner_id
-                if owner_id and owner_id != message.author.id:
-                    recipient_id = owner_id
-
-        # 3. 判定 @提及：消息中 @ 了唯一一位用户且不是自己 -> 目标为该用户。
-        #    拉黑后双方不能互相 @，拦截逻辑与回复一致，用户无需额外操作。
-        if recipient_id is None and message.mentions:
-            mentioned = [u for u in message.mentions if u.id != message.author.id]
-            if len(mentioned) == 1:
-                recipient_id = mentioned[0].id
-
-        if not recipient_id or recipient_id == message.author.id:
-            return
-
-        # 4. 双向拦截触发判定
-        if self.db is None:
-            return
+    # ------------------------------------------------------------------ 拉黑拦截
+    async def _block_pairs(self, sender_id: int, targets):
+        if self.db is None or not targets:
+            return []
+        sql, args = block_policy.query(sender_id, targets)
         try:
             async with self.db.acquire() as conn:
-                rows = await conn.fetch(
-                    """
-                    SELECT blocker_id FROM user_blocks
-                    WHERE (blocker_id = ? AND blocked_id = ?)
-                       OR (blocker_id = ? AND blocked_id = ?)
-                    """,
-                    message.author.id,
-                    recipient_id,
-                    recipient_id,
-                    message.author.id,
-                )
+                return [(r[0], r[1]) for r in await conn.fetch(sql, *args)]
         except Exception as exc:
-            log.exception("查询黑名单关系失败 guild=%s error=%s", message.guild.id, exc)
-            return
+            log.exception("查询黑名单关系失败 sender=%s error=%s", sender_id, exc)
+            return []
 
-        relation = self._check_block_relation(rows, message.author.id, recipient_id)
-        if not relation:
-            return
+    async def _reply_author_id(self, message: discord.Message):
+        if not (message.reference and message.reference.message_id):
+            return None
+        ref = message.reference.resolved
+        if isinstance(ref, discord.Message):
+            return ref.author.id
+        try:
+            ref = await message.channel.fetch_message(message.reference.message_id)
+            return ref.author.id
+        except Exception:
+            return None
 
-        deleted_content = message.content
-        channel_mention = message.channel.mention
+    @staticmethod
+    def _forum_owner_id(channel):
+        if isinstance(channel, discord.Thread):
+            parent = channel.parent
+            if parent is not None and parent.type == discord.ChannelType.forum:
+                return channel.owner_id
+        return None
 
-        if relation == "sender_blocked_recipient":
-            reason = "你已将对方加入黑名单，无法对该用户进行回复。"
-        elif relation == "recipient_blocked_sender":
-            reason = "对方已将你拉黑，回复被自动拦截。"
-        else:
-            reason = "你与该用户处于相互拉黑状态，回复已被自动删除。"
-
+    async def _delete_intercepted(self, message: discord.Message, what: str) -> bool:
         try:
             await message.delete()
-        except discord.Forbidden:
-            pass  # 机器人无删帖权限（频道权限不足）时不通知用户
+            return True
+        except discord.NotFound:
+            return True
+        except discord.Forbidden as exc:
+            log.warning("拦截删除失败（缺少 Manage Messages 权限）%s guild=%s channel=%s message=%s error=%s",
+                        what, message.guild.id if message.guild else 0, message.channel.id, message.id, exc)
         except discord.HTTPException as exc:
-            log.warning("删除被拦截消息失败 guild=%s message=%s error=%s",
-                        message.guild.id, message.id, exc)
+            log.warning("拦截删除失败 %s guild=%s channel=%s message=%s error=%s",
+                        what, message.guild.id if message.guild else 0, message.channel.id, message.id, exc)
+        return False
 
-        # 不论是否删成功，都把拦截次数 +1：哪怕是权限不足时也要让用户在 /list 里
-        # 看到「机器人尝试拦截但未删除成功」这一信息，便于排查权限。
-        await self._increment_block_count(message.guild.id, message.author.id, recipient_id)
-
+    async def _enforce_blocks(self, message: discord.Message, edited: bool = False) -> None:
+        """拦截与任一目标（楼主 > 被回复者 > 所有 @ 对象）存在拉黑关系的发言。"""
+        sender = message.author
+        owner_id = self._forum_owner_id(message.channel)
+        targets = block_policy.collect_targets(
+            sender.id,
+            owner_id=owner_id,
+            reply_author_id=await self._reply_author_id(message),
+            mention_ids=[u.id for u in message.mentions],
+        )
+        hit = block_policy.pick(await self._block_pairs(sender.id, targets), sender.id, targets)
+        if not hit:
+            return
+        target_id, relation = hit
+        who = "帖子楼主" if owner_id and target_id == owner_id else "对方"
+        if relation == "sender_blocked_recipient":
+            reason = f"你已将{who}加入黑名单，无法对其进行回复。"
+        elif relation == "recipient_blocked_sender":
+            reason = f"{who}已将你拉黑，回复被自动拦截。"
+        else:
+            reason = f"你与{who}处于相互拉黑状态，回复已被自动删除。"
+        deleted_content = message.content
+        channel_mention = message.channel.mention
+        ok = await self._delete_intercepted(message, "edit" if edited else "message")
+        log.info("拉黑拦截 guild=%s channel=%s sender=%s target=%s relation=%s edited=%s deleted=%s",
+                 message.guild.id, message.channel.id, sender.id, target_id, relation, edited, ok)
+        # 不论是否删成功都计数，便于在 /list 中发现权限问题
+        await self._increment_block_count(message.guild.id, sender.id, target_id)
         try:
-            dm = await message.author.create_dm()
+            dm = await sender.create_dm()
             await dm.send(
                 f"⚠️ **消息发送已被拦截**\n"
-                f"你在频道 {channel_mention} 中的回复已被自动删除。\n"
+                f"你在频道 {channel_mention} 中的{'编辑后' if edited else ''}回复已被自动删除。\n"
                 f"**拦截原因：** {reason}\n\n"
                 f"**你的回复原文：**\n"
                 f"> {deleted_content if deleted_content else '[包含附件/多媒体/非纯文本内容]'}"
             )
         except discord.Forbidden:
-            pass  # 发言者关闭了服务器私信权限或机器人无 DM 权限
+            pass
         except discord.HTTPException as exc:
-            log.debug("向被拦截用户发送 DM 失败 user=%s error=%s", message.author.id, exc)
+            log.debug("向被拦截用户发送 DM 失败 user=%s error=%s", sender.id, exc)
+
+    async def _enforce_blocks_on_edit(self, payload) -> None:
+        data = payload.data or {}
+        if payload.guild_id is None or "content" not in data:
+            return
+        author = data.get("author") or {}
+        if author.get("bot") or (self.user and str(author.get("id")) == str(self.user.id)):
+            return
+        msg = getattr(payload, "message", None)
+        if msg is None:
+            ch = self.get_channel(payload.channel_id)
+            if ch is None:
+                return
+            try:
+                msg = await ch.fetch_message(payload.message_id)
+            except Exception:
+                return
+        if msg.guild is None or msg.author.bot:
+            return
+        await self._enforce_blocks(msg, edited=True)
 
     async def close(self):
         if self.db is not None:
