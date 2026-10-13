@@ -52,6 +52,7 @@ from shared.timeutil import parse_utc_datetime, utc_now_iso
 from shared.notify_policy import should_notify_finish, is_auto_poll
 from shared.gateway_ingest import GatewayIngest
 from shared import block_policy
+from shared import liveness
 
 load_local_env(os.path.join(BASE_DIR, '.env'))
 
@@ -402,6 +403,43 @@ def help_embed() -> discord.Embed:
 # 合并后的 Bot：一个 discord.Client + 一个 CommandTree，承载全部功能
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# 「还在吗？」活跃确认（shared/liveness.py；portal.db liveness_checks）
+# ---------------------------------------------------------------------------
+
+class AliveButton(discord.ui.DynamicItem[discord.ui.Button], template=r'liveness:(?P<token>[0-9a-f]{8,64})'):
+    """持久化按钮：custom_id 带 token，timeout=None；setup_hook 中 add_dynamic_items 注册，重启后仍可点击。"""
+
+    def __init__(self, token: str):
+        super().__init__(discord.ui.Button(label='我还在', style=discord.ButtonStyle.success,
+                                           emoji='👋', custom_id=f'liveness:{token}'))
+        self.token = token
+
+    @classmethod
+    async def from_custom_id(cls, interaction, item, match):
+        return cls(match['token'])
+
+    async def callback(self, interaction: discord.Interaction):
+        c = db()
+        try:
+            row = liveness.by_token(c, self.token)
+        finally:
+            c.close()
+        if row is None:
+            return await interaction.response.send_message('该确认已失效。', ephemeral=True)
+        if str(row['user_id']) != str(interaction.user.id):
+            return await interaction.response.send_message('这个按钮不是发给你的。', ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        text = await interaction.client.liveness_confirm(int(row['guild_id']), interaction.user.id)
+        await interaction.followup.send(text, ephemeral=True)
+
+
+def liveness_view(token: str) -> discord.ui.View:
+    view = discord.ui.View(timeout=None)
+    view.add_item(AliveButton(token))
+    return view
+
+
 class Bot(discord.Client):
     def __init__(self):
         super().__init__(intents=intents)
@@ -456,6 +494,14 @@ class Bot(discord.Client):
 
         self.member_sync_worker.start()
         self.download_notifications.start()
+        c = db()
+        try:
+            liveness.ensure(c)
+        finally:
+            c.close()
+        self.add_dynamic_items(AliveButton)  # 重启后旧私信里的「我还在」按钮仍然有效
+        self.liveness_sender.start()
+        self.liveness_expirer.start()
 
     async def _upsert_restart_command_without_entry_point(self) -> None:
         """Discord 50240 时单独 upsert 一组命令。
@@ -618,6 +664,14 @@ class Bot(discord.Client):
             if not perms.read_message_history: lacking.append("read_message_history")
             if not perms.send_messages: lacking.append("send_messages")
             if not perms.manage_messages: lacking.append("manage_messages（拉黑拦截删除消息需要）")
+            if guild.id == liveness.LIVENESS_GUILD_ID:
+                role = guild.get_role(liveness.LIVENESS_ROLE_ID)
+                if not perms.manage_roles:
+                    lacking.append("manage_roles（不活跃身份组需要）")
+                if role is None:
+                    lacking.append(f"不活跃身份组 {liveness.LIVENESS_ROLE_ID} 不存在")
+                elif me.top_role <= role:
+                    lacking.append(f"机器人最高身份组需高于不活跃身份组 {liveness.LIVENESS_ROLE_ID}")
             if lacking:
                 problems.append((guild, lacking))
                 log.warning("权限不足 guild=%s(%s) 缺少: %s", guild.name, guild.id, ", ".join(lacking))
@@ -982,6 +1036,117 @@ class Bot(discord.Client):
             return
         await self._enforce_blocks(msg, edited=True)
 
+    # ------------------------------------------------------------------ 活跃确认
+    async def _inactive_role(self, guild_id: int, user_id: int, add: bool):
+        """添加/移除不活跃身份组。返回 (ok, error)。"""
+        guild = self.get_guild(int(guild_id))
+        if guild is None:
+            return False, 'bot not in guild'
+        role = guild.get_role(liveness.LIVENESS_ROLE_ID)
+        if role is None:
+            return False, f'role {liveness.LIVENESS_ROLE_ID} not found'
+        try:
+            member = guild.get_member(int(user_id)) or await guild.fetch_member(int(user_id))
+        except discord.NotFound:
+            return False, 'member left guild'
+        except discord.HTTPException as exc:
+            return False, f'fetch member: {exc}'
+        try:
+            if add and role not in member.roles:
+                await member.add_roles(role, reason='活跃确认超时')
+            elif not add and role in member.roles:
+                await member.remove_roles(role, reason='用户确认我还在')
+            return True, None
+        except discord.Forbidden as exc:
+            log.warning('修改不活跃身份组失败（缺少 Manage Roles 或身份组层级不足）guild=%s user=%s add=%s error=%s',
+                        guild_id, user_id, add, exc)
+            return False, f'forbidden: {exc}'
+        except discord.HTTPException as exc:
+            return False, f'http: {exc}'
+
+    async def liveness_confirm(self, guild_id: int, user_id: int) -> str:
+        """按钮或 /alive：标记 alive，若已加身份组则移除。"""
+        ok, err = await self._inactive_role(guild_id, user_id, add=False)
+        c = db()
+        try:
+            n = liveness.mark_alive(c, user_id, guild_id, role_removed=ok)
+        finally:
+            c.close()
+        log.info('活跃确认 guild=%s user=%s updated=%s role_removed=%s err=%s', guild_id, user_id, n, ok, err)
+        if err and err not in ('member left guild',):
+            return '已记录你的确认，谢谢！不过移除身份组时出了点问题，请联系管理员。'
+        return '✅ 谢谢确认！你仍然是活跃成员。'
+
+    @tasks.loop(seconds=20)
+    async def liveness_sender(self):
+        c = db()
+        try:
+            rows = c.execute("SELECT * FROM liveness_checks WHERE status='queued' ORDER BY id LIMIT 5").fetchall()
+        finally:
+            c.close()
+        for row in rows:
+            cid, uid, gid = row['id'], int(row['user_id']), int(row['guild_id'])
+            error = None
+            try:
+                user = self.get_user(uid) or await self.fetch_user(uid)
+                guild = self.get_guild(gid)
+                if user.bot:
+                    error = 'bot account'
+                elif guild is not None and guild.get_member(uid) is None:
+                    try:
+                        await guild.fetch_member(uid)
+                    except discord.NotFound:
+                        error = 'not in guild'
+                if error is None:
+                    await user.send(liveness.dm_text(row['last_message_at'], guild.name if guild else '服务器'),
+                                    view=liveness_view(row['token']))
+            except discord.Forbidden as exc:
+                error = f'DM closed: {exc}'
+            except discord.HTTPException as exc:
+                error = f'http: {exc}'
+            except Exception as exc:
+                error = f'{type(exc).__name__}: {exc}'
+            c = db()
+            try:
+                if error:
+                    liveness.mark_failed(c, cid, error)
+                else:
+                    liveness.mark_sent(c, cid)
+            finally:
+                c.close()
+            log.info('活跃确认私信 check=%s user=%s ok=%s error=%s', cid, uid, error is None, error)
+            await asyncio.sleep(liveness.SEND_INTERVAL_SEC)
+
+    @tasks.loop(minutes=10)
+    async def liveness_expirer(self):
+        c = db()
+        try:
+            rows = liveness.due_for_expiry(c)
+        finally:
+            c.close()
+        for row in rows:
+            uid, gid = int(row['user_id']), int(row['guild_id'])
+            ok, err = await self._inactive_role(gid, uid, add=True)
+            c = db()
+            try:
+                liveness.mark_expired(c, row['id'], ok, err)
+            finally:
+                c.close()
+            log.info('活跃确认超时 check=%s user=%s role_added=%s err=%s', row['id'], uid, ok, err)
+            if ok:
+                try:
+                    user = self.get_user(uid) or await self.fetch_user(uid)
+                    await user.send(liveness.EXPIRED_TEXT.format(days=liveness.DEADLINE_DAYS),
+                                    view=liveness_view(row['token']))
+                except discord.HTTPException as exc:
+                    log.info('超时通知私信失败 user=%s error=%s', uid, exc)
+            await asyncio.sleep(1)
+
+    @liveness_sender.before_loop
+    @liveness_expirer.before_loop
+    async def _liveness_wait_ready(self):
+        await self.wait_until_ready()
+
     async def close(self):
         if self.db is not None:
             await self.db.close()
@@ -1116,6 +1281,14 @@ def request_full_application_restart() -> bool:
         except (FileNotFoundError, PermissionError, OSError):
             log.exception("请求 systemd 重启 V20 服务失败 service=%s", service_name)
     return False
+
+
+@bot.tree.command(name='alive', description='我还在 · 确认活跃并移除不活跃身份组')
+async def alive_cmd(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    gid = interaction.guild.id if interaction.guild else liveness.LIVENESS_GUILD_ID
+    text = await bot.liveness_confirm(gid, interaction.user.id)
+    await interaction.followup.send(text, ephemeral=True)
 
 
 @bot.tree.command(name='restart', description='重启机器人 · Restart bot')

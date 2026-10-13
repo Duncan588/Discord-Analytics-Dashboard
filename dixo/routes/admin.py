@@ -1,5 +1,5 @@
 """Admin panel, whitelist/quota/access, bots, download configs + tasks (moved verbatim from app.py; endpoint = "admin.<function name>")."""
-from flask import Blueprint
+from flask import Blueprint, abort
 
 from dixo import core as _core
 
@@ -645,3 +645,100 @@ def admin_download_tasks_status():
             d["available_bots"].insert(0,{"id":"default","name":"默认下载机器人"})
         result.append(d)
     return jsonify(result)
+
+
+# ---------------------------------------------------------------------------
+# 「还在吗？」活跃确认（shared/liveness.py；私信由 whitelist_bot 发送）
+# ---------------------------------------------------------------------------
+def _liveness_candidates(sid, as_of=None, tags=("faded", "rare")):
+    from dixo import dashboard_data
+    from shared import liveness
+    summ = summary_engine.summary_conn(sid)
+    try:
+        res = dashboard_data.member_activity_tags(summ, as_of=as_of or None)
+        rows = [dict(r) for t in tags for r in res.get("by_tag", {}).get(t, [])]
+        last = {}
+        ids = [r["user_id"] for r in rows]
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            ph = ",".join("?" * len(chunk))
+            for r in summ.execute(f"SELECT user_id,last_ts FROM user_stats WHERE user_id IN ({ph})", chunk):
+                last[str(r[0])] = r[1]
+    finally:
+        summ.close()
+    names, bots = {}, set()
+    main = get_db()
+    for i in range(0, len(rows), 500):
+        chunk = [r["user_id"] for r in rows[i:i + 500]]
+        ph = ",".join("?" * len(chunk))
+        for r in main.execute(f"SELECT user_id,username,nickname,is_bot FROM users WHERE user_id IN ({ph})", chunk):
+            names[str(r["user_id"])] = r["nickname"] or r["username"] or str(r["user_id"])
+            if r["is_bot"]:
+                bots.add(str(r["user_id"]))
+    for r in rows:
+        uid = r["user_id"]
+        r["name"] = names.get(uid, uid)
+        r["is_bot"] = uid in bots
+        r["last_message_at"] = last.get(uid)
+        r["months_idle"] = liveness.months_since(last.get(uid))
+    return [r for r in rows if not r["is_bot"]], res.get("as_of")
+
+
+@bp.route("/admin/liveness")
+@login_required
+@admin_required
+def admin_liveness():
+    from shared import liveness
+    if admin_level(session["user"]["id"]) != 1:
+        abort(403)
+    sid = current_server_id()
+    portal = get_portal_db()
+    liveness.ensure(portal)
+    as_of = (request.args.get("as_of") or "").strip()[:7]
+    tag = request.args.get("tag") or "all"
+    tags = ("faded",) if tag == "faded" else ("rare",) if tag == "rare" else ("faded", "rare")
+    candidates, as_of_ym = ([], None)
+    if sid and server_db_exists(sid):
+        candidates, as_of_ym = _liveness_candidates(sid, as_of, tags)
+    latest = {}
+    for r in portal.execute("SELECT * FROM liveness_checks WHERE guild_id=? ORDER BY id", (str(sid or ""),)):
+        latest[str(r["user_id"])] = dict(r)
+    for c in candidates:
+        c["check"] = latest.get(c["user_id"])
+    checks = [dict(r) for r in portal.execute(
+        "SELECT * FROM liveness_checks WHERE guild_id=? ORDER BY id DESC LIMIT 500", (str(sid or ""),))]
+    name_of = {c["user_id"]: c["name"] for c in candidates}
+    for ch in checks:
+        ch["name"] = name_of.get(str(ch["user_id"]), str(ch["user_id"]))
+    counts = collections.Counter(ch["status"] for ch in checks)
+    return render_template("liveness.html", candidates=candidates[:3000], total=len(candidates), checks=checks,
+                           counts=counts, as_of=as_of_ym, tag=tag, sid=sid,
+                           enabled=str(sid) == str(liveness.LIVENESS_GUILD_ID),
+                           role_id=liveness.LIVENESS_ROLE_ID, deadline_days=liveness.DEADLINE_DAYS,
+                           current_user=session["user"])
+
+
+@bp.route("/admin/liveness/send", methods=["POST"])
+@login_required
+@admin_required
+def admin_liveness_send():
+    from shared import liveness
+    if admin_level(session["user"]["id"]) != 1:
+        abort(403)
+    sid = current_server_id()
+    if str(sid) != str(liveness.LIVENESS_GUILD_ID):
+        flash("当前服务器未启用活跃确认 · Liveness checks are not enabled for this server", "error")
+        return redirect(url_for("admin.admin_liveness"))
+    picked = {x for x in request.form.getlist("user_ids") if x.isdigit()}
+    if not picked:
+        flash("请先选择成员 · Select members first", "error")
+        return redirect(url_for("admin.admin_liveness", as_of=request.form.get("as_of") or None))
+    cands, _ = _liveness_candidates(sid, request.form.get("as_of") or None)
+    by_id = {c["user_id"]: c for c in cands}
+    users = [by_id[u] for u in picked if u in by_id]  # only real faded/rare members, never arbitrary ids
+    portal = get_portal_db()
+    created, skipped = liveness.enqueue(portal, sid, users, session["user"]["id"])
+    app.logger.info("liveness.enqueue admin=%s created=%s skipped=%s", session["user"]["id"], created, len(skipped))
+    flash(f"已加入发送队列 {created} 人（机器人约每 3 秒发送一条）；跳过 {len(skipped)} 人（已有待确认或为机器人）。"
+          f" · Queued {created}, skipped {len(skipped)}.", "success")
+    return redirect(url_for("admin.admin_liveness", as_of=request.form.get("as_of") or None))

@@ -28,7 +28,7 @@
     <h1 class="h-display">{{ t("admin.title") }}</h1>
     <p class="muted" style="margin-top:6px">{{ t("admin.sub") }}</p>
   </div>
-  <a class="btn btn-ghost" href="/admin/bot-features">{{ t("nav.bot_features") }}</a>
+  <div class="row" style="gap:8px">{% if admin_level == 1 %}<a class="btn btn-ghost" href="/admin/liveness">👋 活跃确认</a>{% endif %}<a class="btn btn-ghost" href="/admin/bot-features">{{ t("nav.bot_features") }}</a></div>
 </div>
 
 {% if admin_level == 1 %}

@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}活跃确认 · {{ tr("nav.archive") }}{% endblock %}
+{% block content %}
+{% with messages = get_flashed_messages(with_categories=true) %}{% for cat, m in messages %}
+<div class="card" style="margin-bottom:var(--space-3);{% if cat == 'error' %}color:var(--red){% endif %}">{{ m }}</div>
+{% endfor %}{% endwith %}
+<div class="page-head">
+  <div><div class="eyebrow">{{ t("nav.admin") }}</div><h1 class="h-display">👋 活跃确认 · Still here?</h1>
+  <p class="muted" style="margin-top:6px">向「活跃后消失 / 几乎不活跃」成员私信确认；{{ deadline_days }} 天未点「我还在」将加入身份组 <span class="mono">{{ role_id }}</span>，成员可点按钮或用 /alive 移除。</p></div>
+  <a class="btn btn-ghost" href="/admin">‹ {{ t("nav.admin") }}</a>
+</div>
+
+<section class="card" style="margin-bottom:var(--space-4)">
+  <div class="card-head"><h2 class="h-card">确认记录 · Checks</h2>
+    <span class="faint" style="font-size:12px">
+      {% for s in ['queued','pending','alive','expired','dm_failed'] %}<span class="chip">{{ s }} {{ counts.get(s, 0) }}</span> {% endfor %}
+    </span></div>
+  {% if checks %}
+  <div style="overflow:auto;max-height:420px"><table class="table">
+    <thead><tr><th>成员</th><th>状态</th><th>发送</th><th>截止</th><th>确认</th><th>加身份组</th><th>错误</th></tr></thead>
+    <tbody>{% for c in checks %}<tr>
+      <td>{{ c.name }} <span class="mono faint">{{ c.user_id }}</span></td>
+      <td><span class="chip" {% if c.status in ['dm_failed','expired'] %}style="color:var(--red)"{% elif c.status == 'alive' %}style="color:var(--green)"{% endif %}>{{ c.status }}</span></td>
+      <td class="mono faint">{{ (c.sent_at or '')[:16]|replace('T',' ') }}</td>
+      <td class="mono faint">{{ (c.deadline or '')[:16]|replace('T',' ') }}</td>
+      <td class="mono faint">{{ (c.clicked_at or '')[:16]|replace('T',' ') }}</td>
+      <td class="mono faint">{{ (c.role_added_at or '')[:16]|replace('T',' ') }}{% if c.role_removed_at %} → 已移除{% endif %}</td>
+      <td class="faint" style="font-size:12px">{{ c.error or '' }}</td></tr>{% endfor %}</tbody>
+  </table></div>
+  {% else %}<div class="empty">暂无记录 · No checks yet</div>{% endif %}
+</section>
+
+<section class="card">
+  <div class="card-head"><h2 class="h-card">候选成员 · Candidates</h2>
+    <form method="get" class="row" style="gap:8px">
+      <select name="tag" class="input">
+        <option value="all" {% if tag=='all' %}selected{% endif %}>全部（两类）</option>
+        <option value="faded" {% if tag=='faded' %}selected{% endif %}>活跃后消失</option>
+        <option value="rare" {% if tag=='rare' %}selected{% endif %}>几乎不活跃</option>
+      </select>
+      <input class="input" type="month" name="as_of" value="{{ as_of or '' }}" title="统计截至月份（留空=全部时间）">
+      <button class="btn btn-ghost" type="submit">筛选</button>
+    </form></div>
+  {% if not enabled %}<div class="empty">当前服务器未启用活跃确认：{{ sid }}。</div>{% endif %}
+  <p class="faint" style="font-size:12px">截至 {{ as_of or '—' }} · 共 {{ total }} 人{% if total > candidates|length %}（显示前 {{ candidates|length }}）{% endif %} · 已有待确认的成员会自动跳过；机器人已排除。</p>
+  <form method="post" action="/admin/liveness/send" id="liveness-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="as_of" value="{{ as_of or '' }}">
+    <div class="row" style="gap:8px;margin:8px 0">
+      <label><input type="checkbox" id="lv-all"> 全选 / Select all</label>
+      <span class="faint" id="lv-count">0</span>
+      <button class="btn btn-primary" type="submit" {% if not enabled %}disabled{% endif %}>发送「还在吗？」私信</button>
+    </div>
+    <div style="overflow:auto;max-height:640px"><table class="table">
+      <thead><tr><th></th><th>成员</th><th>分类</th><th>消息数</th><th>最后发言</th><th>沉默(月)</th><th>最近确认</th></tr></thead>
+      <tbody>{% for c in candidates %}<tr>
+        <td><input type="checkbox" class="lv-box" name="user_ids" value="{{ c.user_id }}" {% if c.check and c.check.status in ['queued','pending'] %}disabled{% endif %}></td>
+        <td>{{ c.name }} <span class="mono faint">{{ c.user_id }}</span></td>
+        <td>{% if c.tag == 'faded' %}活跃后消失{% else %}几乎不活跃{% endif %}</td>
+        <td>{{ c.msg_count }}</td>
+        <td class="mono faint">{{ (c.last_message_at or '')[:10] }}</td>
+        <td>{{ c.months_idle if c.months_idle is not none else '—' }}</td>
+        <td>{% if c.check %}<span class="chip">{{ c.check.status }}</span>{% endif %}</td></tr>
+      {% else %}<tr><td colspan="7" class="empty">没有符合条件的成员</td></tr>{% endfor %}</tbody>
+    </table></div>
+  </form>
+</section>
+<script>
+(function(){
+  var all=document.getElementById('lv-all'), cnt=document.getElementById('lv-count'), f=document.getElementById('liveness-form');
+  function boxes(){return Array.prototype.slice.call(document.querySelectorAll('.lv-box:not(:disabled)'));}
+  function upd(){cnt.textContent=boxes().filter(function(b){return b.checked;}).length+' 已选';}
+  all.addEventListener('change',function(){boxes().forEach(function(b){b.checked=all.checked;});upd();});
+  document.addEventListener('change',function(e){if(e.target.classList.contains('lv-box'))upd();});
+  f.addEventListener('submit',function(e){var n=boxes().filter(function(b){return b.checked;}).length;
+    if(!n||!confirm('确定向 '+n+' 位成员发送「还在吗？」私信？')){e.preventDefault();}});
+  upd();
+})();
+</script>
+{% endblock %}
