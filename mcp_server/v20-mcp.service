@@ -1,0 +1,18 @@
+[Unit]
+Description=V20 read-only MCP server (Discord Analytics)
+After=network.target
+
+[Service]
+WorkingDirectory=/root/v2/V20
+Environment=PYTHONPATH=/root/v2/V20
+Environment=V20_ROOT=/root/v2/V20
+Environment=MCP_HOST=127.0.0.1
+Environment=MCP_PORT=5055
+ExecStart=/root/v2/mcp-venv/bin/python -m mcp_server.server
+Restart=on-failure
+RestartSec=5
+Nice=10
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target
