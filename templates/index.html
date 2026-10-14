@@ -3,6 +3,7 @@
 {% block head %}
 <script src="{{ asset('vendor/ui/chart/chart.umd.min.js') }}" defer></script>
 <script src="{{ asset('js/dixo-home.js') }}" defer></script>
+<script src="{{ asset('js/dixo-sentiment.js') }}" defer></script>
 {% endblock %}
 {% block body_attrs %}x-data="dashboard"{% endblock %}
 {% block nav_actions %}
@@ -74,6 +75,19 @@
       {% else %}<li class="empty">{{ t("common.empty") }}</li>{% endfor %}
     </ol>
   </div>
+</section>
+
+<section class="card" style="margin-top:var(--space-4)" data-sentiment-card data-url="/api/v1/sentiment">
+  <div class="card-head">
+    <h2 class="h-card">{{ t("sent.title") }}</h2>
+    <div class="seg">
+      <button type="button" data-srange="30">{{ t("home.trend.range30") }}</button>
+      <button type="button" class="on" data-srange="90">{{ t("home.trend.range90") }}</button>
+      <button type="button" data-srange="0">{{ t("home.trend.rangeall") }}</button>
+    </div>
+  </div>
+  <p class="faint" data-sentiment-empty style="font-size:12px;margin:0 0 8px">{{ t("sent.loading") }}</p>
+  <div class="chart" data-sentiment-wrap style="display:none"><canvas data-sentiment-chart aria-label="sentiment"></canvas></div>
 </section>
 
 <section class="grid g-2" style="margin-top:var(--space-4)">

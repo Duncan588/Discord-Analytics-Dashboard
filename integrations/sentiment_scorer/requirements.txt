@@ -1,0 +1,5 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.*
+transformers>=4.44,<6
+sentencepiece
+protobuf

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% import "components/ui.html" as ui %}
 {% block title %}{{ user.nickname or user.username }} · {{ tr("nav.archive") }}{% endblock %}
-{% block head %}<script src="{{ asset('js/dixo-format.js') }}" defer></script><script src="{{ asset('vendor/ui/chart/chart.umd.min.js') }}" defer></script>{% endblock %}
+{% block head %}<script src="{{ asset('js/dixo-format.js') }}" defer></script><script src="{{ asset('vendor/ui/chart/chart.umd.min.js') }}" defer></script><script src="{{ asset('js/dixo-sentiment.js') }}" defer></script>{% endblock %}
 {% block body_attrs %}x-data="{ chartMode: 'daily', showViews: false }"{% endblock %}
 {% macro tab_url(p, tab=active_tab, sort=current_sort) -%}?tab={{ tab }}&sort={{ sort }}&page={{ p }}#records{%- endmacro %}
 {% block content %}
@@ -72,6 +72,19 @@
     <div class="card-head" style="margin-top:var(--space-4)"><h2 class="h-card">{{ t("user.outgoing") }}</h2></div>
     <ul class="list" id="outgoing-list">{% for u in interactions_outgoing %}<a href="/user/{{ u.user_id }}">{{ ui.avatar(u.avatar_url, 32) }}<span class="truncate" style="flex:1;color:var(--ink)">{{ u.nickname or u.username }}</span><span class="chip num" title="{{ u.score }}">{{ u.score|compact }} {{ t("common.times") }}</span></a>{% endfor %}</ul>
   </div>
+</section>
+
+<section class="card" style="margin-top:var(--space-4)" data-sentiment-card data-url="/api/v1/sentiment?user={{ user.user_id }}">
+  <div class="card-head">
+    <h2 class="h-card">{{ t("sent.title") }}</h2>
+    <div class="seg">
+      <button type="button" data-srange="30">{{ t("home.trend.range30") }}</button>
+      <button type="button" class="on" data-srange="90">{{ t("home.trend.range90") }}</button>
+      <button type="button" data-srange="0">{{ t("home.trend.rangeall") }}</button>
+    </div>
+  </div>
+  <p class="faint" data-sentiment-empty style="font-size:12px;margin:0 0 8px">{{ t("sent.loading") }}</p>
+  <div class="chart sm" data-sentiment-wrap style="display:none"><canvas data-sentiment-chart aria-label="sentiment"></canvas></div>
 </section>
 
 <section class="grid g-3" style="margin-top:var(--space-4)">
