@@ -25,7 +25,7 @@ def _clip(s, n):
     return s if len(s) <= n else s[: max(0, n - 1)] + "…"
 
 
-@register("astrbot_plugin_discord_context", "Duncan588", "Discord 论坛帖上下文注入 (MCP)", "0.1.0")
+@register("astrbot_plugin_discord_context", "Duncan588", "Discord 论坛帖上下文注入 (MCP)", "0.2.0")
 class DiscordContext(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -34,6 +34,8 @@ class DiscordContext(Star):
         self._cache = {}
         self._last_proactive = 0.0
         self._rpc_id = 0
+        self._typing = {}  # session key -> (generation, task)
+        self._typing_gen = 0
 
     # ------------------------------------------------------------------ MCP
     async def _http(self):
@@ -195,10 +197,65 @@ class DiscordContext(Star):
             text = text[: mx - 1] + "…"
         return text, src
 
+    # ------------------------------------------------------------------ typing keepalive
+    # Ported from astrbot_plugin_stoprushingiamtyping (Melantilla.): keep Discord's "typing…" indicator alive
+    # from LLM request until the reply is sent, refreshed every N seconds, capped by a max window.
+    async def _typing_loop(self, key, gen, channel):
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        every = max(3.0, float(self.cfg.get("typing_keepalive_seconds", 8.0)))
+        window = max(10.0, float(self.cfg.get("typing_max_window_seconds", 120.0)))
+        try:
+            while loop.time() - start < window:
+                cur = self._typing.get(key)
+                if not cur or cur[0] != gen:
+                    return
+                await channel.trigger_typing()
+                await asyncio.sleep(every)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            if self.cfg.get("debug_log"):
+                logger.info(f"[discord_context] trigger_typing failed: {e}")
+        finally:
+            cur = self._typing.get(key)
+            if cur and cur[0] == gen:
+                self._typing.pop(key, None)
+
+    async def _typing_start(self, event):
+        if not self.cfg.get("typing_enable", True):
+            return
+        ch = getattr(self._raw(event), "channel", None)
+        if ch is None or not hasattr(ch, "trigger_typing"):
+            return
+        key = event.unified_msg_origin
+        cur = self._typing.get(key)
+        if cur and not cur[1].done():
+            return
+        self._typing_gen += 1
+        gen = self._typing_gen
+        self._typing[key] = (gen, asyncio.create_task(self._typing_loop(key, gen, ch)))
+
+    async def _typing_stop(self, key):
+        cur = self._typing.pop(key, None)
+        if cur and not cur[1].done():
+            cur[1].cancel()
+            try:
+                await cur[1]
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    @filter.after_message_sent()
+    async def after_sent(self, event: AstrMessageEvent):
+        await self._typing_stop(event.unified_msg_origin)
+
     # ------------------------------------------------------------------ hooks
     @filter.on_llm_request()
     async def inject(self, event: AstrMessageEvent, req: ProviderRequest):
-        if not self.cfg.get("enable", True) or event.get_platform_name() != "discord":
+        if event.get_platform_name() != "discord":
+            return
+        await self._typing_start(event)
+        if not self.cfg.get("enable", True):
             return
         try:
             res = await asyncio.wait_for(self.build_context(event), timeout=float(self.cfg.get("timeout_sec", 6)) * 2 + 2)
@@ -241,5 +298,7 @@ class DiscordContext(Star):
                                 "\n正文：" + _clip(raw.content, 800))
 
     async def terminate(self):
+        for k in list(self._typing):
+            await self._typing_stop(k)
         if self._session and not self._session.closed:
             await self._session.close()
