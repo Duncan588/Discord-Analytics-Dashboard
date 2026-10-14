@@ -1,7 +1,7 @@
 name: astrbot_plugin_discord_context
 display_name: Discord 论坛上下文
-desc: 在 Discord 论坛帖/子区/频道被唤醒时，从 Discord Analytics MCP 拉取帖子上下文与提问者画像注入 LLM 请求；MCP 不可用时回退 Discord API。
-version: 0.1.0
+desc: 在 Discord 论坛帖/子区/频道被唤醒时，从 Discord Analytics MCP 拉取帖子上下文与提问者画像注入 LLM 请求；MCP 不可用时回退 Discord API；LLM 思考时持续显示“正在输入”（移植自 stoprushingiamtyping，兼容 py-cord）。
+version: 0.2.0
 author: Duncan588
 repo: https://github.com/Duncan588/Discord-Analytics-Dashboard
 astrbot_version: ">=4.20.0"

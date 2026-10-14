@@ -16,3 +16,10 @@ Cloudflare rejects `Python-urllib` (error 1010).
 
 Install: copy this folder to `AstrBot/data/plugins/` and restart/reload. Test: @bot in a forum post; logs show
 `[discord_context] injected N chars via mcp`.
+
+## Typing keepalive (ported from astrbot_plugin_stoprushingiamtyping)
+
+From `on_llm_request` until `after_message_sent`, the plugin calls py-cord `channel.trigger_typing()` every
+`typing_keepalive_seconds` (default 8, min 3), capped at `typing_max_window_seconds` (default 120, min 10).
+Toggle with `typing_enable`. No `discord.py` dependency — the original plugin's `requirements.txt` pulled in
+`discord.py`, which overwrote AstrBot's bundled py-cord and broke the Discord adapter.
