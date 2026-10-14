@@ -5,11 +5,13 @@ persistent '我还在' button (status=pending, deadline=+7d, or dm_failed) -> cl
 /alive marks alive (and removes the inactive role if it was added) -> after the
 deadline the bot adds the inactive role (status=expired) and DMs a notice.
 """
+import os
 import secrets
 from datetime import datetime, timedelta, timezone
 
 LIVENESS_GUILD_ID = 915249444721668096
-LIVENESS_ROLE_ID = 1425661375472074884
+# Inactive role (was 1425661375472074884 R.I.P.; switched 2026-10-14). Override via .env LIVENESS_ROLE_ID.
+LIVENESS_ROLE_ID = int((os.getenv('LIVENESS_ROLE_ID') or '').strip() or 1559851730005532673)
 DEADLINE_DAYS = 7
 SEND_INTERVAL_SEC = 3.0          # >= 3s between DMs (~20/min) to stay well under DM rate limits
 STATUSES = ("queued", "pending", "alive", "expired", "dm_failed")
