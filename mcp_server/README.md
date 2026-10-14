@@ -8,7 +8,11 @@ all opened with `mode=ro`. Row cap 200 per call, 8 s query timeout, message text
   -> `/etc/systemd/system/v20-mcp.service`, listens on 127.0.0.1:5055; nginx `location /mcp` on
   discordanalytics.monster6324.me proxies to it (HTTPS via Cloudflare).
 - Tools: list_servers, server_overview, search_members, get_member_profile, get_member_messages,
-  search_messages, get_top_members, get_activity_tiers, get_channel_stats.
+  search_messages, get_top_members, get_activity_tiers, get_channel_stats,
+  list_threads, get_thread, get_thread_messages, get_thread_context, search_threads, get_hot_threads.
+- Hot score: `replies*1 + unique_participants*3 + reactions*0.5` over threads created in range.
+- Thread owner/tags/archived come from `thread_meta` (gateway THREAD_CREATE/UPDATE, since 2026-10-15);
+  older threads fall back to the first-message author and snowflake creation time; tags empty.
 - Smoke test: `TOK=... python mcp_server/selftest.py https://discordanalytics.monster6324.me/mcp`
 
 AstrBot config:

@@ -719,6 +719,7 @@ class Bot(discord.Client):
                 log.info("网关入库自检 %s | message_content=%s", line, intents.message_content)
             # on_ready 在首次登录和无法 RESUME 的重连后触发：补齐离线期间的数据（静默任务）。
             await asyncio.to_thread(self.ingest.enqueue_backfill)
+            log.info("thread_meta sync active threads=%s", await self.ingest.sync_active_threads(self))
         except Exception:
             log.exception("网关入库自检/补齐入队失败")
 
@@ -731,6 +732,15 @@ class Bot(discord.Client):
 
     async def on_raw_message_delete(self, payload):
         await self.ingest.on_raw_message_delete(payload, self)
+
+    async def on_thread_create(self, thread):
+        await self.ingest.on_thread_upsert(thread)
+
+    async def on_thread_update(self, before, after):
+        await self.ingest.on_thread_upsert(after)
+
+    async def on_raw_thread_delete(self, payload):
+        await self.ingest.on_raw_thread_delete(payload)
 
     async def on_raw_bulk_message_delete(self, payload):
         await self.ingest.on_raw_bulk_message_delete(payload, self)

@@ -417,6 +417,363 @@ def get_channel_stats(guild_id: str = "", channel_id: str = "", limit: int = 20)
         return [{"channel_id": r[0], "name": nm.get(r[0]), "messages": r[1], "last_message": r[2]} for r in rows]
 
 
+
+# ---------------------------------------------------------------- forum threads
+DISCORD_EPOCH_MS = 1420070400000
+SNIPPET = 200
+
+
+def _snow_ts(sid):
+    try:
+        ms = (int(sid) >> 22) + DISCORD_EPOCH_MS
+        return datetime.fromtimestamp(ms / 1000, timezone.utc).isoformat(timespec="seconds")
+    except (TypeError, ValueError):
+        return None
+
+
+def _snow_from(date_s, end=False):
+    d = _date(date_s, end=end)
+    if not d:
+        return None
+    dt = datetime.fromisoformat(d.replace("Z", "+00:00"))
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return (int(dt.timestamp() * 1000) - DISCORD_EPOCH_MS) << 22
+
+
+def _has_table(conn, name):
+    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
+
+
+def _thread_meta_map(main, ids):
+    out = {}
+    if not ids or not _has_table(main, "thread_meta"):
+        return out
+    for i in range(0, len(ids), 500):
+        c = ids[i:i + 500]
+        for r in main.execute(f"SELECT thread_id,owner_id,created_at,tags,archived,locked,deleted_at FROM thread_meta "
+                              f"WHERE thread_id IN ({','.join('?'*len(c))})", c):
+            d = dict(r)
+            try:
+                d["tags"] = json.loads(d["tags"]) if d["tags"] else []
+            except ValueError:
+                d["tags"] = []
+            out[str(r[0])] = d
+    return out
+
+
+def _thread_stats_map(summ, ids):
+    out = {}
+    for i in range(0, len(ids), 500):
+        c = ids[i:i + 500]
+        for r in summ.execute(f"SELECT thread_id,msg_count,op_msg_id,op_author,first_ts,last_ts FROM thread_stats "
+                              f"WHERE thread_id IN ({','.join('?'*len(c))})", c):
+            out[str(r[0])] = r
+    return out
+
+
+def _participants(main, tid):
+    return main.execute("SELECT COUNT(DISTINCT author_id) FROM messages WHERE thread_id=?", (tid,)).fetchone()[0]
+
+
+def _thread_reactions(main, summ_path, tid):
+    ids = [r[0] for r in main.execute("SELECT message_id FROM messages WHERE thread_id=?", (tid,))]
+    if not ids:
+        return 0
+    tot = 0
+    with _db(summ_path) as summ:
+        for i in range(0, len(ids), 500):
+            c = ids[i:i + 500]
+            tot += summ.execute(f"SELECT COALESCE(SUM(c),0) FROM msg_react WHERE message_id IN ({','.join('?'*len(c))})", c).fetchone()[0]
+    return tot
+
+
+def _thread_card(tid, t, st, meta, names):
+    owner = (meta or {}).get("owner_id") or (st["op_author"] if st else None)
+    msgs = st["msg_count"] if st else 0
+    return {"thread_id": tid, "title": t["name"] if t else None, "forum_id": t["category_id"] if t else None,
+            "author_id": owner, "author": names.get(str(owner)) if owner else None,
+            "created_at": (meta or {}).get("created_at") or _snow_ts(tid),
+            "tags": (meta or {}).get("tags") or [], "messages": msgs, "replies": max(0, msgs - 1),
+            "last_activity": (st["last_ts"] if st else None) or (t["last_active_at"] if t else None),
+            "deleted": bool((meta or {}).get("deleted_at")),
+            "url": f"https://discord.com/channels/{t['guild_id']}/{tid}" if t and t["guild_id"] else None}
+
+
+def _reply_ctx(main, rows):
+    ids = list({r["reply_to_msg_id"] for r in rows if r["reply_to_msg_id"]})
+    out = {}
+    for i in range(0, len(ids), 500):
+        c = ids[i:i + 500]
+        for r in main.execute(f"SELECT message_id,author_id,content FROM messages WHERE message_id IN ({','.join('?'*len(c))})", c):
+            out[str(r[0])] = r
+    names = _names(main, [r["author_id"] for r in out.values()])
+    return {k: {"message_id": k, "author_id": v["author_id"], "author": names.get(str(v["author_id"])),
+                "snippet": (v["content"] or "")[:SNIPPET]} for k, v in out.items()}
+
+
+def _thread_msgs(main, rows):
+    items = _msg_rows(main, rows)
+    ctx = _reply_ctx(main, rows)
+    for it in items:
+        it.pop("channel", None); it.pop("channel_id", None)
+        if it.get("reply_to"):
+            it["reply_to_context"] = ctx.get(str(it["reply_to"])) or {"message_id": it["reply_to"], "missing": True}
+    return items
+
+
+@mcp.tool()
+def list_threads(guild_id: str = "", forum_id: str = "", created_since: str = "", created_until: str = "",
+                 tag: str = "", sort: str = "recency", limit: int = 20, offset: int = 0) -> dict:
+    """List forum posts/threads. Filters: forum_id, created date range (ISO), tag name.
+    sort: recency (last activity), created (newest first), replies, participants, activity
+    (messages in the last 7 days). participants/activity are computed over the top 500 candidates by replies."""
+    gid, main_p, summ_p = _gid(guild_id)
+    lim, off = _lim(limit), max(0, int(offset or 0))
+    if sort not in ("recency", "created", "replies", "participants", "activity"):
+        raise ValueError("sort must be recency|created|replies|participants|activity")
+    with _db(main_p) as main:
+        where, args = ["1=1"], []
+        if forum_id:
+            where.append("t.category_id=?"); args.append(_uid(forum_id))
+        lo, hi = _snow_from(created_since), _snow_from(created_until, end=True)
+        if lo:
+            where.append("CAST(t.thread_id AS INTEGER)>=?"); args.append(lo)
+        if hi:
+            where.append("CAST(t.thread_id AS INTEGER)<?"); args.append(hi)
+        if tag:
+            if not _has_table(main, "thread_meta"):
+                raise ValueError("tag data not collected yet")
+            where.append("t.thread_id IN (SELECT thread_id FROM thread_meta WHERE tags LIKE ?)")
+            args.append('%"' + tag.replace('"', '') + '"%')
+        rows = main.execute(f"SELECT t.* FROM threads t WHERE {' AND '.join(where)}", args).fetchall()
+        tmap = {str(r["thread_id"]): r for r in rows}
+        ids = list(tmap)
+        with _db(summ_p) as summ:
+            st = _thread_stats_map(summ, ids)
+        extra = {}
+        if sort == "created":
+            ids.sort(key=lambda x: -int(x))
+        elif sort == "recency":
+            ids.sort(key=lambda x: ((st[x]["last_ts"] if x in st else None) or tmap[x]["last_active_at"] or ""), reverse=True)
+        else:
+            ids.sort(key=lambda x: -(st[x]["msg_count"] if x in st else 0))
+            if sort in ("participants", "activity"):
+                cand = ids[:500]
+                if sort == "participants":
+                    extra = {x: _participants(main, x) for x in cand}
+                else:
+                    since = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
+                    extra = {x: main.execute("SELECT COUNT(*) FROM messages WHERE thread_id=? AND timestamp>=?", (x, since)).fetchone()[0] for x in cand}
+                ids = sorted(cand, key=lambda x: -extra[x])
+        total = len(ids)
+        page = ids[off:off + lim]
+        meta = _thread_meta_map(main, page)
+        names = _names(main, [(meta.get(x) or {}).get("owner_id") or (st[x]["op_author"] if x in st else None) for x in page])
+        items = []
+        for x in page:
+            c = _thread_card(x, tmap[x], st.get(x), meta.get(x), names)
+            if sort == "participants":
+                c["participants"] = extra[x]
+            elif sort == "activity":
+                c["messages_last_7d"] = extra[x]
+            items.append(c)
+    return {"total": total, "items": items, "next_offset": off + lim if total > off + lim else None}
+
+
+@mcp.tool()
+def get_thread(thread_id: str, guild_id: str = "") -> dict:
+    """One forum post/thread: title, author, tags, created time, full starter post, stats
+    (messages, replies, participants, reactions, first/last activity) and top participants."""
+    gid, main_p, summ_p = _gid(guild_id)
+    tid = _uid(thread_id)
+    with _db(main_p) as main:
+        t = main.execute("SELECT * FROM threads WHERE thread_id=?", (tid,)).fetchone()
+        with _db(summ_p) as summ:
+            st = _thread_stats_map(summ, [tid]).get(tid)
+        if not t and not st:
+            raise ValueError("thread not found")
+        meta = _thread_meta_map(main, [tid]).get(tid)
+        starter_id = tid if main.execute("SELECT 1 FROM messages WHERE message_id=?", (tid,)).fetchone() else (st["op_msg_id"] if st else None)
+        starter = main.execute(_MSG_SELECT + "WHERE m.message_id=?", (starter_id,)).fetchone() if starter_id else None
+        top = main.execute("SELECT author_id,COUNT(*) n FROM messages WHERE thread_id=? GROUP BY author_id ORDER BY n DESC", (tid,)).fetchall()
+        att = main.execute("SELECT url,filename FROM attachments WHERE message_id=?", (starter_id,)).fetchall() if starter_id else []
+        owner = (meta or {}).get("owner_id") or (st["op_author"] if st else None)
+        names = _names(main, [r[0] for r in top[:15]] + [owner])
+        card = _thread_card(tid, t, st, meta, names)
+        card.update({
+            "participants": len(top), "reactions": _thread_reactions(main, summ_p, tid),
+            "first_message": st["first_ts"] if st else None,
+            "archived": bool((meta or {}).get("archived")), "locked": bool((meta or {}).get("locked")),
+            "starter_post": None if not starter else {
+                "message_id": starter["message_id"], "author_id": starter["author_id"],
+                "author": names.get(str(starter["author_id"])) or _names(main, [starter["author_id"]]).get(str(starter["author_id"])),
+                "timestamp": starter["timestamp"], "content": starter["content"] or "",
+                "attachments": [{"url": a[0], "filename": a[1]} for a in att]},
+            "starter_missing": starter is None,
+            "top_participants": [{"user_id": r[0], "name": names.get(str(r[0])), "messages": r[1]} for r in top[:15]],
+        })
+    return card
+
+
+@mcp.tool()
+def get_thread_messages(thread_id: str, guild_id: str = "", limit: int = 50, before_message_id: str = "",
+                        after_message_id: str = "", around_message_id: str = "") -> dict:
+    """Messages of a thread in chronological order (oldest→newest), each with reply-to context.
+    Default: latest `limit` messages. Page backwards with before_message_id, forwards with
+    after_message_id, or center on around_message_id."""
+    gid, main_p, _ = _gid(guild_id)
+    tid = _uid(thread_id)
+    lim = _lim(limit, 50)
+    with _db(main_p) as main:
+        def ts_of(mid):
+            r = main.execute("SELECT timestamp FROM messages WHERE message_id=?", (_uid(mid),)).fetchone()
+            if not r:
+                raise ValueError("message not found")
+            return r[0]
+        base = _MSG_SELECT + "WHERE m.thread_id=? "
+        if around_message_id:
+            ts = ts_of(around_message_id); half = lim // 2
+            older = main.execute(base + "AND m.timestamp<? ORDER BY m.timestamp DESC LIMIT ?", (tid, ts, half)).fetchall()
+            newer = main.execute(base + "AND m.timestamp>=? ORDER BY m.timestamp ASC LIMIT ?", (tid, ts, lim - half)).fetchall()
+            rows = list(reversed(older)) + list(newer)
+        elif after_message_id:
+            rows = main.execute(base + "AND m.timestamp>? ORDER BY m.timestamp ASC LIMIT ?", (tid, ts_of(after_message_id), lim)).fetchall()
+        else:
+            args = [tid]
+            q = base
+            if before_message_id:
+                q += "AND m.timestamp<? "; args.append(ts_of(before_message_id))
+            rows = list(reversed(main.execute(q + "ORDER BY m.timestamp DESC LIMIT ?", (*args, lim)).fetchall()))
+        items = _thread_msgs(main, rows)
+    return {"thread_id": tid, "items": items,
+            "older_cursor": items[0]["message_id"] if items else None,
+            "newer_cursor": items[-1]["message_id"] if items else None}
+
+
+@mcp.tool()
+def get_thread_context(thread_id: str, guild_id: str = "", last_n: int = 30) -> dict:
+    """Compact digest for an AI about to reply in a thread: title/tags/author, full starter post,
+    the last N messages (oldest→newest, with reply-to snippets) and active participants with brief
+    profiles (messages in this thread, server-wide totals, activity tier, last seen)."""
+    gid, main_p, summ_p = _gid(guild_id)
+    tid = _uid(thread_id)
+    info = get_thread(tid, gid)
+    n = max(1, min(100, int(last_n or 30)))
+    msgs = get_thread_messages(tid, gid, limit=n)["items"]
+    if info.get("starter_post"):
+        msgs = [m for m in msgs if m["message_id"] != info["starter_post"]["message_id"]]
+    ids = [p["user_id"] for p in info["top_participants"][:10]]
+    tmap, _ = _tier_map(gid, summ_p)
+    prof = {}
+    with _db(summ_p) as summ:
+        if ids:
+            for r in summ.execute(f"SELECT user_id,msg_count,first_ts,last_ts FROM user_stats WHERE user_id IN ({','.join('?'*len(ids))})", ids):
+                prof[str(r[0])] = r
+    parts = []
+    for p in info["top_participants"][:10]:
+        r = prof.get(str(p["user_id"]))
+        tier = tmap.get(str(p["user_id"]))
+        parts.append({"user_id": p["user_id"], "name": p["name"], "messages_in_thread": p["messages"],
+                      "messages_total": r[1] if r else None, "member_since": r[2] if r else None,
+                      "last_seen": r[3] if r else None, "activity_tier": TIER_LABELS.get(tier, tier)})
+    for m in msgs:
+        m["content"] = (m["content"] or "")[:600]
+    return {"thread": {k: info[k] for k in ("thread_id", "title", "author", "author_id", "tags", "created_at",
+                                             "messages", "replies", "participants", "reactions", "last_activity", "url")},
+            "starter_post": info.get("starter_post"), "recent_messages": msgs, "participants": parts}
+
+
+@mcp.tool()
+def search_threads(keyword: str, guild_id: str = "", forum_id: str = "", in_starter: bool = True,
+                   limit: int = 20, offset: int = 0) -> dict:
+    """Find forum posts by keyword in the title (and, by default, the starter post text). Newest first."""
+    gid, main_p, summ_p = _gid(guild_id)
+    kw = (keyword or "").strip()
+    if not kw:
+        raise ValueError("keyword required")
+    lim, off = _lim(limit), max(0, int(offset or 0))
+    like = "%" + kw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+    with _db(main_p) as main:
+        fcond, fargs = ("AND t.category_id=? ", [_uid(forum_id)]) if forum_id else ("", [])
+        # title hits: whole history (threads table is small)
+        hits = {str(r["thread_id"]): r for r in main.execute(
+            f"SELECT t.*,NULL starter FROM threads t WHERE t.name LIKE ? ESCAPE '\\' {fcond}", (like, *fargs))}
+        searched_back_to = None
+        if in_starter:
+            # starter posts: scan newest-first in chunks within a time budget
+            all_ids = [str(r[0]) for r in main.execute(f"SELECT t.thread_id FROM threads t WHERE 1=1 {fcond}", fargs)]
+            all_ids.sort(key=lambda x: -int(x))
+            t0 = time.monotonic()
+            for i in range(0, len(all_ids), 2000):
+                if time.monotonic() - t0 > QUERY_TIMEOUT_S * 0.6 or len(hits) >= off + lim + 1 and i > 0:
+                    searched_back_to = _snow_ts(all_ids[i - 1])
+                    break
+                c = all_ids[i:i + 2000]
+                for r in main.execute(f"SELECT t.*,m.content starter FROM messages m JOIN threads t ON t.thread_id=m.thread_id "
+                                      f"WHERE m.message_id IN ({','.join('?'*len(c))}) AND m.content LIKE ? ESCAPE '\\'", (*c, like)):
+                    hits[str(r["thread_id"])] = r
+        rows = sorted(hits.values(), key=lambda r: -int(r["thread_id"]))[off:off + lim + 1]
+        page = rows[:lim]
+        ids = [str(r["thread_id"]) for r in page]
+        with _db(summ_p) as summ:
+            st = _thread_stats_map(summ, ids)
+        meta = _thread_meta_map(main, ids)
+        names = _names(main, [(meta.get(x) or {}).get("owner_id") or (st[x]["op_author"] if x in st else None) for x in ids])
+        items = []
+        for r in page:
+            x = str(r["thread_id"])
+            c = _thread_card(x, r, st.get(x), meta.get(x), names)
+            c["starter_snippet"] = (r["starter"] or "")[:SNIPPET]
+            items.append(c)
+    return {"items": items, "next_offset": off + lim if len(rows) > lim else None,
+            "starter_search_partial_back_to": searched_back_to}
+
+
+HOT_W_REPLIES, HOT_W_PARTICIPANTS, HOT_W_REACTIONS = 1.0, 3.0, 0.5
+
+
+@mcp.tool()
+def get_hot_threads(guild_id: str = "", since: str = "", until: str = "", forum_id: str = "", limit: int = 10) -> dict:
+    """Hottest forum posts CREATED within [since, until] (ISO dates; default last 7 days).
+    score = replies*1 + unique_participants*3 + reactions*0.5, where replies = messages-1,
+    unique_participants = distinct authors, reactions = all reactions on all messages of the thread.
+    Scored over the top 300 created-in-range threads by replies."""
+    gid, main_p, summ_p = _gid(guild_id)
+    if not since:
+        since = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%Y-%m-%d")
+    lo, hi = _snow_from(since), _snow_from(until, end=True) if until else None
+    lim = max(1, min(50, int(limit or 10)))
+    with _db(main_p) as main:
+        where, args = ["CAST(t.thread_id AS INTEGER)>=?"], [lo]
+        if hi:
+            where.append("CAST(t.thread_id AS INTEGER)<?"); args.append(hi)
+        if forum_id:
+            where.append("t.category_id=?"); args.append(_uid(forum_id))
+        rows = main.execute(f"SELECT t.* FROM threads t WHERE {' AND '.join(where)}", args).fetchall()
+        tmap = {str(r["thread_id"]): r for r in rows}
+        with _db(summ_p) as summ:
+            st = _thread_stats_map(summ, list(tmap))
+        cand = sorted(tmap, key=lambda x: -(st[x]["msg_count"] if x in st else 0))[:300]
+        scored = []
+        for x in cand:
+            replies = max(0, (st[x]["msg_count"] if x in st else 0) - 1)
+            parts = _participants(main, x)
+            reacts = _thread_reactions(main, summ_p, x)
+            score = replies * HOT_W_REPLIES + parts * HOT_W_PARTICIPANTS + reacts * HOT_W_REACTIONS
+            scored.append((score, x, replies, parts, reacts))
+        scored.sort(reverse=True)
+        top = scored[:lim]
+        meta = _thread_meta_map(main, [x for _, x, *_ in top])
+        names = _names(main, [(meta.get(x) or {}).get("owner_id") or (st[x]["op_author"] if x in st else None) for _, x, *_ in top])
+        items = []
+        for score, x, replies, parts, reacts in top:
+            c = _thread_card(x, tmap[x], st.get(x), meta.get(x), names)
+            c.update({"score": round(score, 1), "participants": parts, "reactions": reacts})
+            items.append(c)
+    return {"since": since, "until": until or None, "threads_created_in_range": len(tmap),
+            "formula": "score = replies*1 + unique_participants*3 + reactions*0.5", "items": items}
+
 # ---------------------------------------------------------------- auth + app
 def _tokens():
     return [t.strip() for t in os.getenv("MCP_API_TOKENS", "").split(",") if t.strip()]

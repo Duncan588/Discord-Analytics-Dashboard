@@ -10,6 +10,7 @@ import os
 import sqlite3
 import subprocess
 import sys
+import json
 import threading
 import time
 
@@ -115,6 +116,47 @@ class GatewayIngest:
         if await self._call(gid, fn):
             self.stats["messages"] += 1
             log.info("网关写入消息 guild=%s thread=%s msg=%s", gid, tid, message.id)
+
+    # ---------------------------------------------------------- forum posts (thread metadata)
+    def _thread_meta(self, th):
+        tags = [t.name for t in (getattr(th, "applied_tags", None) or [])]
+        created = getattr(th, "created_at", None)
+        return (th.id, th.parent_id, getattr(th, "owner_id", None),
+                ingest_db.iso_ms(created) if created else None,
+                json.dumps(tags, ensure_ascii=False), getattr(th, "archived", False), getattr(th, "locked", False))
+
+    async def on_thread_upsert(self, thread):
+        """THREAD_CREATE / THREAD_UPDATE: owner, created_at, tags, title rename, archived/locked."""
+        if thread.guild is None or not self.tracked(thread.guild.id, thread.parent_id):
+            return
+        meta = self._thread_meta(thread)
+        gid, name = thread.guild.id, getattr(thread, "name", "")
+        parent = getattr(thread, "parent", None)
+        ftags = [(t.id, t.name, str(t.emoji) if t.emoji else "") for t in (getattr(parent, "available_tags", None) or [])]
+
+        def fn(conn):
+            ingest_db.upsert_thread_meta(conn, *meta)
+            if ftags:
+                ingest_db.upsert_forum_tags(conn, thread.parent_id, ftags)
+            if name:
+                conn.execute("UPDATE threads SET name=? WHERE thread_id=?", (name, str(thread.id)))
+        await self._call(gid, fn)
+
+    async def on_raw_thread_delete(self, payload):
+        gid = getattr(payload, "guild_id", None)
+        if gid is None or not self.tracked(gid, getattr(payload, "parent_id", None)):
+            return
+        await self._call(gid, lambda conn: ingest_db.mark_thread_deleted(conn, payload.thread_id))
+
+    async def sync_active_threads(self, bot):
+        """On ready: record metadata of all cached (active) threads in tracked forums."""
+        n = 0
+        for g in bot.guilds:
+            for th in list(getattr(g, "threads", []) or []):
+                if self.tracked(g.id, th.parent_id):
+                    await self.on_thread_upsert(th)
+                    n += 1
+        return n
 
     def _guild_thread(self, payload, bot):
         gid = getattr(payload, "guild_id", None)
