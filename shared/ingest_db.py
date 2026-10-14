@@ -40,6 +40,9 @@ CREATE TABLE IF NOT EXISTS messages(message_id TEXT PRIMARY KEY,thread_id TEXT,a
 CREATE TABLE IF NOT EXISTS reactions(id INTEGER PRIMARY KEY AUTOINCREMENT,message_id TEXT,user_id TEXT,emoji_name TEXT,emoji_url TEXT);
 CREATE TABLE IF NOT EXISTS attachments(id INTEGER PRIMARY KEY AUTOINCREMENT,message_id TEXT,url TEXT,filename TEXT,size_bytes INTEGER);
 CREATE TABLE IF NOT EXISTS mentions(id INTEGER PRIMARY KEY AUTOINCREMENT,message_id TEXT,mentioned_user_id TEXT,author_id TEXT);
+CREATE TABLE IF NOT EXISTS thread_meta(thread_id TEXT PRIMARY KEY,parent_id TEXT,owner_id TEXT,created_at TEXT,
+  tags TEXT,archived INTEGER,locked INTEGER,deleted_at TEXT,updated_at TEXT);
+CREATE TABLE IF NOT EXISTS forum_tags(tag_id TEXT PRIMARY KEY,forum_id TEXT,name TEXT,emoji TEXT,updated_at TEXT);
 """
 
 _READY = set()
@@ -149,6 +152,31 @@ def touch_thread(conn, thread_id, guild_id, parent_id, name, last_active_at):
         "UPDATE threads SET name=COALESCE(NULLIF(?,''),name), "
         "last_active_at=CASE WHEN last_active_at IS NULL OR ?>last_active_at THEN ? ELSE last_active_at END WHERE thread_id=?",
         (name or "", last_active_at, last_active_at, str(thread_id)))
+
+
+def upsert_thread_meta(conn, thread_id, parent_id, owner_id, created_at, tags, archived, locked):
+    """Forum post metadata from THREAD_CREATE/UPDATE (owner, created_at, applied tag names JSON, flags)."""
+    conn.execute(
+        "INSERT INTO thread_meta(thread_id,parent_id,owner_id,created_at,tags,archived,locked,updated_at) VALUES(?,?,?,?,?,?,?,?) "
+        "ON CONFLICT(thread_id) DO UPDATE SET parent_id=excluded.parent_id,owner_id=COALESCE(excluded.owner_id,owner_id),"
+        "created_at=COALESCE(excluded.created_at,created_at),tags=excluded.tags,archived=excluded.archived,"
+        "locked=excluded.locked,deleted_at=NULL,updated_at=excluded.updated_at",
+        (str(thread_id), str(parent_id or ""), str(owner_id) if owner_id else None, created_at, tags,
+         int(bool(archived)), int(bool(locked)), _now()))
+
+
+def mark_thread_deleted(conn, thread_id):
+    conn.execute("INSERT INTO thread_meta(thread_id,deleted_at,updated_at) VALUES(?,?,?) "
+                 "ON CONFLICT(thread_id) DO UPDATE SET deleted_at=excluded.deleted_at,updated_at=excluded.updated_at",
+                 (str(thread_id), _now(), _now()))
+
+
+def upsert_forum_tags(conn, forum_id, tags):
+    for tid, name, emoji in tags:
+        conn.execute("INSERT INTO forum_tags(tag_id,forum_id,name,emoji,updated_at) VALUES(?,?,?,?,?) "
+                     "ON CONFLICT(tag_id) DO UPDATE SET forum_id=excluded.forum_id,name=excluded.name,"
+                     "emoji=excluded.emoji,updated_at=excluded.updated_at",
+                     (str(tid), str(forum_id), name or "", emoji or "", _now()))
 
 
 def insert_message(conn, msg):
