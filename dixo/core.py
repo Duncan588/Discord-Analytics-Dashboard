@@ -92,7 +92,7 @@ from dixo import i18n as dixo_i18n
 
 from types import SimpleNamespace
 
-from dixo.api import create_ai_api, create_dashboard_api
+from dixo.api import create_ai_api, create_dashboard_api, create_sentiment_api
 
 from dixo.engines import ProfileEngine as DixoProfileEngine, SummaryEngine
 
@@ -305,7 +305,9 @@ def log_request_start():
 
 # Activity 登录握手由 Discord 客户端跨站发起，没有页面上下文可携带 CSRF Token；
 # 这些接口不修改已登录用户的数据，因此单独豁免。
-CSRF_EXEMPT_ENDPOINTS = {"activity.activity_token", "activity.activity_log"}
+CSRF_EXEMPT_ENDPOINTS = {"activity.activity_token", "activity.activity_log",
+                         # Bearer-token machine API (no cookie session); writes only sentiment.db.
+                         "sentiment_api_v1.scores"}
 
 def request_page(default=1):
     """读取分页参数；非法输入回退到首页而不是 500。"""
@@ -1646,6 +1648,7 @@ _api_ctx = SimpleNamespace(
 app.register_blueprint(create_dashboard_api(_api_ctx))
 
 app.register_blueprint(create_ai_api(_api_ctx))
+app.register_blueprint(create_sentiment_api(_api_ctx))
 
 if cloud_enabled():
     app.logger.warning(

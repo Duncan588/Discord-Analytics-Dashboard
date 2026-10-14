@@ -8,11 +8,12 @@ import hmac
 import os
 import threading
 import time
+from datetime import date, timedelta
 from collections import defaultdict, deque
 
 from flask import Blueprint, abort, jsonify, request, send_file
 
-from . import dashboard_data, search as dsearch
+from . import dashboard_data, search as dsearch, sentiment as dsent
 
 
 def _etag_response(payload, etag):
@@ -129,6 +130,22 @@ def create_dashboard_api(ctx):
             return data
 
         return _with(build)
+
+    @bp.route("/sentiment")
+    @ctx.server_required
+    def sentiment_series():
+        """Daily sentiment share + mean for the guild, or for ?user=<id> (incl. merged alts). Aggregates only."""
+        sid = ctx.current_server_id()
+        c = dsent.connect(dsent.path_for(ctx.server_db_path(sid)), readonly=True)
+        if c is None:
+            return jsonify(ok=True, data={"ready": False, "daily": []})
+        try:
+            uid = (request.args.get("user") or "").strip()
+            ids = ctx.merged_ids(sid, uid) if uid.isdigit() else None
+            st = dsent.status(c)
+            return jsonify(ok=True, data={"ready": st["ready"], "model": st.get("model"), "daily": dsent.series(c, ids) if st["ready"] else []})
+        finally:
+            c.close()
 
     @bp.route("/status")
     @ctx.server_required
@@ -275,5 +292,111 @@ def create_ai_api(ctx):
         if not os.path.isfile(path):
             return jsonify(ok=False, error="not exported yet; run python -m dixo.export_md"), 404
         return send_file(path, mimetype="text/markdown; charset=utf-8")
+
+    return bp
+
+
+def create_sentiment_api(ctx):
+    """Scorer bridge for the off-box sentiment worker (Bearer SENTIMENT_API_TOKENS; empty = disabled -> 404).
+    GET  /api/sentiment/v1/guilds/<gid>/pending?after_id=&limit=  new non-bot messages with id > after_id (default: max scored id)
+    POST /api/sentiment/v1/guilds/<gid>/scores  {"scores":[{"id","label":"neg|neu|pos","p_neg","p_pos"}], "cursor": "<last id seen>"}
+    Writes only sentiment.db, never the main DB."""
+    bp = Blueprint("sentiment_api_v1", __name__, url_prefix="/api/sentiment/v1")
+    limiter = _RateLimiter(60)
+
+    @bp.before_request
+    def _auth():
+        valid = [t.strip() for t in os.getenv("SENTIMENT_API_TOKENS", "").split(",") if t.strip()]
+        if not valid:
+            abort(404)
+        auth = request.headers.get("Authorization", "")
+        supplied = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+        if not supplied or not any(hmac.compare_digest(supplied, t) for t in valid):
+            return jsonify(ok=False, error="unauthorized"), 401
+        if not limiter.allow(supplied[:8]):
+            return jsonify(ok=False, error="rate limited"), 429
+        return None
+
+    def _paths(gid):
+        gid = str(gid)
+        if not gid.isdigit() or not ctx.server_db_exists(gid):
+            abort(404)
+        main = ctx.server_db_path(gid)
+        return main, dsent.path_for(main)
+
+    @bp.route("/guilds/<gid>/state")
+    def state(gid):
+        _, sp = _paths(gid)
+        c = dsent.connect(sp, readonly=True)
+        try:
+            return jsonify(ok=True, data=dsent.status(c))
+        finally:
+            if c:
+                c.close()
+
+    @bp.route("/guilds/<gid>/pending")
+    def pending(gid):
+        mp, sp = _paths(gid)
+        limit = max(1, min(2000, request.args.get("limit", 500, type=int)))
+        after = request.args.get("after_id", "")
+        if not after.isdigit():
+            c = dsent.connect(sp, readonly=True)
+            after = (dsent.meta(c, "max_id") if c else None) or ""
+            if c:
+                c.close()
+        if not after.isdigit():
+            return jsonify(ok=False, error="no baseline yet: import historical scores first or pass after_id"), 409
+        day0 = (date.fromisoformat(dsent.snowflake_day(after)) - timedelta(days=1)).isoformat()
+        main = ctx.connect(mp)
+        try:
+            rows = main.execute(
+                "SELECT m.message_id,m.author_id,m.content,m.timestamp FROM messages m LEFT JOIN users u ON u.user_id=m.author_id "
+                "WHERE substr(m.timestamp,1,10)>=? AND CAST(m.message_id AS INTEGER)>? AND COALESCE(u.is_bot,0)=0 "
+                "ORDER BY CAST(m.message_id AS INTEGER) LIMIT ?", (day0, int(after), limit)).fetchall()
+        finally:
+            main.close()
+        items = []
+        for r in rows:
+            t = dsent.clean_text(r["content"])
+            items.append({"id": str(r["message_id"]), "text": t})  # text None = skip (NA), still advances cursor
+        return jsonify(ok=True, data={"after_id": after, "items": items,
+                                      "cursor": items[-1]["id"] if items else after, "more": len(items) == limit})
+
+    @bp.route("/guilds/<gid>/scores", methods=["POST"])
+    def scores(gid):
+        mp, sp = _paths(gid)
+        body = request.get_json(silent=True) or {}
+        sc = body.get("scores") or []
+        if len(sc) > 5000:
+            return jsonify(ok=False, error="too many"), 413
+        ids = [str(x.get("id", "")) for x in sc]
+        if not all(i.isdigit() for i in ids):
+            return jsonify(ok=False, error="bad id"), 400
+        main = ctx.connect(mp)
+        try:
+            meta = {}
+            for i in range(0, len(ids), 500):
+                ch = ids[i:i + 500]
+                ph = ",".join("?" for _ in ch)
+                for r in main.execute(f"SELECT message_id,author_id,timestamp FROM messages WHERE message_id IN ({ph})", ch):
+                    meta[str(r[0])] = (str(r[1]), (r[2] or "")[:10] or dsent.snowflake_day(r[0]))
+        finally:
+            main.close()
+        rows = []
+        for x in sc:
+            i = str(x["id"])
+            if i not in meta or str(x.get("label")) not in dsent.LABELS:
+                continue
+            rows.append((i, meta[i][0], meta[i][1], dsent.LABELS[str(x["label"])], float(x.get("p_neg") or 0), float(x.get("p_pos") or 0)))
+        c = dsent.connect(sp)
+        try:
+            n = dsent.insert_scores(c, rows)
+            cur = str(body.get("cursor") or "")
+            if cur.isdigit():
+                dsent._bump_max(c, [cur])
+            c.commit()
+            return jsonify(ok=True, inserted=n, max_id=dsent.meta(c, "max_id"))
+        finally:
+            c.close()
 
     return bp

@@ -774,6 +774,43 @@ def get_hot_threads(guild_id: str = "", since: str = "", until: str = "", forum_
     return {"since": since, "until": until or None, "threads_created_in_range": len(tmap),
             "formula": "score = replies*1 + unique_participants*3 + reactions*0.5", "items": items}
 
+@mcp.tool()
+def get_sentiment(guild_id: str = "", user_id: str = "", since: str = "", until: str = "", granularity: str = "day") -> dict:
+    """Message sentiment over time for a guild, or one member (incl. merged alt accounts).
+    since/until: ISO dates (default: last 90 days). granularity: day | week | month.
+    Each bucket: pos/neu/neg counts, their % share, and mean = average(p_pos - p_neg) in [-1, 1].
+    Model cardiffnlp/twitter-xlm-roberta-base-sentiment; bot/empty/link-only messages are not scored.
+    Returns ready=false until the historical import has run."""
+    from dixo import sentiment as dsent
+    gid, main_p, _ = _gid(guild_id)
+    gran = granularity if granularity in ("day", "week", "month") else "day"
+    if not since:
+        since = (datetime.now(timezone.utc) - timedelta(days=90)).strftime("%Y-%m-%d")
+    for d in (since, until):
+        if d and not re.match(r"^\d{4}-\d{2}-\d{2}$", d):
+            raise ValueError("dates must be YYYY-MM-DD")
+    sp = dsent.path_for(main_p)
+    if not os.path.exists(sp):
+        return {"ready": False, "items": []}
+    ids = None
+    if user_id:
+        uid = _uid(user_id)
+        with _db(main_p) as main:
+            ids = _merged_ids(main, uid)
+    with _db(sp) as c:
+        st = dsent.status(c)
+        items = dsent.series(c, ids, since, until or None, gran) if st["ready"] else []
+    if len(items) > MAX_ROWS:
+        items = items[-MAX_ROWS:]
+    tot = [sum(x[k] for x in items) for k in ("pos", "neu", "neg")]
+    n = sum(tot)
+    overall = {"n": n, "pos_pct": round(100 * tot[0] / n, 1) if n else None, "neu_pct": round(100 * tot[1] / n, 1) if n else None,
+               "neg_pct": round(100 * tot[2] / n, 1) if n else None,
+               "mean": round(sum(x["mean"] * x["n"] for x in items) / n, 4) if n else None}
+    return {"ready": st["ready"], "guild_id": gid, "user_id": user_id or None, "since": since, "until": until or None,
+            "granularity": gran, "model": st.get("model"), "scored_through": st.get("last_day"),
+            "overall": overall, "items": [{k: v for k, v in x.items()} for x in items]}
+
 # ---------------------------------------------------------------- auth + app
 def _tokens():
     return [t.strip() for t in os.getenv("MCP_API_TOKENS", "").split(",") if t.strip()]
