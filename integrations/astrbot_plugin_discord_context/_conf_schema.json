@@ -1,0 +1,23 @@
+{
+  "enable": {"description": "启用", "type": "bool", "default": true},
+  "mcp_url": {"description": "MCP 地址", "type": "string", "default": "https://discordanalytics.monster6324.me/mcp"},
+  "mcp_token": {"description": "MCP Bearer Token", "type": "string", "default": "", "hint": "生产 .env 的 MCP_API_TOKENS 之一，不要写进代码仓库"},
+  "guild_id": {"description": "默认服务器 ID", "type": "string", "default": "915249444721668096"},
+  "timeout_sec": {"description": "MCP 超时(秒)", "type": "float", "default": 6.0},
+  "thread_last_n": {"description": "帖子内最近消息条数", "type": "int", "default": 20},
+  "channel_last_n": {"description": "普通频道最近消息条数(Discord API)", "type": "int", "default": 15},
+  "max_chars": {"description": "注入内容字数上限", "type": "int", "default": 3500, "hint": "粗略控制 token 预算，中文约 1 字≈1 token"},
+  "starter_max_chars": {"description": "楼主正文字数上限", "type": "int", "default": 1200},
+  "msg_max_chars": {"description": "单条消息字数上限", "type": "int", "default": 200},
+  "include_user_profile": {"description": "附带提问者画像", "type": "bool", "default": true},
+  "include_participants": {"description": "附带活跃参与者", "type": "int", "default": 5, "hint": "0 为不附带"},
+  "fallback_discord_api": {"description": "MCP 失败时回退 Discord API", "type": "bool", "default": true},
+  "cache_ttl_sec": {"description": "上下文缓存秒数", "type": "int", "default": 20},
+  "proactive_enable": {"description": "主动模式(新帖自动回复)", "type": "bool", "default": false, "hint": "开启后，在指定论坛出现新帖时 Bot 会主动回一条"},
+  "proactive_forum_ids": {"description": "主动模式论坛 ID 列表", "type": "list", "default": [], "hint": "留空=所有论坛"},
+  "proactive_probability": {"description": "主动回复概率(0-1)", "type": "float", "default": 0.2},
+  "proactive_cooldown_sec": {"description": "主动回复全局冷却(秒)", "type": "int", "default": 600},
+  "proactive_min_chars": {"description": "新帖正文最少字数", "type": "int", "default": 15},
+  "proactive_prompt": {"description": "主动回复指令", "type": "text", "default": "有人在论坛发了新帖。请结合帖子内容，用简短自然、像群友一样的语气回复一句（不超过60字），不要自我介绍，不要说你是AI。"},
+  "debug_log": {"description": "日志打印注入内容", "type": "bool", "default": false}
+}
