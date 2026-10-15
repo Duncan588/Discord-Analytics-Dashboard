@@ -27,16 +27,29 @@ add('overview',"社区数据：\n"+json.dumps(comm,ensure_ascii=False)+"\n圈子
 add('persona',"以下是社区高赞发言样本（已过滤）：\n"+"\n".join(f"- {c['text']}" for c in corp[:150])+"\n社区流行词："+'、'.join(t['term'] for t in mm['terms'][:50])+
  "\n\n为这个社区的 AstrBot 聊天机器人写一份中文 system prompt（人格设定）：身份、说话风格（短句、接梗、适度调侃）、可以使用的社区梗与用法、禁区（色情、人身攻击、政治、隐私、引战）、遇到求助/严肃话题时如何切换语气、回复长度规范、示例对话 3 组。直接输出 prompt 正文。",1500)
 print('jobs',len(jobs),flush=True)
+P='/content/llm_partial.jsonl'
 from vllm import LLM,SamplingParams
 used=os.environ.get('MODEL','Qwen/Qwen2.5-7B-Instruct-AWQ')
 llm=LLM(model=used,quantization='awq',dtype='half',max_model_len=12288,gpu_memory_utilization=0.92)
-tok=llm.get_tokenizer(); out=json.load(open('/content/llm_out.json'))['out'] if os.path.exists('/content/llm_out.json') else {}
-jobs=[j for j in jobs if j[0] not in out]+[]; NJ=len(jobs)+len(out)
-for i in range(0,len(jobs),100):
-    ch=jobs[i:i+100]
+tok=llm.get_tokenizer(); out={}
+if os.path.exists(P):
+    for l in open(P,encoding='utf-8',errors='ignore'):
+        try: d=json.loads(l); out[d['k']]=d['v']
+        except Exception: pass
+NJ=len(jobs); jobs=[j for j in jobs if j[0] not in out]; print('resume',len(out),'remain',len(jobs),flush=True)
+for i in range(0,len(jobs),25):
+    ch=jobs[i:i+25]
     ps=[tok.apply_chat_template([{'role':'system','content':SYS},{'role':'user','content':p}],tokenize=False,add_generation_prompt=True) for _,p,_ in ch]
-    os_=llm.generate(ps,[SamplingParams(temperature=0.5,top_p=0.9,max_tokens=mt,repetition_penalty=1.05) for _,_,mt in ch],use_tqdm=False)
-    out.update({k:o.outputs[0].text for (k,_,_),o in zip(ch,os_)})
-    json.dump({'model':used,'secs':round(time.time()-T0),'out':out},open('/content/llm_out.json','w'),ensure_ascii=False)
+    rs=llm.generate(ps,[SamplingParams(temperature=0.5,top_p=0.9,max_tokens=mt,repetition_penalty=1.05) for _,_,mt in ch],use_tqdm=False)
+    with open(P,'a',encoding='utf-8') as f:
+        for (k,_,_),o in zip(ch,rs):
+            out[k]=o.outputs[0].text
+            f.write(json.dumps({'k':k,'v':out[k]},ensure_ascii=False)+'\n')
+            f.flush()
+    open('/content/llm_progress.txt','w').write(f'{len(out)}/{NJ}\n')
+    # also dump full out periodically for Drive sync
+    if len(out)%100<25:
+        json.dump({'model':used,'secs':round(time.time()-T0),'out':out},open('/content/llm_out.json','w',encoding='utf-8'),ensure_ascii=False)
     print('done',len(out),'/',NJ,flush=True)
+json.dump({'model':used,'secs':round(time.time()-T0),'out':out},open('/content/llm_out.json','w',encoding='utf-8'),ensure_ascii=False)
 print('DONE',flush=True)
