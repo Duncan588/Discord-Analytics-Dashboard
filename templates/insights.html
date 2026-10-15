@@ -20,18 +20,18 @@
 </section>
 <section data-pane="network" hidden>
   <div class="card"><div class="card-head"><h2 class="h-card">{{ t("ins.network") }}</h2><span class="faint" id="insNetInfo"></span></div>
-  <div class="ins-net-bar"><div class="ins-net-s"><input id="insNetQ" class="input" placeholder="搜索成员…" autocomplete="off"><ul id="insNetRes" class="ins-pop" hidden></ul></div>
+  <div class="ins-net-bar"><div class="ins-net-s"><input id="insNetQ" type="search" class="field ins-search" placeholder="搜索成员…" autocomplete="off"><ul id="insNetRes" class="ins-pop" hidden></ul></div>
   <button type="button" class="btn btn-ghost" id="insNetMe" hidden>找我</button><button type="button" class="btn btn-ghost" id="insNetFit">全览</button></div>
   <div class="ins-net" data-me="{{ current_user.id if current_user else '' }}"><canvas id="insNet"></canvas><div id="insNetTip" class="ins-tip" hidden></div><aside id="insNetSide" class="ins-side" hidden></aside></div>
   <p class="faint" style="margin-top:6px;font-size:12px">气泡大小 = 互动量，颜色 = 圈子，连线 = 回复/@。拖动平移、滚轮或双指缩放，点击气泡查看关系。</p></div>
   <div id="insCircles" class="ins-grid" style="margin-top:var(--space-4)"></div>
 </section>
 <section data-pane="memes" hidden>
-  <div class="card"><div class="card-head"><h2 class="h-card">{{ t("ins.memes") }}</h2><input id="insMemeQ" class="input" placeholder="{{ t('ins.search') }}" style="max-width:220px"></div>
+  <div class="card"><div class="card-head"><h2 class="h-card">{{ t("ins.memes") }}</h2><input id="insMemeQ" type="search" class="field ins-search" placeholder="{{ t('ins.search') }}" style="max-width:220px"></div>
   <div id="insMemes"></div></div>
 </section>
 <section data-pane="months" hidden>
-  <div class="card"><div class="card-head"><h2 class="h-card">{{ t("ins.months") }}</h2><select id="insMonthSel" class="input" style="max-width:160px"></select></div><div id="insMonth"></div></div>
+  <div class="card"><div class="card-head"><h2 class="h-card">{{ t("ins.months") }}</h2><select id="insMonthSel" class="field ins-select" style="max-width:160px"></select></div><div id="insMonth"></div></div>
   <div class="card" style="margin-top:var(--space-4)"><h2 class="h-card">{{ t("ins.overview") }}</h2><div id="insOverview" class="md"></div></div>
 </section>
 {% endif %}
@@ -53,5 +53,23 @@
 .ins-x{position:absolute;top:8px;right:10px;border:0;background:none;font-size:22px;color:var(--muted);cursor:pointer}.ins-prof{font-size:13px}
 .ins-spark{display:block;width:100%;max-width:260px;height:34px;margin:6px 0}.ins-q{margin:4px 0;padding:6px 10px;border-left:3px solid var(--chip);font-size:13px;color:var(--ink-2)}
 @media (max-width:640px){.ins-net{height:72vh}.ins-side{top:auto;left:8px;right:8px;width:auto;max-height:46%}}
+/* fields per DESIGN.md: pill search with glyph, native-looking select with chevron, focus ring */
+.ins-search{height:36px;border-radius:var(--radius-pill);padding:0 14px 0 34px;font:400 14px var(--font-text);background:var(--white) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' fill='none' stroke='%2386868b' stroke-width='2'%3E%3Ccircle cx='6' cy='6' r='4.5'/%3E%3Cpath d='M9.5 9.5L13 13'/%3E%3C/svg%3E") no-repeat 13px center;-webkit-appearance:none;appearance:none}
+.ins-search::-webkit-search-cancel-button{-webkit-appearance:none}
+.ins-select{height:36px;border-radius:var(--radius-sm);padding:0 32px 0 12px;font:500 14px var(--font-text);-webkit-appearance:none;appearance:none;cursor:pointer;background:var(--white) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none' stroke='%2386868b' stroke-width='1.6'%3E%3Cpath d='M1 1l4 4 4-4'/%3E%3C/svg%3E") no-repeat right 12px center}
+.ins-search:focus,.ins-select:focus{outline:none;border-color:var(--color-focus);box-shadow:0 0 0 3px rgba(0,113,227,.2)}
+#insMemeQ{max-width:240px}
+.ins-net-bar .btn{height:36px}
+/* dark mode: site theme variables */
+html[data-theme="dark"] .ins-search,html[data-theme="dark"] .ins-select{background-color:#2c2c2e;border-color:var(--chip);color:var(--ink)}
+html[data-theme="dark"] .ins-search:focus,html[data-theme="dark"] .ins-select:focus{box-shadow:0 0 0 3px rgba(64,156,255,.3)}
+html[data-theme="dark"] .ins-pop{background:#2c2c2e;box-shadow:0 8px 28px rgba(0,0,0,.6)}
+html[data-theme="dark"] .ins-pop li:hover,html[data-theme="dark"] .ins-side li:hover{background:rgba(255,255,255,.08)}
+html[data-theme="dark"] .ins-side{background:rgba(28,28,30,.94);color:var(--ink);box-shadow:0 8px 30px rgba(0,0,0,.6);border:1px solid var(--hairline)}
+html[data-theme="dark"] .ins-tip{background:rgba(44,44,46,.96);color:var(--ink);box-shadow:0 4px 16px rgba(0,0,0,.5)}
+html[data-theme="dark"] .ins-net{background:#0d0d0f;border-color:var(--hairline)}
+html[data-theme="dark"] .ins-tile{background:rgba(255,255,255,.06)}
+html[data-theme="dark"] .ins-meme{border-bottom-color:var(--hairline)}
+html[data-theme="dark"] .ins-q{border-left-color:var(--chip);color:var(--ink-2)}
 </style>
 {% endblock %}

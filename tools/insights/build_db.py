@@ -49,7 +49,8 @@ dos=0
 for d in L('dossier_inputs.json'):
     md=(out.get(f"dossier:{d['user_id']}") or '').strip()
     if md: c.execute('INSERT INTO dossiers VALUES(?,?,?)',(d['user_id'],d['name'],md)); dos+=1
-c.executemany('INSERT INTO docs VALUES(?,?)',[('overview',(out.get('overview') or '').strip()),('persona_draft',(out.get('persona') or '').strip())])
+from dixo.insights import fix_doc, meme_terms  # replace LLM meme sections with the curated glossary
+c.executemany('INSERT INTO docs VALUES(?,?)',[(k,fix_doc(k,(out.get(o) or '').strip(),meme_terms(c))) for k,o in (('overview','overview'),('persona_draft','persona'))])
 c.executemany('INSERT INTO corpus VALUES(?,?,?,?,?)',[(x['id'],x['text'],x['reacts'],x['thread'],x['day']) for x in L('corpus.json')])
 meta={'built_at':datetime.datetime.now().strftime('%Y-%m-%d %H:%M'),'model':llm.get('model',''),'llm_secs':str(llm.get('secs','')),
       'data_through':L('community.json')['last'],'topics':str(tp.topic.nunique()),'circles':str(len(net['circles'])),'memes':str(kept),'dossiers':str(dos)}

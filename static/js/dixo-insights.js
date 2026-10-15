@@ -117,20 +117,20 @@
     g.edges.forEach(function (e) { var a = byId[e[0]], b = byId[e[1]]; if (!a || !b) return; links.push({ source: a, target: b, w: e[2] });
       adj[a.id].push([b, e[2]]); adj[b.id].push([a, e[2]]); if (e[2] > lmax) lmax = e[2]; });
     Object.keys(adj).forEach(function (k) { adj[k].sort(function (x, y) { return y[1] - x[1]; }); });
-    var sel = null, hov = null, nb = {};
+    var sel = null, hov = null, nb = {}, dark = function () { return document.documentElement.getAttribute('data-theme') === 'dark'; };
     function size() { W = wrap.clientWidth; H = cv.clientHeight; cv.width = W * dpr; cv.height = H * dpr; draw(); }
     function draw() {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, H);
       ctx.translate(W / 2 + T.x, H / 2 + T.y); ctx.scale(T.k, T.k);
       links.forEach(function (l) { var on = sel && (l.source === sel || l.target === sel);
         if (sel && !on) return; var a = Math.log1p(l.w) / Math.log1p(lmax);
-        ctx.strokeStyle = on ? 'rgba(0,102,204,' + (0.25 + 0.6 * a) + ')' : 'rgba(110,110,115,' + (0.03 + 0.12 * a) + ')';
+        ctx.strokeStyle = on ? (dark() ? 'rgba(64,156,255,' : 'rgba(0,102,204,') + (0.25 + 0.6 * a) + ')' : (dark() ? 'rgba(200,200,210,' : 'rgba(110,110,115,') + (0.03 + 0.12 * a) + ')';
         ctx.lineWidth = (on ? 0.8 + 3 * a : 0.4 + a) / T.k; ctx.beginPath(); ctx.moveTo(l.source.x, l.source.y); ctx.lineTo(l.target.x, l.target.y); ctx.stroke(); });
       g.nodes.forEach(function (n) { var dim = sel && n !== sel && !nb[n.id], c = col(n);
         ctx.globalAlpha = dim ? 0.12 : 1; ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, 6.2832);
-        ctx.fillStyle = c + '38'; ctx.fill(); ctx.lineWidth = (n === sel || n === hov ? 3 : 1.4) / T.k; ctx.strokeStyle = n === sel ? '#1d1d1f' : c; ctx.stroke();
+        ctx.fillStyle = c + (dark() ? '55' : '38'); ctx.fill(); ctx.lineWidth = (n === sel || n === hov ? 3 : 1.4) / T.k; ctx.strokeStyle = n === sel ? (dark() ? '#f5f5f7' : '#1d1d1f') : c; ctx.stroke();
         if (n.r * T.k > 16 || n === sel || (sel && nb[n.id] && n.r * T.k > 7)) { var fs = Math.max(10, Math.min(14, n.r * T.k / 3.2)) / T.k;
-          ctx.font = '600 ' + fs + 'px -apple-system,"PingFang SC",sans-serif'; ctx.fillStyle = '#1d1d1f'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+          ctx.font = '600 ' + fs + 'px -apple-system,"PingFang SC",sans-serif'; ctx.fillStyle = dark() ? '#f5f5f7' : '#1d1d1f'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
           var t = n.name.length > 8 ? n.name.slice(0, 7) + '…' : n.name; ctx.fillText(t, n.x, n.y); } });
       ctx.globalAlpha = 1;
     }
@@ -198,6 +198,7 @@
     q.addEventListener('blur', function () { setTimeout(function () { res.hidden = true; }, 150); });
     var me = wrap.getAttribute('data-me'); if (me && byId[me]) { document.getElementById('insNetMe').hidden = false; document.getElementById('insNetMe').onclick = function () { select(byId[me], true); }; }
     window.addEventListener('resize', size); size();
+    new MutationObserver(draw).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     document.getElementById('insNetInfo').textContent = g.nodes.length + ' 人 · ' + links.length + ' 条互动 · ' + d.circles.length + ' 个圈子';
     document.getElementById('insCircles').innerHTML = d.circles.map(function (c, i) {
       return '<div class="ins-tile"><h3><span class="ins-dot" style="background:' + PAL[i % PAL.length] + '"></span>' + esc(c.name) + ' <span class="faint">' + c.size + ' 人</span></h3><p>' + esc(c.desc) + '</p>' +
