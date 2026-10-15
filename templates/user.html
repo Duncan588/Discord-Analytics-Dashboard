@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% import "components/ui.html" as ui %}
 {% block title %}{{ user.nickname or user.username }} · {{ tr("nav.archive") }}{% endblock %}
-{% block head %}<script src="{{ asset('js/dixo-format.js') }}" defer></script><script src="{{ asset('vendor/ui/chart/chart.umd.min.js') }}" defer></script><script src="{{ asset('js/dixo-sentiment.js') }}" defer></script>{% endblock %}
+{% block head %}<script src="{{ asset('js/dixo-format.js') }}" defer></script><script src="{{ asset('vendor/ui/chart/chart.umd.min.js') }}" defer></script><script src="{{ asset('js/dixo-sentiment.js') }}" defer></script><script src="{{ asset('js/dixo-insights.js') }}" defer></script>{% endblock %}
 {% block body_attrs %}x-data="{ chartMode: 'daily', showViews: false }"{% endblock %}
 {% macro tab_url(p, tab=active_tab, sort=current_sort) -%}?tab={{ tab }}&sort={{ sort }}&page={{ p }}#records{%- endmacro %}
 {% block content %}
@@ -85,6 +85,11 @@
   </div>
   <p class="faint" data-sentiment-empty style="font-size:12px;margin:0 0 8px">{{ t("sent.loading") }}</p>
   <div class="chart sm" data-sentiment-wrap style="display:none"><canvas data-sentiment-chart aria-label="sentiment"></canvas></div>
+</section>
+
+<section class="card" style="margin-top:var(--space-4)" data-ins-member="{{ user.user_id }}" data-l-circle="{{ t('ins.circle') }}" data-l-dossier="{{ t('ins.dossier') }}">
+  <div class="card-head"><h2 class="h-card">{{ t("ins.member_title") }}</h2><a href="/insights">{{ t("ins.title") }} ›</a></div>
+  <div data-ins-body><p class="faint">{{ t("sent.loading") }}</p></div>
 </section>
 
 <section class="grid g-3" style="margin-top:var(--space-4)">

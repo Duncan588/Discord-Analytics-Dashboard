@@ -1649,6 +1649,8 @@ app.register_blueprint(create_dashboard_api(_api_ctx))
 
 app.register_blueprint(create_ai_api(_api_ctx))
 app.register_blueprint(create_sentiment_api(_api_ctx))
+from dixo.insights import create_insights
+app.register_blueprint(create_insights(_api_ctx))
 
 if cloud_enabled():
     app.logger.warning(

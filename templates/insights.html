@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}{{ t("ins.title") }} · {{ tr("nav.archive") }}{% endblock %}
+{% block head %}<script src="{{ asset('vendor/ui/chart/chart.umd.min.js') }}" defer></script><script src="{{ asset('js/dixo-insights.js') }}" defer></script>{% endblock %}
+{% block content %}
+<div class="page-head"><div><div class="eyebrow">{{ t("ins.eyebrow") }}</div><h1 class="h-display">{{ t("ins.title") }}</h1>
+<p class="muted" style="margin-top:6px">{% if st.ready %}{{ t("ins.updated") }} {{ st.built_at }} · {{ st.model }}{% else %}{{ t("ins.empty") }}{% endif %}</p></div>
+<a class="btn btn-ghost" href="/">‹ {{ t("nav.home") }}</a></div>
+{% if st.ready %}
+<nav class="seg" id="ins-tabs" style="margin-bottom:var(--space-4)">
+  <button type="button" class="on" data-tab="topics">{{ t("ins.topics") }}</button>
+  <button type="button" data-tab="network">{{ t("ins.network") }}</button>
+  <button type="button" data-tab="memes">{{ t("ins.memes") }}</button>
+  <button type="button" data-tab="months">{{ t("ins.months") }}</button>
+</nav>
+<section data-pane="topics">
+  <div class="card"><div class="card-head"><h2 class="h-card">{{ t("ins.topic_trend") }}</h2></div><div class="chart"><canvas id="insTopicChart"></canvas></div></div>
+  <div class="grid g-2" style="margin-top:var(--space-4)"><div class="card"><h2 class="h-card">{{ t("ins.rising") }}</h2><ol class="list" id="insRising"></ol></div>
+  <div class="card"><h2 class="h-card">{{ t("ins.fading") }}</h2><ol class="list" id="insFading"></ol></div></div>
+  <div class="card" style="margin-top:var(--space-4)"><h2 class="h-card">{{ t("ins.all_topics") }}</h2><div id="insTopicList" class="ins-grid"></div></div>
+</section>
+<section data-pane="network" hidden>
+  <div class="card"><div class="card-head"><h2 class="h-card">{{ t("ins.network") }}</h2><span class="faint" id="insNetInfo"></span></div>
+  <canvas id="insNet" style="width:100%;height:620px;display:block;border-radius:12px;background:rgba(127,127,127,.06)"></canvas>
+  <p class="faint" id="insNetHover" style="min-height:1.5em;margin-top:6px"></p></div>
+  <div id="insCircles" class="ins-grid" style="margin-top:var(--space-4)"></div>
+</section>
+<section data-pane="memes" hidden>
+  <div class="card"><div class="card-head"><h2 class="h-card">{{ t("ins.memes") }}</h2><input id="insMemeQ" class="input" placeholder="{{ t('ins.search') }}" style="max-width:220px"></div>
+  <div id="insMemes"></div></div>
+</section>
+<section data-pane="months" hidden>
+  <div class="card"><div class="card-head"><h2 class="h-card">{{ t("ins.months") }}</h2><select id="insMonthSel" class="input" style="max-width:160px"></select></div><div id="insMonth"></div></div>
+  <div class="card" style="margin-top:var(--space-4)"><h2 class="h-card">{{ t("ins.overview") }}</h2><div id="insOverview" class="md"></div></div>
+</section>
+{% endif %}
+<style>
+.ins-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:var(--space-3)}
+.ins-tile{padding:12px 14px;border-radius:12px;background:rgba(127,127,127,.08)}
+.ins-tile h3{font-size:15px;margin:0 0 4px}.ins-tile p{margin:2px 0;font-size:13px}
+.ins-meme{padding:12px 0;border-bottom:1px solid rgba(127,127,127,.15)}.ins-meme b{font-size:16px}
+.md h3{font-size:15px;margin:14px 0 4px}.md p,.md li{font-size:14px;line-height:1.6}
+.ins-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:middle}
+</style>
+{% endblock %}
