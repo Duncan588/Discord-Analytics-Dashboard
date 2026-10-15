@@ -7,6 +7,7 @@ import gzip
 import hmac
 import json
 import os
+import re
 import sqlite3
 
 
@@ -107,9 +108,37 @@ def member(c, ids, year=None):
     return {"years": yrs, "dossier": dict(d) if d else None, "circle": dict(ci) if ci else None}
 
 
+def meme_terms(c, n=80):
+    """Curated in-jokes (tools/insights/memes.py) as (term, kind), most widespread first."""
+    return [(r[0], r[1]) for r in c.execute("SELECT term,kind FROM memes ORDER BY authors DESC LIMIT ?", (n,))]
+
+
+_OV_HEAD = re.compile(r"(#+\s*社区文化与流行梗[^\n]*\n)(.*?)(?=\n#+\s|\Z)", re.S)
+_PE_HEAD = re.compile(r"(可以使用的社区梗与用法[:：]?[^\n]*\n)(.*?)(?=\n\s*\n|\Z)", re.S)
+
+
+def fix_doc(key, md, terms):
+    """The LLM docs were written from the old token-frequency meme list (emoji codes like 2a/1c, stopwords).
+    Replace their meme section deterministically with the curated glossary. Idempotent; used by build_db and on read."""
+    if not md or not terms:
+        return md
+    words = [t for t, k in terms if k != "phrase"]
+    phrases = [t for t, k in terms if k == "phrase"]
+    if key == "overview":
+        body = ("社区里真正流传的梗（多人、跨多个月反复使用），按传播面排序：\n- " + "、".join(words[:20]) + ("\n- 语录：" + "、".join(phrases[:10]) if phrases else "") +
+                "\n\n完整的起源、首次出处和传播曲线见「群梗词典」。\n")
+        return _OV_HEAD.sub(lambda m: m.group(1) + body, md, count=1)
+    if key == "persona_draft":
+        body = ("- 社区流行语（自然地接梗，别硬塞）：" + "、".join(words[:12]) + "\n"
+                "- 语录式回应：" + "、".join(phrases[:8]) + "\n"
+                "- 不确定某个梗的意思时，先用 search_memes 查起源和用法再用。")
+        return _PE_HEAD.sub(lambda m: m.group(1) + body, md, count=1)
+    return md
+
+
 def doc(c, key):
     r = c.execute("SELECT md FROM docs WHERE key=?", (key,)).fetchone()
-    return r[0] if r else None
+    return fix_doc(key, r[0], meme_terms(c)) if r else None
 
 
 def status(c):
