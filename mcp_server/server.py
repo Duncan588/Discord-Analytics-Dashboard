@@ -847,7 +847,7 @@ def get_circles(guild_id: str = "", user_id: str = "") -> dict:
 @mcp.tool()
 def search_memes(query: str = "", kind: str = "", guild_id: str = "", limit: int = 30) -> dict:
     """Community meme glossary (群梗词典): term, meaning, origin (first use: who/when/which thread), usage, spread
-    (total uses, distinct users, peak month, monthly counts). kind: term | emoji | phrase. Empty query = most widespread."""
+    (total uses, distinct users, peak month, monthly counts). kind: term | phrase. Empty query = most widespread."""
     gid, _, p, dins = _ins(guild_id)
     with _db(p) as c:
         items = dins.memes(c, (query or "")[:40], kind or "", _lim(limit, 30))

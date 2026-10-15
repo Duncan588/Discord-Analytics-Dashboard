@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block title %}{{ t("ins.title") }} · {{ tr("nav.archive") }}{% endblock %}
-{% block head %}<script src="{{ asset('vendor/ui/chart/chart.umd.min.js') }}" defer></script><script src="{{ asset('js/dixo-insights.js') }}" defer></script>{% endblock %}
+{% block head %}<script src="{{ asset('vendor/ui/chart/chart.umd.min.js') }}" defer></script><script src="{{ asset('vendor/ui/d3-force.min.js') }}" defer></script><script src="{{ asset('js/dixo-insights.js') }}" defer></script>{% endblock %}
 {% block content %}
 <div class="page-head"><div><div class="eyebrow">{{ t("ins.eyebrow") }}</div><h1 class="h-display">{{ t("ins.title") }}</h1>
 <p class="muted" style="margin-top:6px">{% if st.ready %}{{ t("ins.updated") }} {{ st.built_at }} · {{ st.model }}{% else %}{{ t("ins.empty") }}{% endif %}</p></div>
@@ -20,8 +20,10 @@
 </section>
 <section data-pane="network" hidden>
   <div class="card"><div class="card-head"><h2 class="h-card">{{ t("ins.network") }}</h2><span class="faint" id="insNetInfo"></span></div>
-  <canvas id="insNet" style="width:100%;height:620px;display:block;border-radius:12px;background:rgba(127,127,127,.06)"></canvas>
-  <p class="faint" id="insNetHover" style="min-height:1.5em;margin-top:6px"></p></div>
+  <div class="ins-net-bar"><div class="ins-net-s"><input id="insNetQ" class="input" placeholder="搜索成员…" autocomplete="off"><ul id="insNetRes" class="ins-pop" hidden></ul></div>
+  <button type="button" class="btn btn-ghost" id="insNetMe" hidden>找我</button><button type="button" class="btn btn-ghost" id="insNetFit">全览</button></div>
+  <div class="ins-net" data-me="{{ current_user.id if current_user else '' }}"><canvas id="insNet"></canvas><div id="insNetTip" class="ins-tip" hidden></div><aside id="insNetSide" class="ins-side" hidden></aside></div>
+  <p class="faint" style="margin-top:6px;font-size:12px">气泡大小 = 互动量，颜色 = 圈子，连线 = 回复/@。拖动平移、滚轮或双指缩放，点击气泡查看关系。</p></div>
   <div id="insCircles" class="ins-grid" style="margin-top:var(--space-4)"></div>
 </section>
 <section data-pane="memes" hidden>
@@ -40,5 +42,16 @@
 .ins-meme{padding:12px 0;border-bottom:1px solid rgba(127,127,127,.15)}.ins-meme b{font-size:16px}
 .md h3{font-size:15px;margin:14px 0 4px}.md p,.md li{font-size:14px;line-height:1.6}
 .ins-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:middle}
+.ins-net-bar{display:flex;gap:8px;margin-bottom:10px;align-items:center}.ins-net-s{position:relative;flex:1;max-width:320px}.ins-net-s .input{width:100%}
+.ins-pop{position:absolute;z-index:5;left:0;right:0;top:100%;margin:4px 0 0;padding:4px;list-style:none;background:#fff;border-radius:12px;box-shadow:0 8px 28px rgba(0,0,0,.14)}
+.ins-pop li,.ins-side li{padding:7px 8px;border-radius:8px;cursor:pointer;font-size:13px;display:flex;align-items:center;gap:4px}.ins-pop li:hover,.ins-side li:hover{background:var(--parchment)}
+.ins-net{position:relative;height:640px;border-radius:18px;background:var(--pearl);border:1px solid var(--hairline);overflow:hidden;touch-action:none}
+.ins-net canvas{width:100%;height:100%;display:block;cursor:grab}
+.ins-tip{position:absolute;pointer-events:none;background:rgba(255,255,255,.96);border-radius:10px;padding:6px 10px;font-size:12px;box-shadow:0 4px 16px rgba(0,0,0,.12);max-width:200px}
+.ins-side{position:absolute;top:10px;right:10px;bottom:10px;width:260px;overflow:auto;background:rgba(255,255,255,.94);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-radius:16px;padding:14px;box-shadow:0 8px 30px rgba(0,0,0,.12)}
+.ins-side h4{font-size:13px;margin:12px 0 4px;color:var(--muted)}.ins-side ol{list-style:none;margin:0;padding:0}.ins-side li .truncate{flex:1}.ins-side-h{font-size:17px;padding-right:24px}
+.ins-x{position:absolute;top:8px;right:10px;border:0;background:none;font-size:22px;color:var(--muted);cursor:pointer}.ins-prof{font-size:13px}
+.ins-spark{display:block;width:100%;max-width:260px;height:34px;margin:6px 0}.ins-q{margin:4px 0;padding:6px 10px;border-left:3px solid var(--chip);font-size:13px;color:var(--ink-2)}
+@media (max-width:640px){.ins-net{height:72vh}.ins-side{top:auto;left:8px;right:8px;width:auto;max-height:46%}}
 </style>
 {% endblock %}

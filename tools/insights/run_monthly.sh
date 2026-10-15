@@ -8,6 +8,7 @@ cd "$W"
 $PY "$D/fetch.py"           # incremental pull (read-only HTTPS export API)
 $PY "$D/tok.py"             # jieba tokens for all messages (~3 min)
 $PY "$D/prep.py"            # network/circles, meme candidates+tracing, yearly/monthly reports, corpus, dossier inputs
+rm -f stage/memes.json.cands; $PY "$D/memes.py" "$ALL" "$EXP/users.csv" "$EXP/threads.csv" stage/memes.json "$D/../../wordcloud_stopwords.txt"  # in-joke discovery, overwrites prep's meme list (~20 min)
 $PY "$D/docs.py"            # thread docs + thread_month for topics
 tar czf stage.tgz stage
 S=ins$(date +%m%d); $C new -s "$S" --gpu T4; trap '$C stop -s "$S" || true' EXIT

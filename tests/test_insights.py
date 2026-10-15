@@ -23,3 +23,12 @@ def test_insights_empty_and_ready(client, demo_db):
         assert client.get("/api/insights/v1/guilds/1/export/users").status_code == 404  # disabled without token
     finally:
         os.remove(p)
+
+
+def test_nan_month_is_valid_json():
+    import sqlite3
+    from dixo import insights as I
+    c = sqlite3.connect(":memory:"); c.row_factory = sqlite3.Row; c.executescript(I.SCHEMA)
+    c.execute("INSERT INTO server_month VALUES('2026-03','{\"sentiment\": {\"mean\": NaN}}','')")
+    import json
+    assert json.loads(json.dumps(I.months(c), allow_nan=False))[0]["data"]["sentiment"]["mean"] is None
