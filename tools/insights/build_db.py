@@ -31,17 +31,20 @@ for ci in net['circles']:
     c.execute('INSERT INTO circles VALUES(?,?,?,?,?,?,?)',(ci['id'],lab.get('name') or f"圈子{ci['id']+1}",lab.get('desc',''),ci['size'],json.dumps(ci['core'],ensure_ascii=False),json.dumps(ci['top_threads'],ensure_ascii=False),json.dumps(ci['words'],ensure_ascii=False)))
     c.executemany('INSERT OR IGNORE INTO member_circle VALUES(?,?)',[(u,ci['id']) for u in ci['members']])
 c.execute("INSERT INTO meta VALUES('network',?)",(json.dumps({'nodes':net['nodes'],'edges':net['edges']},ensure_ascii=False),))
-# memes (LLM decides is_meme)
+# memes: stage/memes.json is pre-curated by tools/insights/memes.py (in-joke discovery); the LLM only vetoes
+# (is_meme false) or adds meaning/origin/usage when it has a label for the term. Emoji codes are never kept.
 mm=L('memes.json'); kept=0
-for t in mm['terms']+mm['emoji']+mm['phrases']:
+for t in mm['terms']+mm['phrases']:
     lab=js(f"meme:{t['kind']}:{t['term']}")
-    if not lab or lab.get('is_meme') is False: continue
+    if lab.get('is_meme') is False: continue
     f=t['first']; kept+=1
     c.execute('INSERT OR REPLACE INTO memes VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(t['term'],t['kind'],lab.get('meaning',''),lab.get('origin',''),lab.get('usage',''),t['total'],t['authors'],
       f['day'],f['author'],f['author_id'],f['thread'],f['thread_id'],f['text'],t['peak_ym'],json.dumps(t['monthly']),json.dumps(t['examples'][:8],ensure_ascii=False)))
 # reports
 c.executemany('INSERT INTO member_year VALUES(?,?,?)',[(x['user_id'],x['year'],json.dumps({k:v for k,v in x.items() if k not in('user_id','year')},ensure_ascii=False)) for x in L('member_year.json')])
 c.executemany('INSERT INTO server_month VALUES(?,?,?)',[(x['ym'],json.dumps(x,ensure_ascii=False),(out.get(f"month:{x['ym']}") or '').strip()) for x in L('server_month.json')])
+# NaN never reaches the web app (see dixo.insights._j); still strip it at the source
+for ym,d in list(c.execute('SELECT ym,data FROM server_month')): c.execute('UPDATE server_month SET data=? WHERE ym=?',(json.dumps(json.loads(d,parse_constant=lambda _:None),ensure_ascii=False),ym))
 dos=0
 for d in L('dossier_inputs.json'):
     md=(out.get(f"dossier:{d['user_id']}") or '').strip()

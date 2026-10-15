@@ -45,7 +45,8 @@ def _rows(c, sql, args=()):
 
 def _j(v):
     try:
-        return json.loads(v) if v else None
+        # NaN/Infinity (e.g. a month with no scored messages) would make jsonify emit invalid JSON and blank the page
+        return json.loads(v, parse_constant=lambda _: None) if v else None
     except ValueError:
         return None
 
