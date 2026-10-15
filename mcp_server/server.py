@@ -811,6 +811,95 @@ def get_sentiment(guild_id: str = "", user_id: str = "", since: str = "", until:
             "granularity": gran, "model": st.get("model"), "scored_through": st.get("last_day"),
             "overall": overall, "items": [{k: v for k, v in x.items()} for x in items]}
 
+def _ins(guild_id):
+    from dixo import insights as dins
+    gid, main_p, _ = _gid(guild_id)
+    p = dins.path_for(main_p)
+    if not os.path.exists(p):
+        raise ValueError("insights not generated yet")
+    return gid, main_p, p, dins
+
+
+@mcp.tool()
+def get_topics(guild_id: str = "", months: int = 24) -> dict:
+    """Topic map: LLM-labelled forum topics (threads clustered by embedding) with thread/message counts,
+    trend (share in last 3 months vs previous 12, relative) and monthly message counts for the last `months` months."""
+    gid, _, p, dins = _ins(guild_id)
+    with _db(p) as c:
+        d = dins.topics(c, max(1, min(120, int(months or 24))))
+    return {"guild_id": gid, **d}
+
+
+@mcp.tool()
+def get_circles(guild_id: str = "", user_id: str = "") -> dict:
+    """Relationship circles (Louvain communities on the reply+mention graph): name, description, size, core members,
+    favourite threads, typical words. With user_id: only that member's circle."""
+    gid, main_p, p, dins = _ins(guild_id)
+    with _db(p) as c:
+        d = dins.network(c)
+        cs = d["circles"]
+        if user_id:
+            r = c.execute("SELECT circle FROM member_circle WHERE user_id=?", (_uid(user_id),)).fetchone()
+            cs = [x for x in cs if r and x["id"] == r[0]]
+    return {"guild_id": gid, "graph_size": {"nodes": len((d["graph"] or {}).get("nodes", []))}, "circles": cs[:MAX_ROWS]}
+
+
+@mcp.tool()
+def search_memes(query: str = "", kind: str = "", guild_id: str = "", limit: int = 30) -> dict:
+    """Community meme glossary (群梗词典): term, meaning, origin (first use: who/when/which thread), usage, spread
+    (total uses, distinct users, peak month, monthly counts). kind: term | emoji | phrase. Empty query = most widespread."""
+    gid, _, p, dins = _ins(guild_id)
+    with _db(p) as c:
+        items = dins.memes(c, (query or "")[:40], kind or "", _lim(limit, 30))
+    return {"guild_id": gid, "items": items}
+
+
+@mcp.tool()
+def get_server_report(month: str = "", guild_id: str = "") -> dict:
+    """Server monthly report (YYYY-MM; default latest): messages, active/new members, hot threads, top posters,
+    rising terms, sentiment, most-reacted message, and an AI-written summary."""
+    gid, _, p, dins = _ins(guild_id)
+    with _db(p) as c:
+        if month:
+            return {"guild_id": gid, "report": dins.months(c, month)}
+        ms = dins.months(c)
+        return {"guild_id": gid, "report": ms[0] if ms else None, "available": [m["ym"] for m in ms]}
+
+
+@mcp.tool()
+def get_member_report(user_id: str, year: int = 0, guild_id: str = "") -> dict:
+    """Per-member annual summary: messages & rank, typical phrases, best buddies, busiest / happiest / gloomiest day,
+    top threads, sentiment, most-reacted message; plus the member's circle. year=0 -> all years."""
+    gid, main_p, p, dins = _ins(guild_id)
+    uid = _uid(user_id)
+    with _db(main_p) as main:
+        ids = _merged_ids(main, uid)
+    with _db(p) as c:
+        d = dins.member(c, ids, int(year) if year else None)
+    d.pop("dossier", None)
+    return {"guild_id": gid, "user_id": uid, **d}
+
+
+@mcp.tool()
+def get_member_dossier(user_id: str, guild_id: str = "") -> dict:
+    """AI-written member dossier (Markdown): who they are, topics, speaking style, catchphrases, partners,
+    notable moments, persona summary. Available for active members; generated from history with a free model."""
+    gid, main_p, p, dins = _ins(guild_id)
+    uid = _uid(user_id)
+    with _db(main_p) as main:
+        ids = _merged_ids(main, uid)
+    with _db(p) as c:
+        d = dins.member(c, ids)
+    return {"guild_id": gid, "user_id": uid, "dossier": d["dossier"], "circle": d["circle"]}
+
+
+@mcp.tool()
+def get_community_overview(guild_id: str = "") -> dict:
+    """AI-written community overview (history, circles, culture & memes, mood) plus build metadata."""
+    gid, _, p, dins = _ins(guild_id)
+    with _db(p) as c:
+        return {"guild_id": gid, "overview": dins.doc(c, "overview"), "meta": dins.status(c)}
+
 # ---------------------------------------------------------------- auth + app
 def _tokens():
     return [t.strip() for t in os.getenv("MCP_API_TOKENS", "").split(",") if t.strip()]

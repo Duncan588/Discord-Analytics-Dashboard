@@ -4,6 +4,7 @@
 <script src="{{ asset('vendor/ui/chart/chart.umd.min.js') }}" defer></script>
 <script src="{{ asset('js/dixo-home.js') }}" defer></script>
 <script src="{{ asset('js/dixo-sentiment.js') }}" defer></script>
+<script src="{{ asset('js/dixo-insights.js') }}" defer></script>
 {% endblock %}
 {% block body_attrs %}x-data="dashboard"{% endblock %}
 {% block nav_actions %}
@@ -88,6 +89,11 @@
   </div>
   <p class="faint" data-sentiment-empty style="font-size:12px;margin:0 0 8px">{{ t("sent.loading") }}</p>
   <div class="chart" data-sentiment-wrap style="display:none"><canvas data-sentiment-chart aria-label="sentiment"></canvas></div>
+</section>
+
+<section class="card" style="margin-top:var(--space-4)" data-ins-card>
+  <div class="card-head"><h2 class="h-card">{{ t("ins.topic_trend") }}</h2><a href="/insights">{{ t("ins.title") }} ›</a></div>
+  <div class="chart"><canvas id="insHomeTopics" aria-label="topics"></canvas></div>
 </section>
 
 <section class="grid g-2" style="margin-top:var(--space-4)">
