@@ -23,6 +23,8 @@
     var out = [];
     document.querySelectorAll('a[href*="/user/"]').forEach(function (a) {
       if (a.closest(".menu-panel") || a.getAttribute("data-ms-done")) return;
+      // 只给带名字的链接加徽章：纯头像链接（排行里头像和名字是两个链接）会导致同一人出现两次。
+      if (!(a.textContent || "").trim() || a.querySelector("[data-ms-badge]")) return;
       var u = uidOf(a); if (u) out.push([a, u]);
     });
     var pm = location.pathname.match(/^\/user\/(\d{5,25})/);
