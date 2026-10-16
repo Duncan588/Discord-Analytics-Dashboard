@@ -231,7 +231,28 @@ def index():
     visitors = dixo_visitors.recent_site_visitors(get_visitors_db())
     server = get_portal_db().execute("SELECT * FROM servers WHERE server_id=?", (sid,)).fetchone()
     full_leaderboard = data.pop("full_leaderboard", [])
+    data["member_status"] = _member_status_breakdown(conn)
     return render_template("index.html", server=server, server_id=sid, current_user=u, site_visitors=visitors, full_leaderboard=full_leaderboard, **data)
+
+
+def _member_status_breakdown(conn):
+    """在群 / 已退群 / 已销号 counts from member_status, global blacklist excluded."""
+    try:
+        from shared import blacklist as _bl
+        bl = set(_bl.ids() or ())
+        out = {"in": 0, "left": 0, "deleted": 0}
+        for uid, ing, dl in conn.execute("SELECT user_id,in_guild,deleted FROM member_status"):
+            if str(uid) in bl:
+                continue
+            if dl:
+                out["deleted"] += 1
+            elif ing == 1:
+                out["in"] += 1
+            elif ing == 0:
+                out["left"] += 1
+        return out if sum(out.values()) else None
+    except Exception:
+        return None
 
 
 @bp.route("/api/leaderboard")

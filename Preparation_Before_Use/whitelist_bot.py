@@ -759,6 +759,12 @@ class Bot(discord.Client):
 
     async def on_member_join(self, member):
         try:
+            from shared import member_status as _ms
+            await asyncio.to_thread(_ms.on_join, member.guild.id, member.id,
+                                    member.joined_at.isoformat() if getattr(member, "joined_at", None) else None)
+        except Exception as exc:
+            log.warning("member_status join 失败 user=%s error=%s", member.id, exc)
+        try:
             upsert_member(member.guild.id, member)
             c = db()
             try:
@@ -773,6 +779,11 @@ class Bot(discord.Client):
 
     async def on_member_remove(self, member):
         try:
+            from shared import member_status as _ms
+            await asyncio.to_thread(_ms.on_leave, member.guild.id, member.id)
+        except Exception as exc:
+            log.warning("member_status leave 失败 user=%s error=%s", member.id, exc)
+        try:
             c = db()
             c.execute("DELETE FROM user_server_presence WHERE user_id=? AND server_id=?", (str(member.id), str(member.guild.id)))
             try:
@@ -784,6 +795,13 @@ class Bot(discord.Client):
             log.info("成员离开已同步 guild=%s user=%s", member.guild.id, member.id)
         except Exception as exc:
             log.exception("成员离开同步失败 guild=%s user=%s error=%s", member.guild.id, member.id, exc)
+
+    async def on_raw_member_remove(self, payload):
+        try:
+            from shared import member_status as _ms
+            await asyncio.to_thread(_ms.on_leave, payload.guild_id, payload.user.id)
+        except Exception as exc:
+            log.warning("member_status raw leave 失败 error=%s", exc)
 
     async def on_member_update(self, before, after):
         try:

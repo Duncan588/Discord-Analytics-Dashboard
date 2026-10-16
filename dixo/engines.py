@@ -140,7 +140,8 @@ class SummaryEngine:
                     self._memo[sid] = (key, data)
             out = dict(data)
             out["summary_state"] = st
-            return out
+            from shared import blacklist
+            return blacklist.scrub(out)
         finally:
             summ.close()
 
@@ -224,4 +225,5 @@ class ProfileEngine:
         extra = cached[1] if cached else {"interactions_incoming": [], "interactions_outgoing": [], "word_cloud_data": []}
         base.update(extra)
         base["complete"] = cached is not None
-        return base
+        from shared import blacklist
+        return blacklist.scrub(base)

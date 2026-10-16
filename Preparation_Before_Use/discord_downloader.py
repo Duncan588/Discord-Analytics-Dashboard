@@ -3,6 +3,7 @@
 下载过程使用数据库记录任务/帖子状态；原始 JSON 只作为短生命周期的导入临时文件，
 成功导入 SQLite 后立即删除。帖子文件名只使用 Discord Thread ID。
 """
+import aiohttp
 import json
 import os
 import sqlite3
@@ -404,6 +405,17 @@ class Enumerator(discord.Client):
                             # 提前 break，否则 oldest archive timestamp 可能错误。
                             page_threads.append(thread)
                         return page_threads
+                    except (aiohttp.ClientPayloadError, aiohttp.ClientConnectionError, ConnectionResetError, asyncio.TimeoutError) as exc:
+                        # 网络中断/响应截断：当前游标未推进，退避后重试本页。
+                        if task_status(self.task_id) in ("paused", "cancelled"):
+                            raise TaskCancelled()
+                        attempt += 1
+                        if attempt > 8:
+                            raise
+                        wait_seconds = min(60.0, 2.0 ** min(attempt, 6))
+                        log_step("任务 #%s | 历史扫描网络中断，将重试 | attempt=%s wait=%ss | %s", self.task_id, attempt, wait_seconds, exc)
+                        await asyncio.sleep(wait_seconds)
+                        continue
                     except discord.HTTPException as exc:
                         status_code = int(getattr(exc, "status", 0) or 0)
                         if status_code not in (429, 500, 502, 503, 504):
@@ -475,6 +487,10 @@ class Enumerator(discord.Client):
                 before = next_before
                 if self.cursor_cb:
                     self.cursor_cb(before.isoformat())
+                stop_at = live_stop_at(self.task_id)
+                if stop_at is not None and oldest_archive_at is not None and oldest_archive_at < stop_at:
+                    log_step("任务 #%s | 增量扫描到达上次扫描点，停止翻页 | stop_at=%s", self.task_id, stop_at.isoformat())
+                    break
         except Exception as exc:
             self.error = str(exc)
             log_step("任务 #%s | 扫描异常 | %s", self.task_id, self.error)
@@ -976,7 +992,28 @@ def _json_max_timestamp(path):
         return None
 
 
+_SERVER_DB_WRITE_LOCK = threading.Lock()
+
+
 def import_one_json(path, guild_id, thread_id, last_active_at):
+    """单写者：同一进程内所有下载 Worker 串行写分析库；遇到 database is locked 退避重试。"""
+    attempt = 0
+    while True:
+        try:
+            with _SERVER_DB_WRITE_LOCK:
+                return _import_one_json(path, guild_id, thread_id, last_active_at)
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+                raise
+            attempt += 1
+            if attempt > 20:
+                raise
+            wait = min(30.0, 0.5 * (2 ** min(attempt, 6)))
+            log_step("写入分析库被锁，%.1fs 后重试 | 帖子=%s attempt=%s", wait, thread_id, attempt)
+            time.sleep(wait)
+
+
+def _import_one_json(path, guild_id, thread_id, last_active_at):
     db_path = server_db_for(guild_id)
     # 更新帖子时整帖替换，避免 Discord 删除/编辑消息后旧数据残留。
     # 网关实时写入的、比导出文件更新的消息保留（导出期间到达的新消息）。
@@ -1226,6 +1263,7 @@ def run_task(task, dce):
         portal.commit(); portal.close()
         out.unlink(missing_ok=True)
         mark_item(task_id,tid,status='downloaded',bot_name=bot['name'],downloaded_at=now(),last_active_at=str(row.get('last_active_at') or row.get('created_at') or ''),error=None)
+        sync_bump(task_id, threads=1, messages=int((result or {}).get('messages', 0) or 0))
         done=done_items(); total=total_items()
         update_task(task_id,phase='downloading',completed=done,total=total,active_bots=active_worker_count(),recent_speed=bump_recent_speed(done),message=f'实时写入数据库：{tid} · {done}/{total} · {bot["name"]}')
         log_step("任务 #%s | 机器人=%s | 帖子完成 | %s/%s", task_id, bot["name"], done, total)
@@ -1567,6 +1605,18 @@ def any_update_enabled():
 
 
 def enqueue_update_polls(message="网关上线补齐：扫描离线期间的新帖/新回复/新反应", min_gap_sec=600):
+    """网关上线/重连：让每个服务器同步尽快做一次增量扫描（不再新建独立任务）。"""
+    ensure_guild_syncs()
+    conn = db()
+    try:
+        cur = conn.execute("UPDATE guild_sync SET next_live_at=? WHERE backfill_done=1 AND paused=0 AND current_run_id IS NULL", (now(),))
+        conn.commit()
+        return cur.rowcount
+    finally:
+        conn.close()
+
+
+def _legacy_enqueue_update_polls(message="网关上线补齐：扫描离线期间的新帖/新回复/新反应", min_gap_sec=600):
     """Backfill only: queue one mode=update task per update-enabled config.
 
     Called once when the gateway listener (whitelist_bot) starts or reconnects,
@@ -1626,6 +1676,227 @@ def enqueue_update_polls(message="网关上线补齐：扫描离线期间的新�
     return created
 
 
+# ===================== 每服务器统一同步（guild sync supervisor） =====================
+# 每个启用的 download_config（服务器+论坛）对应一条 guild_sync 记录，它是唯一的“任务”。
+# 内部执行单元仍是 download_tasks 行（run），但 run 带 sync_id、对任务列表隐藏。
+#   backfilling: 全量扫描历史归档（scan_cursor 断点续扫），直到扫完一次
+#   live:        回填完成后每 SYNC_LIVE_INTERVAL_SEC 做一次增量扫描（只扫到上次扫描起点前 1 小时）；
+#                实时新消息仍由 whitelist_bot 网关写入
+#   retrying:    run 失败 → 指数退避（30s 起，最长 30 分钟）后从断点继续，无限重试
+#   paused:      管理员暂停
+# 只有连续失败超过 SYNC_NOTIFY_FAIL_SEC 或回填完成时才私信通知。
+SYNC_LIVE_INTERVAL_SEC = int(os.getenv("SYNC_LIVE_INTERVAL_SEC", "900"))
+SYNC_NOTIFY_FAIL_SEC = int(os.getenv("SYNC_NOTIFY_FAIL_SEC", "1800"))
+SYNC_MAX_BACKOFF_SEC = int(os.getenv("SYNC_MAX_BACKOFF_SEC", "1800"))
+
+
+def live_stop_at(task_id):
+    """增量 run 的扫描下限（归档时间）；持久化在 download_tasks.live_stop_at，重启后仍有效。"""
+    conn = db()
+    try:
+        row = conn.execute("SELECT live_stop_at FROM download_tasks WHERE id=?", (int(task_id),)).fetchone()
+        return parse_utc_datetime(row[0]) if row and row[0] else None
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()
+
+
+from shared.sync_schema import ensure_sync_schema  # noqa: E402
+
+
+def _sync_update(sync_id, **values):
+    if not values:
+        return
+    values["updated_at"] = now()
+    conn = db()
+    try:
+        conn.execute(f"UPDATE guild_sync SET {', '.join(k + '=?' for k in values)} WHERE id=?", (*values.values(), sync_id))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def sync_bump(task_id, threads=0, messages=0):
+    """导入一个帖子后累计到所属 guild_sync（非同步 run 静默跳过）。"""
+    conn = db()
+    try:
+        conn.execute("UPDATE guild_sync SET threads_done=threads_done+?, messages_ingested=messages_ingested+?, updated_at=? "
+                     "WHERE id=(SELECT sync_id FROM download_tasks WHERE id=?)", (int(threads), int(messages), now(), int(task_id)))
+        conn.commit()
+    except sqlite3.Error as exc:
+        log_step("同步计数更新失败 | task=%s | %s", task_id, exc)
+    finally:
+        conn.close()
+
+
+def _sync_notify(sync, text):
+    token = (os.getenv("DISCORD_BOT_TOKEN") or "").strip()
+    uid = str(sync["owner_user_id"] or "").strip()
+    if not token or not uid:
+        return
+    try:
+        send_direct_message(token, uid, text)
+    except Exception as exc:
+        log_step("同步通知发送失败 | guild=%s | %s", sync["guild_id"], exc)
+
+
+def _new_run(conn, sync, kind):
+    cfg = conn.execute("SELECT * FROM download_configs WHERE id=?", (sync["config_id"],)).fetchone()
+    interval = int(cfg["scheduler_interval"] or 1000) if cfg else 1000
+    if interval < 50:
+        interval *= 1000
+    has_db = server_db_for(sync["guild_id"]).exists()
+    mode = "update" if (has_db or kind == "live") else "initial"
+    label = "历史回填" if kind == "backfill" else "增量同步"
+    cur = conn.execute(
+        "INSERT INTO download_tasks(guild_id,forum_channel_id,created_by,status,total,completed,created_at,message,config_id,guild_name,forum_name,scheduler_interval,download_interval_ms,mode,sync_id,notified_at) "
+        "VALUES(?,?,?,?,0,0,?,?,?,?,?,?,?,?,?,?)",
+        (sync["guild_id"], sync["forum_channel_id"], str(sync["owner_user_id"] or ""), "pending", now(), f"服务器同步 · {label}",
+         sync["config_id"], (cfg["guild_name"] if cfg else None) or sync["guild_id"], (cfg["forum_name"] if cfg else None) or sync["forum_channel_id"],
+         interval, int(cfg["download_interval_ms"] or 0) if cfg else 0, mode, sync["id"], now()))
+    return int(cur.lastrowid)
+
+
+def ensure_guild_syncs():
+    """每个启用的配置一条 guild_sync；首次创建时接管该论坛已有的未完成任务。"""
+    conn = db()
+    try:
+        ensure_schema(conn); ensure_sync_schema(conn)
+        for cfg in conn.execute("SELECT * FROM download_configs WHERE enabled=1").fetchall():
+            if conn.execute("SELECT 1 FROM guild_sync WHERE config_id=?", (cfg["id"],)).fetchone():
+                continue
+            gid, forum = str(cfg["guild_id"]), str(cfg["forum_channel_id"])
+            ts = now()
+            cur = conn.execute("INSERT INTO guild_sync(config_id,guild_id,forum_channel_id,owner_user_id,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                               (cfg["id"], gid, forum, str(cfg["owner_user_id"]), "backfilling", ts, ts))
+            sid = int(cur.lastrowid)
+            # 接管：最新的未完成任务（pending/running/paused/failed）作为当前回填 run，保留它的断点。
+            open_run = conn.execute("SELECT id,status,scan_cursor FROM download_tasks WHERE guild_id=? AND forum_channel_id=? AND status IN ('pending','running','paused','failed') AND delete_requested=0 ORDER BY id DESC LIMIT 1", (gid, forum)).fetchone()
+            run_id = int(open_run["id"]) if open_run else None
+            # 旧任务全部归档（隐藏），数据不删除。
+            conn.execute("UPDATE download_tasks SET archived=1, notified_at=COALESCE(notified_at,?) WHERE guild_id=? AND forum_channel_id=? AND sync_id IS NULL AND (? IS NULL OR id<>?)", (ts, gid, forum, run_id, run_id))
+            if run_id:
+                conn.execute("UPDATE download_tasks SET sync_id=?, notified_at=COALESCE(notified_at,?) WHERE id=?", (sid, ts, run_id))
+                if open_run["status"] == "failed":
+                    conn.execute("UPDATE download_tasks SET status='pending',phase='queued',finished_at=NULL,message='同步接管：从断点继续' WHERE id=?", (run_id,))
+                    conn.execute("UPDATE download_task_items SET status='pending' WHERE task_id=? AND status='failed'", (run_id,))
+            conn.execute("UPDATE guild_sync SET current_run_id=?, run_kind='backfill', notes=? WHERE id=?", (run_id, f"接管任务 #{run_id}" if run_id else None, sid))
+            log_step("服务器同步创建 | sync=%s guild=%s forum=%s 接管 run=%s", sid, gid, forum, run_id)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _backoff(n):
+    return min(SYNC_MAX_BACKOFF_SEC, 30 * (2 ** max(0, min(n - 1, 10))))
+
+
+def supervise_syncs(active_ids):
+    """调度循环每轮调用：根据 run 结果推进每个服务器同步的状态机。永不让同步停下。"""
+    ensure_guild_syncs()
+    conn = db()
+    try:
+        syncs = conn.execute("SELECT s.* FROM guild_sync s JOIN download_configs c ON c.id=s.config_id WHERE c.enabled=1").fetchall()
+        nowdt = datetime.now(timezone.utc)
+        for s in syncs:
+            sid = int(s["id"])
+            run = conn.execute("SELECT * FROM download_tasks WHERE id=?", (s["current_run_id"],)).fetchone() if s["current_run_id"] else None
+            if run is not None and run["scan_cursor"] and s["run_kind"] == "backfill":
+                if run["scan_cursor"] != s["oldest_reached"]:
+                    conn.execute("UPDATE guild_sync SET oldest_reached=? WHERE id=?", (run["scan_cursor"], sid))
+            # 管理员：从断点重启
+            if s["restart_requested"]:
+                if run is not None and run["status"] in ("running", "pending"):
+                    conn.execute("UPDATE download_tasks SET status='paused',phase='paused' WHERE id=?", (run["id"],))
+                if run is None or int(run["id"]) not in active_ids:
+                    if run is not None:
+                        conn.execute("UPDATE download_tasks SET status='pending',phase='queued',finished_at=NULL,message='管理员：从断点重启' WHERE id=?", (run["id"],))
+                        conn.execute("UPDATE download_task_items SET status='pending' WHERE task_id=? AND status='failed'", (run["id"],))
+                    conn.execute("UPDATE guild_sync SET restart_requested=0, paused=0, next_retry_at=NULL, state=? WHERE id=?", ("backfilling" if not s["backfill_done"] else "live", sid))
+                continue
+            if s["paused"]:
+                if run is not None and run["status"] in ("pending", "running"):
+                    conn.execute("UPDATE download_tasks SET status='paused',phase='paused',message='服务器同步已暂停' WHERE id=?", (run["id"],))
+                if s["state"] != "paused":
+                    conn.execute("UPDATE guild_sync SET state='paused' WHERE id=?", (sid,))
+                continue
+            if run is not None and run["status"] == "paused" and int(run["id"]) not in active_ids:
+                conn.execute("UPDATE download_tasks SET status='pending',phase='queued',finished_at=NULL,message='同步恢复：从断点继续' WHERE id=?", (run["id"],))
+                continue
+            if run is not None and run["status"] == "running" and int(run["id"]) not in active_ids:
+                hb = parse_utc_datetime(run["heartbeat_at"]) if run["heartbeat_at"] else None
+                if hb is None or (nowdt - hb).total_seconds() > 120:
+                    # 孤儿 run：标记 running 但本进程没有在执行它（线程意外退出/进程替换）→ 从断点重新排队。
+                    conn.execute("UPDATE download_tasks SET status='pending',phase='queued',message='检测到执行中断，自动从断点恢复' WHERE id=?", (run["id"],))
+                    log_step("服务器同步：孤儿 run 自动恢复 | sync=%s run=%s", sid, run["id"])
+                    continue
+            if run is not None and run["status"] in ("pending", "running"):
+                st = ("backfilling" if s["run_kind"] == "backfill" else "live")
+                if s["state"] != st and run["status"] == "running" and not s["next_retry_at"]:
+                    conn.execute("UPDATE guild_sync SET state=? WHERE id=?", (st, sid))
+                continue
+            if run is not None and run["status"] in ("failed", "cancelled"):
+                if s["state"] != "retrying" or not s["next_retry_at"]:
+                    n = int(s["retry_count"] or 0) + 1
+                    wait = _backoff(n)
+                    nxt = (nowdt + timedelta(seconds=wait)).isoformat()
+                    conn.execute("UPDATE guild_sync SET state='retrying', retry_count=?, last_error=?, next_retry_at=?, failing_since=COALESCE(failing_since,?) WHERE id=?",
+                                 (n, (run["error"] or run["message"] or "未知错误")[:1000], nxt, now(), sid))
+                    log_step("服务器同步 run 失败，退避重试 | sync=%s run=%s retry=%s wait=%ss | %s", sid, run["id"], n, wait, (run["error"] or "")[:300])
+                    continue
+                fs = parse_utc_datetime(s["failing_since"]) if s["failing_since"] else None
+                if fs and not s["fail_notified"] and (nowdt - fs).total_seconds() > SYNC_NOTIFY_FAIL_SEC:
+                    _sync_notify(s, f"服务器同步持续失败超过 {SYNC_NOTIFY_FAIL_SEC // 60} 分钟（仍在自动重试）。\n服务器：{s['guild_id']}\n已重试：{s['retry_count']} 次\n最近错误：{(s['last_error'] or '')[:300]}")
+                    conn.execute("UPDATE guild_sync SET fail_notified=1 WHERE id=?", (sid,))
+                nr = parse_utc_datetime(s["next_retry_at"])
+                if nr and nowdt >= nr:
+                    # 从断点继续：同一 run 回到 pending；扫描用 scan_cursor，下载只处理未完成帖子。
+                    conn.execute("UPDATE download_tasks SET status='pending',phase='queued',finished_at=NULL,message=? WHERE id=?", (f"自动重试 #{s['retry_count']}：从断点继续", run["id"]))
+                    conn.execute("UPDATE download_task_items SET status='pending' WHERE task_id=? AND status='failed'", (run["id"],))
+                    conn.execute("UPDATE guild_sync SET next_retry_at=NULL WHERE id=?", (sid,))
+                continue
+            if run is not None and run["status"] == "completed":
+                upd = {"retry_count": 0, "next_retry_at": None, "failing_since": None, "fail_notified": 0, "last_error": s["last_error"]}
+                if s["run_kind"] == "backfill" and not s["backfill_done"]:
+                    upd.update(backfill_done=1, backfill_done_at=now(), oldest_reached="（已到最早）")
+                    if not s["backfill_notified"]:
+                        _sync_notify(s, f"服务器历史回填已完成，已转入持续增量同步。\n服务器：{s['guild_id']}\n累计导入帖子：{s['threads_done']}，消息：{s['messages_ingested']}")
+                        upd["backfill_notified"] = 1
+                else:
+                    upd["last_live_done_at"] = now()
+                upd.update(state="live", current_run_id=None, next_live_at=(nowdt + timedelta(seconds=SYNC_LIVE_INTERVAL_SEC)).isoformat())
+                conn.execute(f"UPDATE guild_sync SET {', '.join(k + '=?' for k in upd)} WHERE id=?", (*upd.values(), sid))
+                continue
+            # 没有当前 run：回填未完成 → 新建回填 run；否则到点做增量 run
+            if not s["backfill_done"]:
+                rid = _new_run(conn, s, "backfill")
+                conn.execute("UPDATE guild_sync SET current_run_id=?, run_kind='backfill', state='backfilling' WHERE id=?", (rid, sid))
+                log_step("服务器同步：新建回填 run | sync=%s run=%s", sid, rid)
+                continue
+            nl = parse_utc_datetime(s["next_live_at"]) if s["next_live_at"] else None
+            if nl is None or nowdt >= nl:
+                rid = _new_run(conn, s, "live")
+                last = parse_utc_datetime(s["last_live_started_at"]) if s["last_live_started_at"] else None
+                last = last or parse_utc_datetime(s["backfill_done_at"]) or (nowdt - timedelta(days=1))
+                stop_at = (last - timedelta(hours=1)).isoformat()
+                conn.execute("UPDATE download_tasks SET live_stop_at=? WHERE id=?", (stop_at, rid))
+                conn.execute("UPDATE guild_sync SET current_run_id=?, run_kind='live', state='live', last_live_started_at=? WHERE id=?", (rid, now(), sid))
+                log_step("服务器同步：新建增量 run | sync=%s run=%s 扫描截止=%s", sid, rid, stop_at)
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def any_sync_enabled():
+    conn = db()
+    try:
+        return bool(conn.execute("SELECT 1 FROM download_configs WHERE enabled=1 LIMIT 1").fetchone())
+    finally:
+        conn.close()
+# =================== end guild sync ===================
+
+
 def main_once():
     recover_stale_tasks()
     dce = find_dce()
@@ -1635,8 +1906,10 @@ def main_once():
     while True:
         for tid, future in list(active.items()):
             if future.done():
-                try: future.result()
-                except Exception as exc: log_step("任务 #%s | 调度 Worker 异常：%s", tid, exc)
+                try:
+                    future.result()
+                    log_step("任务 #%s | 调度 Worker 结束", tid)
+                except BaseException as exc: log_step("任务 #%s | 调度 Worker 异常：%r", tid, exc)
                 active.pop(tid, None)
         slots = max_tasks - len(active)
         if slots > 0:
@@ -1654,9 +1927,12 @@ def main_once():
                     main_once._pool = ThreadPoolExecutor(max_workers=max_tasks, thread_name_prefix='task-worker')
                     pool = main_once._pool
                 active[tid] = pool.submit(run_task, task, dce)
-        if not active and not pending_tasks(1):
-            # 实时数据由网关监听写入；下载器只处理手动任务与上线补齐任务，空闲即退出。
-            log_step("没有剩余下载任务，下载器退出")
+        try:
+            supervise_syncs(set(active))
+        except Exception as exc:
+            log_step("服务器同步调度异常（下一轮重试）：%s", exc)
+        if not active and not pending_tasks(1) and not any_sync_enabled():
+            log_step("没有启用的服务器配置，也没有剩余下载任务，下载器退出")
             return False
         active_intervals=[]
         for _tid in active:
@@ -1673,7 +1949,7 @@ def main_once():
                     active_intervals.append(max(50,min(60000,interval_ms)))
                 except (TypeError, ValueError) as exc:
                     log_step("任务 #%s | 解析调度间隔失败 | value=%s | error=%s", _tid, rr["scheduler_interval"], exc)
-        time.sleep((min(active_intervals) if active_intervals else 1000) / 1000.0)
+        time.sleep(max(1.0, (min(active_intervals) if active_intervals else 1000) / 1000.0))
 
 
 if __name__ == "__main__":
@@ -1682,4 +1958,10 @@ if __name__ == "__main__":
         # starts the downloader for the pending task.
         print(enqueue_update_polls())
     else:
-        main_once()
+        while True:
+            try:
+                if main_once() is False:
+                    break
+            except Exception as exc:
+                log_step("下载器主循环崩溃，10 秒后自动恢复：%s", exc)
+                time.sleep(10)

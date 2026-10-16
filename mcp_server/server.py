@@ -16,6 +16,12 @@ import time
 from datetime import datetime, timedelta, timezone
 
 from mcp.server.fastmcp import FastMCP
+import functools
+import inspect
+import sys as _sys
+_sys.path.insert(0, os.path.abspath(os.getenv("V20_ROOT") or os.path.join(os.path.dirname(__file__), "..")))
+from shared import blacklist as _bl  # noqa: E402
+from shared import member_status as _ms  # noqa: E402
 
 ROOT = os.path.abspath(os.getenv("V20_ROOT") or os.path.join(os.path.dirname(__file__), ".."))
 DATA = os.path.join(ROOT, "data")
@@ -46,6 +52,7 @@ def _ro(path):
         raise ValueError("database not found")
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5, check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    _bl.apply(conn, _bl.kind_for_path(path))  # global blacklist: shadow user tables with filtered TEMP VIEWs
     conn.execute("PRAGMA query_only=1")
     deadline = time.monotonic() + QUERY_TIMEOUT_S
     conn.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 10000)
@@ -97,8 +104,17 @@ def _lim(limit, default=20):
     return max(1, min(MAX_ROWS, n))
 
 
+def _mask_bl(text):
+    if not text or "<@" not in text:
+        return text
+    for b in _bl.ids():
+        if b in text:
+            text = re.sub(r"<@!?&?" + b + ">", "<@已屏蔽用户>", text)
+    return text
+
+
 def _clip(text):
-    text = text or ""
+    text = _mask_bl(text or "")
     return text if len(text) <= CONTENT_MAX else text[:CONTENT_MAX] + "…"
 
 
@@ -190,6 +206,47 @@ mcp = FastMCP(
     json_response=True,
     streamable_http_path="/mcp",
 )
+
+
+def _tool():
+    """mcp.tool() + global-blacklist scrub of every result (the AI never sees blacklisted users)."""
+    def deco(fn):
+        sig = inspect.signature(fn)
+
+        @functools.wraps(fn)
+        def inner(*a, **k):
+            try:
+                bound = sig.bind_partial(*a, **k).arguments
+            except TypeError:
+                bound = k
+            uid = bound.get("user_id") or bound.get("author_id")
+            if uid and str(uid).strip().strip("<@!>") in _bl.ids():
+                raise ValueError("user not found")
+            return _bl.scrub(fn(*a, **k))
+        return mcp.tool()(inner)
+    return deco
+
+
+def _status(main, ids):
+    m = _ms.status_map(main, ids)
+    return {i: (m.get(str(i)) or {"status": "member" if _has_ms(main) else "unknown"}) for i in ids}
+
+
+def _has_ms(main):
+    try:
+        return main.execute("SELECT 1 FROM main.sqlite_master WHERE name='member_status'").fetchone() is not None
+    except sqlite3.Error:
+        return False
+
+
+STATUS_LABELS = {"member": "在群", "left": "已退群", "deleted": "已销号", "unknown": "未知"}
+
+
+def _st_fields(st):
+    return {"member_status": st["status"], "member_status_label": STATUS_LABELS[st["status"]],
+            "left_at": st.get("left_at"), "joined_at": st.get("joined_at")}
+
+
 try:  # behind nginx with bearer auth; Host header is the public domain
     from mcp.server.transport_security import TransportSecuritySettings
     mcp.settings.transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
@@ -197,7 +254,7 @@ except Exception:
     pass
 
 
-@mcp.tool()
+@_tool()
 def list_servers() -> list[dict]:
     """List Discord servers (guilds) available in the archive."""
     out = []
@@ -216,7 +273,7 @@ def list_servers() -> list[dict]:
     return out
 
 
-@mcp.tool()
+@_tool()
 def server_overview(guild_id: str = "") -> dict:
     """Totals for a server: messages, members, channels, date range, last 30 days activity, data freshness."""
     gid, main_p, summ_p = _gid(guild_id)
@@ -232,7 +289,7 @@ def server_overview(guild_id: str = "") -> dict:
                 "last_30_days": {"messages": d30[0], "active_members": d30[1]}}
 
 
-@mcp.tool()
+@_tool()
 def search_members(query: str, guild_id: str = "", limit: int = 20) -> list[dict]:
     """Find members by username / nickname (substring) or exact user id. Sorted by message count."""
     gid, main_p, summ_p = _gid(guild_id)
@@ -257,10 +314,15 @@ def search_members(query: str, guild_id: str = "", limit: int = 20) -> list[dict
     out = [{"user_id": str(r[0]), "username": r[1], "nickname": r[2], "is_bot": bool(r[3]),
             "msg_count": stats.get(str(r[0]), (0, None))[0], "last_message": stats.get(str(r[0]), (0, None))[1]} for r in rows]
     out.sort(key=lambda x: -(x["msg_count"] or 0))
-    return out[:_lim(limit)]
+    out = out[:_lim(limit)]
+    with _db(main_p) as main:
+        sts = _status(main, [x["user_id"] for x in out])
+    for x in out:
+        x.update(_st_fields(sts[x["user_id"]]))
+    return out
 
 
-@mcp.tool()
+@_tool()
 def get_member_profile(user_id: str, guild_id: str = "", recent: int = 10) -> dict:
     """Member stats: message/reaction counts, first/last message, activity tier, active months,
     busiest hours (UTC), top channels and most recent messages."""
@@ -280,9 +342,10 @@ def get_member_profile(user_id: str, guild_id: str = "", recent: int = 10) -> di
                              f"WHERE m.author_id IN ({ph}) GROUP BY m.thread_id ORDER BY n DESC LIMIT 5", ids).fetchall()
         rec = main.execute(_MSG_SELECT + f"WHERE m.author_id IN ({ph}) ORDER BY m.timestamp DESC LIMIT ?", (*ids, min(50, max(0, int(recent or 0))))).fetchall()
         recent_msgs = _msg_rows(main, rec)
+        stf = _st_fields(_status(main, [uid])[uid])
     tmap, _ = _tier_map(gid, summ_p)
     tier = tmap.get(uid)
-    return {"user_id": uid, "username": u["username"], "nickname": u["nickname"], "is_bot": bool(u["is_bot"]),
+    return {"user_id": uid, "username": u["username"], "nickname": u["nickname"], "is_bot": bool(u["is_bot"]), **stf,
             "merged_ids": ids[1:], "msg_count": st[0], "rank_by_messages": rank, "reactions_received": st[1],
             "reactions_given": st[2], "first_message": st[3], "last_message": st[4],
             "activity_tier": tier, "activity_tier_label": TIER_LABELS.get(tier),
@@ -292,7 +355,7 @@ def get_member_profile(user_id: str, guild_id: str = "", recent: int = 10) -> di
             "recent_messages": recent_msgs}
 
 
-@mcp.tool()
+@_tool()
 def get_member_messages(user_id: str, guild_id: str = "", since: str = "", until: str = "",
                         limit: int = 50, offset: int = 0, oldest_first: bool = False) -> dict:
     """A member's messages, paged (limit<=200), optional ISO date range [since, until]."""
@@ -312,7 +375,7 @@ def get_member_messages(user_id: str, guild_id: str = "", since: str = "", until
     return {"items": items, "next_offset": off + lim if len(rows) > lim else None}
 
 
-@mcp.tool()
+@_tool()
 def search_messages(keyword: str = "", guild_id: str = "", channel_id: str = "", author_id: str = "",
                     since: str = "", until: str = "", limit: int = 30, offset: int = 0) -> dict:
     """Search messages by keyword (substring), channel/thread id, author id and ISO date range.
@@ -341,7 +404,7 @@ def search_messages(keyword: str = "", guild_id: str = "", channel_id: str = "",
     return {"items": items, "next_offset": off + lim if len(rows) > lim else None}
 
 
-@mcp.tool()
+@_tool()
 def get_top_members(guild_id: str = "", since: str = "", until: str = "", limit: int = 20,
                     offset: int = 0, include_bots: bool = False) -> list[dict]:
     """Leaderboard by message count. Optional ISO date range (uses daily totals); default all-time."""
@@ -363,7 +426,7 @@ def get_top_members(guild_id: str = "", since: str = "", until: str = "", limit:
     return [{"rank": off + i + 1, "user_id": str(r[0]), "name": names.get(str(r[0])), "messages": r[1]} for i, r in enumerate(rows)]
 
 
-@mcp.tool()
+@_tool()
 def get_activity_tiers(guild_id: str = "", tier: str = "", limit: int = 30, offset: int = 0) -> dict:
     """Member activity tiers (成员活跃分层): counts per tier, or the members of one tier
     (always_active / returned / faded / rare / new), paged."""
@@ -390,7 +453,7 @@ def get_activity_tiers(guild_id: str = "", tier: str = "", limit: int = 30, offs
     return out
 
 
-@mcp.tool()
+@_tool()
 def get_channel_stats(guild_id: str = "", channel_id: str = "", limit: int = 20) -> list[dict] | dict:
     """Channel/thread statistics. With channel_id: one channel's totals and top posters;
     otherwise the most active channels/threads."""
@@ -522,7 +585,7 @@ def _thread_msgs(main, rows):
     return items
 
 
-@mcp.tool()
+@_tool()
 def list_threads(guild_id: str = "", forum_id: str = "", created_since: str = "", created_until: str = "",
                  tag: str = "", sort: str = "recency", limit: int = 20, offset: int = 0) -> dict:
     """List forum posts/threads. Filters: forum_id, created date range (ISO), tag name.
@@ -581,7 +644,7 @@ def list_threads(guild_id: str = "", forum_id: str = "", created_since: str = ""
     return {"total": total, "items": items, "next_offset": off + lim if total > off + lim else None}
 
 
-@mcp.tool()
+@_tool()
 def get_thread(thread_id: str, guild_id: str = "") -> dict:
     """One forum post/thread: title, author, tags, created time, full starter post, stats
     (messages, replies, participants, reactions, first/last activity) and top participants."""
@@ -616,7 +679,7 @@ def get_thread(thread_id: str, guild_id: str = "") -> dict:
     return card
 
 
-@mcp.tool()
+@_tool()
 def get_thread_messages(thread_id: str, guild_id: str = "", limit: int = 50, before_message_id: str = "",
                         after_message_id: str = "", around_message_id: str = "") -> dict:
     """Messages of a thread in chronological order (oldest→newest), each with reply-to context.
@@ -651,7 +714,7 @@ def get_thread_messages(thread_id: str, guild_id: str = "", limit: int = 50, bef
             "newer_cursor": items[-1]["message_id"] if items else None}
 
 
-@mcp.tool()
+@_tool()
 def get_thread_context(thread_id: str, guild_id: str = "", last_n: int = 30) -> dict:
     """Compact digest for an AI about to reply in a thread: title/tags/author, full starter post,
     the last N messages (oldest→newest, with reply-to snippets) and active participants with brief
@@ -670,13 +733,16 @@ def get_thread_context(thread_id: str, guild_id: str = "", last_n: int = 30) -> 
         if ids:
             for r in summ.execute(f"SELECT user_id,msg_count,first_ts,last_ts FROM user_stats WHERE user_id IN ({','.join('?'*len(ids))})", ids):
                 prof[str(r[0])] = r
+    with _db(main_p) as main:
+        sts = _status(main, [str(p["user_id"]) for p in info["top_participants"][:10]])
     parts = []
     for p in info["top_participants"][:10]:
         r = prof.get(str(p["user_id"]))
         tier = tmap.get(str(p["user_id"]))
         parts.append({"user_id": p["user_id"], "name": p["name"], "messages_in_thread": p["messages"],
                       "messages_total": r[1] if r else None, "member_since": r[2] if r else None,
-                      "last_seen": r[3] if r else None, "activity_tier": TIER_LABELS.get(tier, tier)})
+                      "last_seen": r[3] if r else None, "activity_tier": TIER_LABELS.get(tier, tier),
+                      **_st_fields(sts[str(p["user_id"])])})
     for m in msgs:
         m["content"] = (m["content"] or "")[:600]
     return {"thread": {k: info[k] for k in ("thread_id", "title", "author", "author_id", "tags", "created_at",
@@ -684,7 +750,7 @@ def get_thread_context(thread_id: str, guild_id: str = "", last_n: int = 30) -> 
             "starter_post": info.get("starter_post"), "recent_messages": msgs, "participants": parts}
 
 
-@mcp.tool()
+@_tool()
 def search_threads(keyword: str, guild_id: str = "", forum_id: str = "", in_starter: bool = True,
                    limit: int = 20, offset: int = 0) -> dict:
     """Find forum posts by keyword in the title (and, by default, the starter post text). Newest first."""
@@ -733,7 +799,7 @@ def search_threads(keyword: str, guild_id: str = "", forum_id: str = "", in_star
 HOT_W_REPLIES, HOT_W_PARTICIPANTS, HOT_W_REACTIONS = 1.0, 3.0, 0.5
 
 
-@mcp.tool()
+@_tool()
 def get_hot_threads(guild_id: str = "", since: str = "", until: str = "", forum_id: str = "", limit: int = 10) -> dict:
     """Hottest forum posts CREATED within [since, until] (ISO dates; default last 7 days).
     score = replies*1 + unique_participants*3 + reactions*0.5, where replies = messages-1,
@@ -774,7 +840,7 @@ def get_hot_threads(guild_id: str = "", since: str = "", until: str = "", forum_
     return {"since": since, "until": until or None, "threads_created_in_range": len(tmap),
             "formula": "score = replies*1 + unique_participants*3 + reactions*0.5", "items": items}
 
-@mcp.tool()
+@_tool()
 def get_sentiment(guild_id: str = "", user_id: str = "", since: str = "", until: str = "", granularity: str = "day") -> dict:
     """Message sentiment over time for a guild, or one member (incl. merged alt accounts).
     since/until: ISO dates (default: last 90 days). granularity: day | week | month.
@@ -820,7 +886,7 @@ def _ins(guild_id):
     return gid, main_p, p, dins
 
 
-@mcp.tool()
+@_tool()
 def get_topics(guild_id: str = "", months: int = 24) -> dict:
     """Topic map: LLM-labelled forum topics (threads clustered by embedding) with thread/message counts,
     trend (share in last 3 months vs previous 12, relative) and monthly message counts for the last `months` months."""
@@ -830,7 +896,7 @@ def get_topics(guild_id: str = "", months: int = 24) -> dict:
     return {"guild_id": gid, **d}
 
 
-@mcp.tool()
+@_tool()
 def get_circles(guild_id: str = "", user_id: str = "") -> dict:
     """Relationship circles (Louvain communities on the reply+mention graph): name, description, size, core members,
     favourite threads, typical words. With user_id: only that member's circle."""
@@ -844,7 +910,7 @@ def get_circles(guild_id: str = "", user_id: str = "") -> dict:
     return {"guild_id": gid, "graph_size": {"nodes": len((d["graph"] or {}).get("nodes", []))}, "circles": cs[:MAX_ROWS]}
 
 
-@mcp.tool()
+@_tool()
 def search_memes(query: str = "", kind: str = "", guild_id: str = "", limit: int = 30) -> dict:
     """Community meme glossary (群梗词典): term, meaning, origin (first use: who/when/which thread), usage, spread
     (total uses, distinct users, peak month, monthly counts). kind: term | phrase. Empty query = most widespread."""
@@ -854,7 +920,7 @@ def search_memes(query: str = "", kind: str = "", guild_id: str = "", limit: int
     return {"guild_id": gid, "items": items}
 
 
-@mcp.tool()
+@_tool()
 def get_server_report(month: str = "", guild_id: str = "") -> dict:
     """Server monthly report (YYYY-MM; default latest): messages, active/new members, hot threads, top posters,
     rising terms, sentiment, most-reacted message, and an AI-written summary."""
@@ -866,7 +932,7 @@ def get_server_report(month: str = "", guild_id: str = "") -> dict:
         return {"guild_id": gid, "report": ms[0] if ms else None, "available": [m["ym"] for m in ms]}
 
 
-@mcp.tool()
+@_tool()
 def get_member_report(user_id: str, year: int = 0, guild_id: str = "") -> dict:
     """Per-member annual summary: messages & rank, typical phrases, best buddies, busiest / happiest / gloomiest day,
     top threads, sentiment, most-reacted message; plus the member's circle. year=0 -> all years."""
@@ -880,7 +946,7 @@ def get_member_report(user_id: str, year: int = 0, guild_id: str = "") -> dict:
     return {"guild_id": gid, "user_id": uid, **d}
 
 
-@mcp.tool()
+@_tool()
 def get_member_dossier(user_id: str, guild_id: str = "") -> dict:
     """AI-written member dossier (Markdown): who they are, topics, speaking style, catchphrases, partners,
     notable moments, persona summary. Available for active members; generated from history with a free model."""
@@ -893,12 +959,147 @@ def get_member_dossier(user_id: str, guild_id: str = "") -> dict:
     return {"guild_id": gid, "user_id": uid, "dossier": d["dossier"], "circle": d["circle"]}
 
 
-@mcp.tool()
+@_tool()
 def get_community_overview(guild_id: str = "") -> dict:
     """AI-written community overview (history, circles, culture & memes, mood) plus build metadata."""
     gid, _, p, dins = _ins(guild_id)
     with _db(p) as c:
         return {"guild_id": gid, "overview": dins.doc(c, "overview"), "meta": dins.status(c)}
+
+@_tool()
+def get_member_status(user_ids: list[str], guild_id: str = "") -> dict:
+    """Membership status for up to 500 user ids: member_status = member (在群) | left (已退群, left the server) |
+    deleted (已销号, Discord account deleted). Also joined_at / left_at (UTC) when known. Synced from the Discord
+    member list daily + live join/leave events."""
+    gid, main_p, _ = _gid(guild_id)
+    ids = [_uid(u) for u in (user_ids or [])][:500]
+    with _db(main_p) as main:
+        sts = _status(main, ids)
+        names = _names(main, ids)
+    items = [{"user_id": i, "name": names.get(i), **_st_fields(sts[i])} for i in ids if i in names or sts[i]["status"] != "unknown"]
+    return {"guild_id": gid, "items": items}
+
+
+@_tool()
+def get_thread_participants(thread_id: str, guild_id: str = "") -> dict:
+    """EVERY member who posted in a thread (no cap): message count in the thread, first/last post time, the first
+    message text (snippet) and membership status (在群 / 已退群 / 已销号). Use this to list everyone involved in a post."""
+    gid, main_p, _ = _gid(guild_id)
+    tid = _uid(thread_id)
+    with _db(main_p) as main:
+        t = main.execute("SELECT name FROM threads WHERE thread_id=?", (tid,)).fetchone()
+        rows = main.execute("SELECT author_id,COUNT(*) n,MIN(timestamp) f,MAX(timestamp) l FROM messages WHERE thread_id=? "
+                            "GROUP BY author_id ORDER BY MIN(timestamp)", (tid,)).fetchall()
+        if not rows and not t:
+            raise ValueError("thread not found")
+        ids = [str(r[0]) for r in rows]
+        names = _names(main, ids)
+        sts = _status(main, ids)
+        first = {}
+        for r in main.execute("SELECT author_id,content FROM messages WHERE thread_id=? ORDER BY timestamp DESC", (tid,)):
+            first[str(r[0])] = r[1]
+    items = [{"user_id": str(r[0]), "name": names.get(str(r[0])), "messages_in_thread": r[1], "first_post": r[2],
+              "last_post": r[3], "first_message": (first.get(str(r[0])) or "")[:300], **_st_fields(sts[str(r[0])])}
+             for r in rows]
+    summary = {k: sum(1 for x in items if x["member_status"] == k) for k in ("member", "left", "deleted")}
+    return {"guild_id": gid, "thread_id": tid, "title": t["name"] if t else None, "participants": len(items),
+            "status_counts": summary, "items": items}
+
+
+DIGEST_MAX_CHARS = 60000
+DIGEST_MSG_CAP = 300
+
+
+@_tool()
+def get_thread_digest(thread_id: str, guild_id: str = "", include_messages: bool = True) -> dict:
+    """CALL THIS FIRST for ANY question about a forum post/thread (who posted, who touched/invested in a project,
+    how many left/deleted, what people said). One call returns the COMPLETE thread: meta (title, starter, created,
+    total messages, participant count, first/last message time) and EVERY participant (never omitted, no cap),
+    sorted by message count, each with user_id, name, status (在群/已退群/已销号), message count, first/last post
+    time and ALL their messages in chronological order as [time, text] (each message capped ~300 chars).
+    If the thread is huge (> ~60k chars), every participant is still listed with full counts/status, but some of
+    their messages are dropped and `truncated_messages` > 0 says how many; only then use get_thread_messages for
+    detail. Answer from this digest; do not page manually. include_messages=false returns only the people list."""
+    gid, main_p, summ_p = _gid(guild_id)
+    tid = _uid(thread_id)
+    with _db(main_p) as main:
+        t = main.execute("SELECT * FROM threads WHERE thread_id=?", (tid,)).fetchone()
+        rows = main.execute("SELECT message_id,author_id,content,timestamp FROM messages WHERE thread_id=? "
+                            "ORDER BY timestamp", (tid,)).fetchall()
+        if not rows and not t:
+            raise ValueError("thread not found")
+        meta = _thread_meta_map(main, [tid]).get(tid) or {}
+        by = {}
+        for r in rows:
+            by.setdefault(str(r["author_id"]), []).append(r)
+        owner = meta.get("owner_id") or (str(rows[0]["author_id"]) if rows else None)
+        ids = list(by)
+        names = _names(main, ids + ([owner] if owner else []))
+        sts = _status(main, ids)
+    react = {}
+    if include_messages and rows:
+        try:
+            with _db(summ_p) as summ:
+                mids = [r["message_id"] for r in rows]
+                for i in range(0, len(mids), 500):
+                    c = mids[i:i + 500]
+                    for r in summ.execute(f"SELECT message_id,SUM(c) FROM msg_react WHERE message_id IN "
+                                          f"({','.join('?'*len(c))}) GROUP BY message_id", c):
+                        react[str(r[0])] = r[1] or 0
+        except Exception:
+            pass
+
+    def txt(r):
+        s = " ".join(_mask_bl(r["content"] or "").split())
+        return s if len(s) <= DIGEST_MSG_CAP else s[:DIGEST_MSG_CAP] + "…"
+
+    def short(ts):
+        return (ts or "")[:16].replace("T", " ")
+
+    order = sorted(ids, key=lambda u: (-len(by[u]), by[u][0]["timestamp"]))
+    full = {u: [txt(r) for r in by[u]] for u in order} if include_messages else {}
+    total_chars = sum(len(s) + 20 for v in full.values() for s in v)
+    truncated_any = include_messages and total_chars > DIGEST_MAX_CHARS
+    budget = max(600, DIGEST_MAX_CHARS // max(1, len(order))) if truncated_any else None
+    people = []
+    for u in order:
+        ms = by[u]
+        p = {"user_id": u, "name": names.get(u), "status": STATUS_LABELS[sts[u]["status"]],
+             "msgs": len(ms), "first": short(ms[0]["timestamp"]), "last": short(ms[-1]["timestamp"])}
+        if sts[u].get("left_at"):
+            p["left_at"] = short(sts[u]["left_at"])
+        if include_messages:
+            texts = full[u]
+            if budget is None or sum(len(s) + 20 for s in texts) <= budget:
+                keep = set(range(len(ms)))
+            else:
+                keep, used = set(), 0
+                extra = sorted(range(len(ms)), key=lambda i: -react.get(str(ms[i]["message_id"]), 0))[:3] + \
+                        sorted(range(len(ms)), key=lambda i: -len(texts[i]))[:3]
+                for i in extra:  # most-reacted + longest always kept
+                    if i not in keep:
+                        keep.add(i); used += len(texts[i]) + 20
+                for i in range(len(ms)):  # then chronological fill up to budget
+                    if i in keep:
+                        continue
+                    if used + len(texts[i]) + 20 > budget:
+                        break
+                    keep.add(i); used += len(texts[i]) + 20
+            p["messages"] = [[short(ms[i]["timestamp"]), texts[i]] + ([f"👍{react[str(ms[i]['message_id'])]}"]
+                             if react.get(str(ms[i]["message_id"])) else []) for i in sorted(keep)]
+            p["truncated_messages"] = len(ms) - len(keep)
+        people.append(p)
+    counts = {lbl: sum(1 for p in people if p["status"] == lbl) for lbl in ("在群", "已退群", "已销号")}
+    return {"thread_id": tid, "title": t["name"] if t else None,
+            "starter_id": owner, "starter": names.get(owner) if owner else None,
+            "created": short(meta.get("created_at") or _snow_ts(tid)),
+            "total_messages": len(rows), "participant_count": len(people), "status_counts": counts,
+            "first_message_at": short(rows[0]["timestamp"]) if rows else None,
+            "last_message_at": short(rows[-1]["timestamp"]) if rows else None,
+            "truncated": bool(truncated_any),
+            "truncated_messages_total": sum(p.get("truncated_messages", 0) for p in people),
+            "participants": people}
+
 
 # ---------------------------------------------------------------- auth + app
 def _tokens():

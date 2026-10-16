@@ -92,6 +92,26 @@
           },
           options: Object.assign({}, base, { plugins: Object.assign({}, base.plugins, { legend: { display: false } }) })
         });
+        var msEl = document.getElementById('chartMemberStatus'), ms = data.member_status;
+        if (msEl && ms) {
+          new Chart(msEl, {
+            type: 'doughnut',
+            data: { labels: [T('home.member_status.in', '在群'), T('home.member_status.left', '已退群'), T('home.member_status.deleted', '已销号')],
+              datasets: [{ data: [ms['in'], ms.left, ms.deleted], backgroundColor: ['#2997ff', '#ff9f0a', '#8e8e93'], borderWidth: 0, hoverOffset: 4 }] },
+            options: { responsive: true, maintainAspectRatio: false, cutout: '72%', animation: { duration: 250 },
+              plugins: { legend: { display: false }, tooltip: base.plugins.tooltip } }
+          });
+        }
+        var mcEl = document.getElementById('chartConc'), mcd = data.msg_concentration;
+        if (mcEl && mcd) {
+          new Chart(mcEl, {
+            type: 'doughnut',
+            data: { labels: ['Top 1', 'Top 2–10', 'Top 11–100', T('home.conc.rest', '其余成员')],
+              datasets: [{ data: [mcd.top1, mcd.top2_10, mcd.top11_100, mcd.rest], backgroundColor: ['#bf5af2', '#2997ff', '#64d2ff', '#8e8e93'], borderWidth: 0, hoverOffset: 4 }] },
+            options: { responsive: true, maintainAspectRatio: false, cutout: '72%', animation: { duration: 250 },
+              plugins: { legend: { display: false }, tooltip: base.plugins.tooltip } }
+          });
+        }
         function range(n) {
           var s = n ? Math.max(0, daily.length - n) : 0;
           dc.data.labels = daily.slice(s).map(function (d) { return d.day; });

@@ -37,7 +37,8 @@ def connect_ro(path):
         return None
     c = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=5, check_same_thread=False)
     c.row_factory = sqlite3.Row
-    return c
+    from shared import blacklist
+    return blacklist.apply(c, "insights")
 
 
 def _rows(c, sql, args=()):

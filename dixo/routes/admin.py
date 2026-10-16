@@ -14,6 +14,11 @@ bp = Blueprint("admin", __name__)
 @admin_required
 def admin_panel():
     portal = get_portal_db(); sid = current_server_id()
+    try:
+        from shared.sync_schema import ensure_sync_schema
+        ensure_sync_schema(portal)
+    except Exception:
+        app.logger.exception("guild sync schema ensure failed")
     conn = get_db() if sid and server_db_exists(sid) else None
     reqs = conn.execute("SELECT r.*,u.username req_name,u.avatar_url req_avatar FROM claim_requests_v2 r LEFT JOIN users u ON r.requester_id=u.user_id WHERE r.status=0").fetchall() if conn else []
     merges = conn.execute("SELECT m.*,u.username parent_name FROM user_merges m LEFT JOIN users u ON m.parent_id=u.user_id").fetchall() if conn else []
@@ -24,7 +29,7 @@ def admin_panel():
         servers = all_servers
         accesses = portal.execute("SELECT a.*,w.username FROM user_server_access a LEFT JOIN whitelist_users w ON w.user_id=a.user_id ORDER BY a.user_id,a.server_id").fetchall()
         cfg_rows = portal.execute("SELECT c.*,s.name server_display_name,s.icon_url FROM download_configs c LEFT JOIN servers s ON s.server_id=c.guild_id WHERE c.enabled=1 ORDER BY COALESCE(s.name,c.guild_name),c.forum_name,c.id").fetchall()
-        tasks = portal.execute("SELECT t.*,COALESCE(p.username,t.created_by) creator_name,COALESCE(c.guild_name,s.name,t.guild_id) server_display_name,COALESCE(c.forum_name,t.forum_name,t.forum_channel_id) forum_display_name FROM download_tasks t LEFT JOIN portal_users p ON p.user_id=t.created_by LEFT JOIN download_configs c ON c.id=t.config_id LEFT JOIN servers s ON s.server_id=t.guild_id ORDER BY t.id DESC LIMIT 100").fetchall()
+        tasks = portal.execute("SELECT t.*,COALESCE(p.username,t.created_by) creator_name,COALESCE(c.guild_name,s.name,t.guild_id) server_display_name,COALESCE(c.forum_name,t.forum_name,t.forum_channel_id) forum_display_name FROM download_tasks t LEFT JOIN portal_users p ON p.user_id=t.created_by LEFT JOIN download_configs c ON c.id=t.config_id LEFT JOIN servers s ON s.server_id=t.guild_id WHERE COALESCE(t.archived,0)=0 AND t.sync_id IS NULL ORDER BY t.id DESC LIMIT 100").fetchall()
     else:
         allowed = {str(x["server_id"]) for x in get_servers_for_user(uid)}
         servers = [x for x in all_servers if str(x["server_id"]) in allowed]
@@ -33,9 +38,9 @@ def admin_panel():
         cfg_ids = [int(x["id"]) for x in cfg_rows]
         if cfg_ids:
             ph = ','.join('?' * len(cfg_ids))
-            tasks = portal.execute(f"SELECT t.*,COALESCE(p.username,t.created_by) creator_name,COALESCE(c.guild_name,s.name,t.guild_id) server_display_name,COALESCE(c.forum_name,t.forum_name,t.forum_channel_id) forum_display_name FROM download_tasks t LEFT JOIN portal_users p ON p.user_id=t.created_by LEFT JOIN download_configs c ON c.id=t.config_id LEFT JOIN servers s ON s.server_id=t.guild_id WHERE t.created_by=? OR t.config_id IN ({ph}) ORDER BY t.id DESC LIMIT 100", (uid,*cfg_ids)).fetchall()
+            tasks = portal.execute(f"SELECT t.*,COALESCE(p.username,t.created_by) creator_name,COALESCE(c.guild_name,s.name,t.guild_id) server_display_name,COALESCE(c.forum_name,t.forum_name,t.forum_channel_id) forum_display_name FROM download_tasks t LEFT JOIN portal_users p ON p.user_id=t.created_by LEFT JOIN download_configs c ON c.id=t.config_id LEFT JOIN servers s ON s.server_id=t.guild_id WHERE COALESCE(t.archived,0)=0 AND t.sync_id IS NULL AND (t.created_by=? OR t.config_id IN ({ph})) ORDER BY t.id DESC LIMIT 100", (uid,*cfg_ids)).fetchall()
         else:
-            tasks = portal.execute("SELECT t.*,COALESCE(p.username,t.created_by) creator_name,COALESCE(c.guild_name,s.name,t.guild_id) server_display_name,COALESCE(c.forum_name,t.forum_name,t.forum_channel_id) forum_display_name FROM download_tasks t LEFT JOIN portal_users p ON p.user_id=t.created_by LEFT JOIN download_configs c ON c.id=t.config_id LEFT JOIN servers s ON s.server_id=t.guild_id WHERE t.created_by=? ORDER BY t.id DESC LIMIT 100", (uid,)).fetchall()
+            tasks = portal.execute("SELECT t.*,COALESCE(p.username,t.created_by) creator_name,COALESCE(c.guild_name,s.name,t.guild_id) server_display_name,COALESCE(c.forum_name,t.forum_name,t.forum_channel_id) forum_display_name FROM download_tasks t LEFT JOIN portal_users p ON p.user_id=t.created_by LEFT JOIN download_configs c ON c.id=t.config_id LEFT JOIN servers s ON s.server_id=t.guild_id WHERE COALESCE(t.archived,0)=0 AND t.sync_id IS NULL AND t.created_by=? ORDER BY t.id DESC LIMIT 100", (uid,)).fetchall()
     # 时间字段由后端统一计算；模板和后续轮询接口只负责展示结果。
     task_views = []
     for task in tasks:
@@ -60,7 +65,7 @@ def admin_panel():
         if row["use_default_bot"]:
             d["bot_names"].append("默认下载机器人")
         configs.append(d)
-    return render_template("admin.html", pending_requests=reqs, active_merges=merges, whitelist=whitelist, servers=servers, accesses=accesses, bots=bot_rows, download_servers=configs, tasks=tasks, admin_level=level, current_user=session["user"], user_quota=get_download_quota(uid))
+    return render_template("admin.html", blacklist=_blacklist_rows() if level == 1 else [], pending_requests=reqs, active_merges=merges, whitelist=whitelist, servers=servers, accesses=accesses, bots=bot_rows, download_servers=configs, tasks=tasks, admin_level=level, current_user=session["user"], user_quota=get_download_quota(uid))
 
 
 @bp.route("/admin/bot-features")
@@ -587,7 +592,7 @@ def admin_download_tasks_status():
         "COALESCE(c.forum_name,t.forum_name,t.forum_channel_id) forum_display_name,"
         "COALESCE(c.use_default_bot,0) config_use_default_bot "
         "FROM download_tasks t LEFT JOIN download_configs c ON c.id=t.config_id "
-        "LEFT JOIN servers s ON s.server_id=t.guild_id WHERE t.delete_requested=0" + scope_sql +
+        "LEFT JOIN servers s ON s.server_id=t.guild_id WHERE t.delete_requested=0 AND COALESCE(t.archived,0)=0 AND t.sync_id IS NULL" + scope_sql +
         " ORDER BY t.id DESC LIMIT 100", scope_args
     ).fetchall()
     result=[]
@@ -742,3 +747,154 @@ def admin_liveness_send():
     flash(f"已加入发送队列 {created} 人（机器人约每 3 秒发送一条）；跳过 {len(skipped)} 人（已有待确认或为机器人）。"
           f" · Queued {created}, skipped {len(skipped)}.", "success")
     return redirect(url_for("admin.admin_liveness", as_of=request.form.get("as_of") or None))
+
+
+# ---- 全局黑名单（level 1）：被拉黑的用户在网站和 MCP 中完全不可见 ----
+def _blacklist_rows():
+    portal = get_portal_db()
+    rows = _blacklist.list_all(portal)
+    sid = current_server_id()
+    names = {}
+    if rows and sid and server_db_exists(sid):
+        conn = db_connect(server_db_path(sid))  # unfiltered: admins must see who is listed
+        try:
+            ph = ",".join("?" * len(rows))
+            for r in conn.execute(f"SELECT user_id,username,nickname FROM main.users WHERE user_id IN ({ph})", [x["user_id"] for x in rows]):
+                names[str(r[0])] = r["nickname"] or r["username"]
+        finally:
+            conn.close()
+    for x in rows:
+        x["name"] = names.get(x["user_id"])
+    return rows
+
+
+@bp.route("/admin/blacklist/add", methods=["POST"])
+@login_required
+@level1_required
+def admin_blacklist_add():
+    uid = (request.form.get("user_id") or "").strip()
+    if not uid.isdigit():
+        return "无效 Discord User ID", 400
+    _blacklist.add(get_portal_db(), uid, (request.form.get("note") or "")[:200], session["user"]["id"])
+    invalidate_blacklist_caches()
+    app.logger.info("global blacklist add user=%s by=%s", uid, session["user"]["id"])
+    return redirect(url_for("admin.admin_panel") + "#blacklist")
+
+
+@bp.route("/admin/blacklist/delete/<user_id>", methods=["POST"])
+@login_required
+@level1_required
+def admin_blacklist_delete(user_id):
+    _blacklist.remove(get_portal_db(), str(user_id))
+    invalidate_blacklist_caches()
+    app.logger.info("global blacklist remove user=%s by=%s", user_id, session["user"]["id"])
+    return redirect(url_for("admin.admin_panel") + "#blacklist")
+
+# --- append to dixo/routes/admin.py (Cloudflare R2 backup admin) ---
+
+@bp.route("/admin/r2-backup/status")
+@login_required
+@level1_required
+def admin_r2_backup_status():
+    from dixo import r2_backup as r2
+    force = (request.args.get("force") or "").strip() in ("1", "true", "yes")
+    try:
+        data = r2.overall_status(force=force)
+        return jsonify(data)
+    except Exception as e:
+        app.logger.exception("r2 backup status failed")
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
+@bp.route("/admin/r2-backup/test", methods=["POST"])
+@login_required
+@level1_required
+def admin_r2_backup_test():
+    from dixo import r2_backup as r2
+    try:
+        return jsonify(r2.test_credentials())
+    except Exception as e:
+        app.logger.exception("r2 backup test failed")
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
+@bp.route("/admin/r2-backup/run", methods=["POST"])
+@login_required
+@level1_required
+def admin_r2_backup_run():
+    from dixo import r2_backup as r2
+    try:
+        result = r2.start_backup()
+        app.logger.info("r2 backup run by=%s ok=%s", session["user"]["id"], result.get("ok"))
+        return jsonify(result), (200 if result.get("ok") else 409)
+    except Exception as e:
+        app.logger.exception("r2 backup run failed")
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
+@bp.route("/admin/r2-backup/creds", methods=["POST"])
+@login_required
+@level1_required
+def admin_r2_backup_creds():
+    from dixo import r2_backup as r2
+    # Accept JSON or form
+    data = request.get_json(silent=True) or {}
+    ak = (data.get("access_key_id") or request.form.get("access_key_id") or "").strip()
+    sk = (data.get("secret_access_key") or request.form.get("secret_access_key") or "").strip()
+    rp = data.get("restic_password") if "restic_password" in data else request.form.get("restic_password")
+    cf = data.get("cf_api_token") if "cf_api_token" in data else request.form.get("cf_api_token")
+    if not ak or not sk:
+        return jsonify({"ok": False, "error": "Access Key ID 与 Secret 均必填"}), 400
+    try:
+        result = r2.save_credentials(ak, sk, restic_password=rp, cf_api_token=cf)
+        app.logger.info("r2 backup creds updated by=%s masked=%s", session["user"]["id"], result.get("access_key_id_masked"))
+        return jsonify(result)
+    except Exception as e:
+        app.logger.exception("r2 backup creds save failed")
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
+# --- 服务器统一同步（guild sync） ---
+def _sync_rows(p, uid, level):
+    try:
+        sql = ("SELECT g.*,COALESCE(c.guild_name,s.name,g.guild_id) server_display_name,COALESCE(c.forum_name,g.forum_channel_id) forum_display_name,"
+               "t.status run_status,t.phase run_phase,t.scan_processed,t.scan_discovered,t.completed run_completed,t.total run_total,"
+               "t.recent_speed,t.heartbeat_at run_heartbeat,t.message run_message,t.active_bots,t.scan_cursor run_cursor "
+               "FROM guild_sync g LEFT JOIN download_configs c ON c.id=g.config_id LEFT JOIN servers s ON s.server_id=g.guild_id "
+               "LEFT JOIN download_tasks t ON t.id=g.current_run_id WHERE COALESCE(c.enabled,0)=1")
+        args = ()
+        if level != 1:
+            sql += " AND g.owner_user_id=?"; args = (uid,)
+        return [dict(r) for r in p.execute(sql + " ORDER BY g.id", args).fetchall()]
+    except Exception:
+        return []
+
+
+@bp.route("/admin/guild-sync/status")
+@login_required
+@admin_required
+def admin_guild_sync_status():
+    p = get_portal_db(); uid = str(session["user"]["id"]); level = admin_level(uid)
+    return jsonify({"ok": True, "now": utc_now_iso(), "syncs": _sync_rows(p, uid, level)})
+
+
+@bp.route("/admin/guild-sync/<int:sync_id>/<action>", methods=["POST"])
+@login_required
+@admin_required
+def admin_guild_sync_action(sync_id, action):
+    p = get_portal_db(); uid = str(session["user"]["id"]); level = admin_level(uid)
+    row = p.execute("SELECT * FROM guild_sync WHERE id=?", (sync_id,)).fetchone()
+    if not row or (level != 1 and str(row["owner_user_id"]) != uid):
+        return jsonify({"ok": False, "error": "forbidden"}), 403
+    nowv = utc_now_iso()
+    if action == "pause":
+        p.execute("UPDATE guild_sync SET paused=1,state='paused',updated_at=? WHERE id=?", (nowv, sync_id))
+    elif action == "resume":
+        p.execute("UPDATE guild_sync SET paused=0,state=CASE WHEN backfill_done=1 THEN 'live' ELSE 'backfilling' END,next_retry_at=NULL,updated_at=? WHERE id=?", (nowv, sync_id))
+    elif action == "restart":
+        p.execute("UPDATE guild_sync SET restart_requested=1,updated_at=? WHERE id=?", (nowv, sync_id))
+    else:
+        return jsonify({"ok": False, "error": "unknown action"}), 400
+    p.commit(); ensure_downloader_process()
+    app.logger.info("guild sync action=%s sync=%s by=%s", action, sync_id, uid)
+    return jsonify({"ok": True})

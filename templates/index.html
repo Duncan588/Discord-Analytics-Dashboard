@@ -47,7 +47,7 @@
 </section>
 
 <section class="grid g-main" style="margin-top:var(--space-4)">
-  <div class="card">
+  <div class="card trend-card">
     <div class="card-head">
       <h2 class="h-card">{{ t("home.trend") }}</h2>
       <div class="row wrap">
@@ -64,6 +64,37 @@
     </div>
     <p id="dixo-trend-status" class="faint" style="font-size:12px;margin:0 0 8px"></p>
     <div class="chart"><div x-show="mode==='daily'" style="height:100%"><canvas id="chartDaily" aria-label="daily"></canvas></div><div x-show="mode==='hourly'" x-cloak style="height:100%"><canvas id="chartHourly" aria-label="hourly"></canvas></div></div>
+    {% if member_status or msg_concentration %}
+    <div class="trend-sub"><div class="sub-cols">
+    {% if member_status %}{% set ms_total = member_status.in + member_status.left + member_status.deleted %}
+    <div class="sub-col">
+      <div class="eyebrow" style="margin-bottom:8px">{{ t("home.member_status") }}</div>
+      <div class="ms-wrap">
+        <div class="ms-donut"><canvas id="chartMemberStatus" aria-label="member status"></canvas>
+          <div class="ms-center"><div class="ms-total mono">{{ ms_total }}</div><div class="faint">{{ t("home.member_status.total") }}</div></div></div>
+        <ul class="ms-legend">
+          {% for key, label, color in [("in","home.member_status.in","#2997ff"),("left","home.member_status.left","#ff9f0a"),("deleted","home.member_status.deleted","#8e8e93")] %}
+          <li><span class="ms-dot" style="background:{{ color }}"></span><span class="ms-lbl">{{ t(label) }}</span>
+            <span class="mono ms-num">{{ member_status[key] }}</span><span class="mono faint ms-pct">{{ '%.1f'|format(100.0*member_status[key]/ms_total) }}%</span></li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>{% endif %}
+    {% if msg_concentration %}{% set mc = msg_concentration %}
+    <div class="sub-col">
+      <div class="eyebrow" style="margin-bottom:8px">{{ t("home.conc") }}</div>
+      <div class="ms-wrap">
+        <div class="ms-donut"><canvas id="chartConc" aria-label="message concentration"></canvas>
+          <div class="ms-center"><div class="ms-total mono">{{ mc.total|compact }}</div><div class="faint">{{ t("home.conc.total") }}</div></div></div>
+        <ul class="ms-legend">
+          {% for key, label, color in [("top1","home.conc.top1","#bf5af2"),("top2_10","home.conc.top10","#2997ff"),("top11_100","home.conc.top100","#64d2ff"),("rest","home.conc.rest","#8e8e93")] %}
+          <li><span class="ms-dot" style="background:{{ color }}"></span><span class="ms-lbl">{{ t(label) }}</span>
+            <span class="mono ms-num">{{ mc[key]|compact }}</span><span class="mono faint ms-pct">{{ '%.1f'|format(100.0*mc[key]/mc.total) }}%</span></li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>{% endif %}
+    </div></div>{% endif %}
   </div>
   <div class="card">
     <div class="card-head"><h2 class="h-card">{{ t("home.leaderboard") }}</h2><a href="#" @click.prevent="openBoard()">{{ t("home.leaderboard.all") }} ›</a></div>
@@ -218,5 +249,5 @@
 {% endblock %}
 
 {% block scripts %}
-<script type="application/json" id="dixo-home-data">{{ {"chart_daily": chart_daily, "chart_hourly": chart_hourly} | tojson }}</script>
+<script type="application/json" id="dixo-home-data">{{ {"chart_daily": chart_daily, "chart_hourly": chart_hourly, "member_status": member_status|default(none), "msg_concentration": msg_concentration|default(none)} | tojson }}</script>
 {% endblock %}

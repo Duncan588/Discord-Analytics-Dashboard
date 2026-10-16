@@ -45,12 +45,16 @@
 | 🧭 **成员活跃分层** | 一贯活跃 / 消失后回归 / 活跃后消失 / 几乎不活跃 / 近两月新活跃；按「最后一次发言」计算沉默月数，全历史月度堆叠图 + 分页全员名单（按消息数排序），用于留存盘点与清理 | Always active / returned / faded / rare / new, measured from the *last* message; full-history monthly stacked chart and paginated member lists (sorted by message count) for retention reviews and cleanup |
 | 👤 **成员主页** | 发言、获赞、送出反应、发帖、活跃天数，发帖/发言记录（最新·最热），互动对象、个人词云；首屏走汇总表，重内容异步加载 | Messages, reactions received/given, threads, active days; thread/message history (newest·hottest), interaction partners and personal word cloud; summary-table first paint, heavy parts filled async |
 | ⭐ **收藏 / 拉黑** | 收藏帖子、拉黑成员，在主页分页管理 | Favourite threads and block members, managed with pagination on the profile |
-| 🔄 **持续下载轮询** | 多 Bot 并行导出（DiscordChatExporter），首轮全量后常驻轮询新帖/新回复/反应，未变化帖子自动跳过；扫描游标与帖子级状态持久化，可暂停续传 | Multi-bot parallel export via DiscordChatExporter; after the first full pass it keeps polling for new threads/replies/reactions and skips unchanged threads; scan cursor and per-thread state persisted for pause/resume |
+| 🔄 **服务器统一同步** | 每个服务器一条常驻同步：自动回填全部历史（断点续扫）→ 转入持续增量；实时消息由网关写入。任何失败（网络重置、截断响应、崩溃、重启）都会从断点按指数退避自动重试，永不停止；只有连续失败超过 30 分钟或回填完成时才通知。多 Bot 并行导出（DiscordChatExporter），未变化帖子自动跳过 | One continuous sync per guild: automatic full-history backfill (checkpointed), then ongoing incremental sync; live messages come from the gateway. Any failure auto-retries from checkpoint with exponential backoff, forever; notifications only after 30 min of persistent failure or when backfill completes |
 | 🤖 **AI 只读 API** | Bearer Token 保护的 `/api/ai/v1`：成员、消息、帖子、全文搜索，以及**单个成员发言历史的 Markdown 导出**，方便喂给 LLM 做人设/总结 | Bearer-token `/api/ai/v1`: members, messages, threads, full-text search and **per-member Markdown export** of message history for LLM personas/summaries |
 | 🌗 **浅色 / 深色** | 一键切换并记忆；中英双语界面；统一紧凑数字（1.2K、5M、1B） | One-tap theme toggle (remembered), zh/en UI, compact numbers (1.2K, 5M, 1B) |
 | 📱 **Discord Activity** | Embedded App SDK 自动登录；手机端安全区适配、点击区域修正、服务器选择服务端记忆 | Embedded App SDK auto-login; mobile safe-area insets, fixed tap targets, server choice remembered server-side |
 | ⚡ **性能** | 增量 `summary.db`（影子重建 + 原子替换，重建期间显示上次正确值）、水位缓存、精简索引；百万级消息首页亚秒级 | Incremental `summary.db` (shadow rebuild + atomic swap, last-good KPIs during rebuilds), watermark caches, lean indexes; sub-second home page on millions of messages |
 | 🛡️ **管理后台** | 白名单与配额、下载 Bot、服务器配置、下载任务、成员同步、账号合并 | Whitelist & quotas, download bots, server configs, tasks, member sync, account merges |
+| 👥 **成员状态** | 首页环形图 + 排行/成员页徽章：在群 / 已退群 / 已销号（网关 join/leave 实时更新，定期全量校准） | Home donut and badges: in guild / left / deleted, kept live from gateway join/leave events |
+| 📊 **发言集中度** | Top 1 / Top 10 / Top 100 / 其余成员的消息占比环形图 | Donut of message share for top 1 / 10 / 100 vs everyone else |
+| 🚫 **全局黑名单** | 一级管理员维护；黑名单成员在所有页面、统计、洞察与 AI/MCP 接口中隐藏 | Level-1 admins maintain a global blacklist hidden from every page, stat, insight and API |
+| ☁️ **Cloudflare R2 备份** | 后台查看 restic → R2 备份状态、快照、日志与已用/剩余空间；可测试凭证、立即备份、轮换密钥（只显示掩码） | Admin card for restic→R2 backups: status, snapshots, logs, space used/left; test creds, run now, rotate keys (masked only) |
 
 ---
 
@@ -64,6 +68,15 @@
 | 首页 Home | ![](docs/images/home-light-desktop.png) | ![](docs/images/home-dark-desktop.png) |
 | 深度分析 Analytics | ![](docs/images/analytics-light-desktop.png) | ![](docs/images/analytics-dark-desktop.png) |
 | 成员主页 Profile | ![](docs/images/profile-light-desktop.png) | ![](docs/images/profile-dark-desktop.png) |
+
+| 社区洞察 Insights | 后台 · 服务器同步 Admin guild sync |
+| --- | --- |
+| ![](docs/images/insights-light-desktop.png) | ![](docs/images/admin-guild-sync.png) |
+
+<p align="center"><img src="docs/images/admin-r2-backup.png" width="48%" alt="Cloudflare R2 backup card"></p>
+
+> 首页（浅色）已更新为 v1.3：活跃趋势下方新增「成员状态」与「发言集中度」两张环形图。后台截图中的密钥、账号 ID 均已打码。
+> The light home screenshot shows v1.3's member-status and message-concentration donuts. Keys and account IDs in admin screenshots are masked.
 
 <p align="center">
   <img src="docs/images/home-light-mobile.png" width="19%" alt="">
@@ -101,8 +114,10 @@ venv/bin/python app.py
    Put the code + venv on the server and set `PUBLIC_BASE_URL` (HTTPS) in `.env`.
 2. 用 systemd 运行 `venv/bin/python app.py`，前面挂 nginx 反向代理。
    Run `venv/bin/python app.py` under systemd behind an nginx reverse proxy.
-3. 在管理后台添加下载 Bot、服务器 Forum 配置并开启「持续更新」，下载器会常驻轮询。
-   In the admin console add download bots and a forum config with *update enabled*; the downloader then polls continuously.
+3. 在管理后台添加下载 Bot 和服务器 Forum 配置即可：下载器会自动为它创建一条「服务器同步」，先回填全部历史，再持续增量同步，无需手动建任务。进度、重试、暂停/继续/从断点重启都在后台「🔄 服务器同步」卡片（详见 docs/guild-sync.md）。
+   In the admin console add download bots and a forum config. The downloader creates a *guild sync* automatically: full-history backfill, then continuous incremental sync, no manual tasks. Progress, retries and pause/resume/restart-from-checkpoint live in the admin "🔄 服务器同步" card (see docs/guild-sync.md).
+   - 可调环境变量 / tunables: `SYNC_LIVE_INTERVAL_SEC`（增量间隔，默认 900）、`SYNC_MAX_BACKOFF_SEC`（最大退避，默认 1800）、`SYNC_NOTIFY_FAIL_SEC`（持续失败多久才通知，默认 1800）。
+   - 升级旧部署时，同一论坛的旧下载任务会被归档隐藏（数据保留），最新未完成任务的断点由同步接管。On upgrade, old task rows are archived (data kept) and the newest unfinished task's checkpoint is adopted.
 4. （可选）Discord Activity：在 [Discord 开发者平台](https://discord.com/developers/applications) 启用 Activities，配置 URL Mapping（`/` → 你的 `PUBLIC_BASE_URL` 域名）与 OAuth2 回调。
    (Optional) Discord Activity: enable Activities, URL Mapping (`/` → your `PUBLIC_BASE_URL` host) and OAuth2 in the Developer Portal.
 
@@ -110,6 +125,13 @@ venv/bin/python app.py
 > Large DBs: `VACUUM` needs free disk roughly equal to the DB size; summaries rebuild in the background while the last-good values stay on screen.
 
 ---
+
+### R2 备份（可选）/ R2 backup (optional)
+
+1. 在 Cloudflare 创建 R2 bucket 和 R2 API Token（Access Key ID + Secret）。Create an R2 bucket and an R2 API token.
+2. 安装 `restic`，并配置每日备份的 systemd timer（`db-backup.service` / `db-backup.timer`，日志写入 `/var/log/db-backup.log`）。Install restic and a daily systemd timer.
+3. 在后台「☁️ Cloudflare 备份」卡片的「轮换 R2 / restic 凭证」里填 Access Key、Secret、restic 密码（可选填 CF API Token 显示官方用量）。会写入 `/root/.config/r2-backup.env` 和 `restic-r2.pass`（权限 600）。仓库地址 `RESTIC_REPOSITORY=s3:https://<CF_ACCOUNT_ID>.r2.cloudflarestorage.com/<bucket>` 也可以预先写入该文件。
+   Enter the keys in the admin R2 card; they are written to `/root/.config/r2-backup.env` (600). Set `RESTIC_REPOSITORY` there or via env.
 
 ## 配置 / Configuration
 

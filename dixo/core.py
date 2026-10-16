@@ -366,6 +366,28 @@ def log_request_end(response):
 def db_connect(path):
     return connect_sqlite(path)
 
+from shared import blacklist as _blacklist
+from shared import member_status as _member_status
+
+def db_connect_read(path):
+    """Read-side connection with global-blacklist TEMP VIEWs (never use for writes to users/messages/...)."""
+    conn = connect_sqlite(path)
+    return _blacklist.apply(conn, _blacklist.kind_for_path(path))
+
+def invalidate_blacklist_caches():
+    _blacklist.invalidate()
+    for fn in (lambda: summary_engine._memo.clear(), lambda: profile_engine._mem.clear(),
+               lambda: _REPORT_CACHE.clear()):
+        try:
+            fn()
+        except Exception:
+            pass
+    try:
+        from dixo import dashboard_data as _dd
+        _dd._BUNDLE_CACHE.clear()
+    except Exception:
+        pass
+
 def db_file_signature(path):
     """数据库文件的 (mtime_ns, size)。
 
@@ -451,7 +473,7 @@ def get_db():
         path = server_db_path(sid)
         if not server_db_exists(sid):
             raise ServerDataNotFoundError("服务器数据不存在")
-        g.analytics_db = db_connect(path)
+        g.analytics_db = db_connect_read(path)
     return g.analytics_db
 
 @app.teardown_appcontext
@@ -884,7 +906,7 @@ def _after_summary_refresh(sid):
         res = dixo_search.refresh(server_db_path(sid), budget_seconds=20)
         app.logger.info("search.refresh sid=%s %s", sid, res)
 
-summary_engine = SummaryEngine(server_db_path, db_connect, cloud_enabled, app.logger, after_refresh=_after_summary_refresh)
+summary_engine = SummaryEngine(server_db_path, db_connect_read, cloud_enabled, app.logger, after_refresh=_after_summary_refresh)
 
 profile_engine = DixoProfileEngine(summary_engine, app.logger)
 
@@ -1640,7 +1662,7 @@ def _list_servers_for_ai():
 _api_ctx = SimpleNamespace(
     server_required=server_required, get_db=get_db, current_server_id=current_server_id,
     summary_engine=summary_engine, profile_engine=profile_engine, merged_ids=data_engine.get_merged_ids,
-    server_db_path=server_db_path, server_db_exists=server_db_exists, connect=db_connect,
+    server_db_path=server_db_path, server_db_exists=server_db_exists, connect=db_connect_read,
     list_servers=_list_servers_for_ai,
     export_root=lambda gid: os.path.join(BASE_DIR, "data", "exports", str(gid), "members"),
 )
@@ -1699,7 +1721,7 @@ def start_background_services():
         app.logger.info("服务未启动 name=whitelist_bot：DISCORD_BOT_TOKEN 为空")
     try:
         conn=db_connect(PORTAL_DB)
-        row=conn.execute("SELECT 1 FROM download_tasks WHERE status IN ('pending','running') AND delete_requested=0 LIMIT 1").fetchone()
+        row=conn.execute("SELECT 1 FROM download_tasks WHERE status IN ('pending','running') AND delete_requested=0 LIMIT 1").fetchone() or conn.execute("SELECT 1 FROM download_configs WHERE enabled=1 LIMIT 1").fetchone()
         conn.close()
         # 实时数据由 whitelist_bot 网关监听写入；下载器只在有任务（手动/上线补齐）时运行。
         if row:
@@ -1712,6 +1734,8 @@ def start_background_services():
 def _has_active_download_tasks():
     conn = db_connect(PORTAL_DB)
     try:
+        if conn.execute("SELECT 1 FROM download_configs WHERE enabled=1 LIMIT 1").fetchone():
+            return True  # 服务器同步常驻：有启用的配置就保持下载器运行
         return bool(conn.execute(
             "SELECT 1 FROM download_tasks WHERE status IN ('pending','running') AND delete_requested=0 LIMIT 1"
         ).fetchone())
@@ -1785,3 +1809,48 @@ def restart_application(signum, frame):
         except OSError:
             pass
     os.execv(sys.executable, [sys.executable, APP_ENTRY])
+
+
+# ---- 全局黑名单 + 成员状态（退群/销号标记）----
+_BL_EXEMPT_PREFIX = ("/admin", "/static", "/login", "/logout", "/auth", "/callback")
+
+
+@app.before_request
+def _blacklist_guard():
+    """Any page/API addressing a blacklisted user id directly -> 404 (admin pages exempt)."""
+    if request.path.startswith(_BL_EXEMPT_PREFIX):
+        return None
+    bl = _blacklist.ids()
+    if not bl:
+        return None
+    segs = [s for s in request.path.split("/") if s.isdigit()]
+    vals = segs + [v for k in ("user_id", "uid", "author", "author_id", "user") for v in request.args.getlist(k)]
+    if any(str(v).strip() in bl for v in vals):
+        if request.path.startswith("/api/"):
+            return jsonify(ok=False, error="not found"), 404
+        return "Not Found", 404
+    return None
+
+
+@app.after_request
+def _blacklist_scrub_json(response):
+    try:
+        if (response.mimetype == "application/json" and response.status_code == 200
+                and not request.path.startswith("/admin") and _blacklist.ids()
+                and not response.direct_passthrough and response.headers.get("Content-Encoding") is None):
+            data = json.loads(response.get_data(as_text=True) or "null")
+            clean = _blacklist.scrub(data)
+            if clean != data:
+                response.set_data(json.dumps(clean, ensure_ascii=False))
+    except Exception:
+        app.logger.exception("blacklist scrub failed path=%s", request.path)
+    return response
+
+
+@app.route("/api/v1/member-status")
+@server_required
+def api_member_status():
+    ids = [i for i in (request.args.get("ids") or "").split(",") if i.strip().isdigit() and i.strip() not in _blacklist.ids()][:500]
+    m = _member_status.status_map(get_db(), ids)
+    return jsonify(ok=True, data={k: dict(v, label=_member_status.LABELS[v["status"]]) for k, v in m.items()
+                                  if v["status"] != "member"})

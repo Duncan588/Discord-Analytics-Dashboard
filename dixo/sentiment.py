@@ -69,6 +69,9 @@ def connect(path, readonly=False):
         c.execute("PRAGMA journal_mode=WAL")
         c.executescript(SCHEMA)
     c.row_factory = sqlite3.Row
+    if readonly:
+        from shared import blacklist
+        blacklist.apply(c, "sentiment")
     return c
 
 

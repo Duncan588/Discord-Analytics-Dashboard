@@ -32,6 +32,75 @@
 </div>
 
 {% if admin_level == 1 %}
+<section class="card admin-sec" id="blacklist">
+  <div class="card-head">
+    <div><h2 class="h-card">🚫 全局黑名单</h2><div class="card-sub">名单内用户的所有数据（成员列表、搜索、个人页、排行、关系网、群梗、月报、AI/MCP）全部隐藏，任何人都查不到。</div></div>
+  </div>
+  <form method="post" action="/admin/blacklist/add" class="admin-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input name="user_id" required pattern="[0-9]+" class="field" placeholder="Discord User ID">
+    <input name="note" class="field" placeholder="备注（可选）" maxlength="200">
+    <button class="btn btn-danger" type="submit">加入黑名单</button>
+  </form>
+  <div>
+    {% for b in blacklist %}
+    <div class="admin-item">
+      <div class="min0"><b>{{ b.name or "未知用户" }}</b> <span class="mono faint" style="font-size:12px">{{ b.user_id }}</span>{% if b.note %} <span class="faint" style="font-size:12px">· {{ b.note }}</span>{% endif %} <span class="faint" style="font-size:12px">· {{ b.created_at }}</span></div>
+      <div class="actions">
+        <form method="post" action="/admin/blacklist/delete/{{ b.user_id }}" onsubmit="return confirm('确定把 {{ b.user_id }} 移出黑名单？移出后其数据会重新显示。')">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <button class="btn btn-ghost" type="submit">移出</button>
+        </form>
+      </div>
+    </div>
+    {% else %}<div class="empty">黑名单为空</div>{% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<section class="card admin-sec" id="guild-sync">
+  <div class="card-head">
+    <div>
+      <h2 class="h-card">🔄 服务器同步</h2>
+      <div class="card-sub">每个服务器一个常驻同步：先回填全部历史，再持续增量；失败自动从断点退避重试。每 5 秒刷新。</div>
+    </div>
+  </div>
+  <div id="guild-sync-list" class="stack" style="gap:14px"><div class="empty">正在加载…</div></div>
+</section>
+
+{% if admin_level == 1 %}
+<section class="card admin-sec" id="r2-backup">
+  <div class="card-head">
+    <div>
+      <h2 class="h-card">☁️ Cloudflare 备份</h2>
+      <div class="card-sub">R2 + restic 数据库备份状态。密钥只显示掩码；完整 Secret / restic 密码不会出现在页面或接口里。</div>
+    </div>
+    <div class="row" style="gap:8px;flex-wrap:wrap">
+      <button type="button" class="btn btn-ghost" id="r2-refresh">刷新状态</button>
+      <button type="button" class="btn btn-ghost" id="r2-test">测试凭证</button>
+      <button type="button" class="btn btn-primary" id="r2-run">立即备份</button>
+    </div>
+  </div>
+  <div id="r2-status" class="stack" style="gap:14px">
+    <div class="empty">正在加载备份状态…</div>
+  </div>
+  <details style="margin-top:var(--space-4)">
+    <summary style="cursor:pointer;font-weight:600">轮换 R2 / restic 凭证</summary>
+    <form id="r2-creds-form" class="admin-form" style="margin-top:var(--space-3)">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input name="access_key_id" required class="field" placeholder="R2 Access Key ID" autocomplete="off">
+      <input name="secret_access_key" required class="field" type="password" placeholder="R2 Secret Access Key" autocomplete="new-password">
+      <input name="restic_password" class="field" type="password" placeholder="restic 仓库密码（留空则不改）" autocomplete="new-password">
+      <input name="cf_api_token" class="field" type="password" placeholder="CF API Token（可选，用于账户用量）" autocomplete="new-password">
+      <button class="btn btn-danger" type="submit">保存凭证</button>
+    </form>
+    <p class="hint">写入 <code>/root/.config/r2-backup.env</code> 与可选的 <code>restic-r2.pass</code>；权限 600。不会在日志里打印密钥。</p>
+  </details>
+</section>
+{% endif %}
+
+
+{% if admin_level == 1 %}
 <section class="card admin-sec">
   <div class="card-head">
     <div><h2 class="h-card">{{ t("admin.wl") }}</h2><div class="card-sub">{{ t("admin.wl_hint") }}</div></div>

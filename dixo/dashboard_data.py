@@ -233,7 +233,24 @@ def homepage(main, summ):
     data["top_users"] = lb[:10]
     data["top_threads"] = top_threads(main, summ, 10)
     data["top_hot_msgs"] = hot_messages(main, summ, 10)
+    data["msg_concentration"] = msg_concentration(summ)
     return data
+
+
+def msg_concentration(summ):
+    """Share of all messages from top1 / top2-10 / top11-100 / rest (summary user_stats, blacklist excluded)."""
+    try:
+        from shared import blacklist as _bl
+        bl = set(_bl.ids() or ())
+        counts = [r[1] or 0 for r in summ.execute("SELECT user_id,msg_count FROM user_stats WHERE msg_count>0 ORDER BY msg_count DESC")
+                  if str(r[0]) not in bl]
+    except Exception:
+        return None
+    total = sum(counts)
+    if not total:
+        return None
+    t1, t10, t100 = sum(counts[:1]), sum(counts[:10]), sum(counts[:100])
+    return {"total": total, "users": len(counts), "top1": t1, "top2_10": t10 - t1, "top11_100": t100 - t10, "rest": total - t100}
 
 
 # ---------------- profile ----------------

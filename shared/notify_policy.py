@@ -20,6 +20,12 @@ def should_notify_start(task):
 
 def should_notify_finish(task, prev_same_forum_status=None):
     """prev_same_forum_status: status of the previous task for the same guild/forum."""
+    try:
+        if task["sync_id"]:
+            # 服务器同步的 run：失败会自动重试，完成/持续失败由同步调度器自己通知。
+            return False
+    except (KeyError, IndexError, TypeError):
+        pass
     if not is_auto_poll(task):
         return True
     if task["status"] != "failed":

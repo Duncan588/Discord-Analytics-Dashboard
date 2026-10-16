@@ -208,3 +208,255 @@
     document.addEventListener("dixo:lang", relabelStatic);
   });
 })();
+
+/* Cloudflare R2 backup admin panel (level-1). Appended into dixo-admin.js boot. */
+(function () {
+  "use strict";
+  var box = document.getElementById("r2-status");
+  if (!box) return;
+  var CSRF = window.DIXO_ADMIN_CSRF || "";
+
+  function esc(value) {
+    return String(value == null ? "" : value).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function fmtUtc(iso) {
+    if (!iso) return "—";
+    try {
+      var d = new Date(iso);
+      if (isNaN(d.getTime())) return esc(iso);
+      // Asia/Shanghai display
+      return d.toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }) + " CST";
+    } catch (e) {
+      return esc(iso);
+    }
+  }
+
+  function badge(health) {
+    var map = {
+      ok: ["badge", "正常"],
+      running: ["badge warn", "备份中"],
+      failed: ["badge warn", "最近失败"],
+      unconfigured: ["badge warn", "未配置"],
+      unknown: ["badge", "未知"]
+    };
+    var x = map[health] || map.unknown;
+    return '<span class="' + x[0] + '">' + esc(x[1]) + "</span>";
+  }
+
+  function kv(label, value) {
+    return '<div class="admin-item"><div class="min0"><span class="faint">' + esc(label) +
+      '</span><div style="margin-top:2px">' + value + "</div></div></div>";
+  }
+
+  function render(data) {
+    if (!data) {
+      box.innerHTML = '<div class="empty">无数据</div>';
+      return;
+    }
+    var c = data.credentials || {};
+    var log = data.log || {};
+    var sch = data.schedule || {};
+    var st = data.storage || {};
+    var snaps = (data.snapshots && data.snapshots.snapshots) || [];
+    var snapErr = data.snapshots && !data.snapshots.ok ? data.snapshots.error : null;
+
+    var html = "";
+    html += '<div class="row between" style="gap:8px;flex-wrap:wrap"><div class="row" style="gap:8px;align-items:center">' +
+      badge(data.health) +
+      '<span class="faint" style="font-size:12px">更新于 ' + esc(fmtUtc(data.generated_at)) +
+      (data.cached ? " · 缓存" : "") + "</span></div></div>";
+
+    html += '<div class="sub-card"><div class="card-sub" style="margin-bottom:8px">备份状态</div>';
+    html += kv("上次成功", esc(fmtUtc(log.last_ok)) + (log.last_ok_duration_s != null ? ' <span class="faint">（' + esc(log.last_ok_duration_s) + "s）</span>" : ""));
+    html += kv("上次开始", esc(fmtUtc(log.last_start)));
+    html += kv("上次失败", log.last_fail ? (esc(fmtUtc(log.last_fail)) + (log.last_fail_detail ? ' <span class="faint">' + esc(log.last_fail_detail) + "</span>" : "")) : "—");
+    html += kv("下次计划", esc(sch.next_run || sch.calendar || "—"));
+    html += kv("systemd", 'timer=' + esc(sch.timer_active || "?") + ' · service=' + esc(sch.service_active || "?") +
+      (sch.running ? ' <span class="badge warn">运行中</span>' : ""));
+    html += kv("保留策略", esc(sch.prune_policy || ""));
+    html += "</div>";
+
+    html += '<div class="sub-card"><div class="card-sub" style="margin-bottom:8px">凭证（掩码）</div>';
+    html += kv("Access Key ID", '<span class="mono">' + esc(c.access_key_id_masked || "未配置") + "</span>");
+    html += kv("Secret Access Key", c.secret_configured ? '<span class="badge">已配置</span>' : '<span class="badge warn">未配置</span>');
+    html += kv("restic 密码", c.restic_password_configured ? '<span class="badge">已配置</span>' : '<span class="badge warn">未配置</span>');
+    html += kv("仓库", '<span class="mono" style="font-size:12px;word-break:break-all">' + esc(c.repository || "—") + "</span>");
+    html += kv("桶 / Account", esc(c.bucket || "—") + ' · <span class="mono">' + esc(c.account_id || "—") + "</span>");
+    html += kv("CF API Token", c.cf_api_token_configured ? '<span class="badge">已配置</span>' : '<span class="faint">未配置（用量走 S3/restic）</span>');
+    html += "</div>";
+
+    html += '<div class="sub-card"><div class="card-sub" style="margin-bottom:8px">Cloudflare 空间</div>';
+    html += kv("已用", esc(st.used_human || "—") + (st.object_count != null ? ' <span class="faint">· ' + esc(st.object_count) + " 对象</span>" : ""));
+    html += kv("剩余（相对免费额度）", esc(st.remaining_human || "—") + (st.used_pct != null ? ' <span class="faint">· 已用 ' + esc(st.used_pct) + "%</span>" : ""));
+    html += kv("额度说明", esc(st.quota_label || "") + (st.note ? '<div class="hint">' + esc(st.note) + "</div>" : ""));
+    if (st.used_pct != null) {
+      var pct = Math.min(100, Math.max(0, Number(st.used_pct)));
+      html += '<div style="height:8px;background:var(--hairline);border-radius:99px;overflow:hidden;margin-top:8px"><div style="height:100%;width:' +
+        pct + '%;background:var(--color-primary)"></div></div>';
+    }
+    html += "</div>";
+
+    html += '<div class="sub-card"><div class="card-sub" style="margin-bottom:8px">最近快照（' +
+      esc((data.snapshots && data.snapshots.count) || snaps.length) + "）</div>";
+    if (snapErr) {
+      html += '<div class="empty">' + esc(snapErr) + "</div>";
+    } else if (!snaps.length) {
+      html += '<div class="empty">暂无快照</div>';
+    } else {
+      snaps.forEach(function (s) {
+        html += '<div class="admin-item"><div class="min0"><b class="mono">' + esc(s.id) + "</b> · " +
+          esc(fmtUtc(s.time)) + ' <span class="faint">' + esc((s.tags || []).join(", ")) +
+          "</span></div></div>";
+      });
+    }
+    html += "</div>";
+
+    if (log.recent_lines && log.recent_lines.length) {
+      html += '<details><summary style="cursor:pointer;font-weight:600">最近日志</summary><pre class="mono" style="font-size:11px;white-space:pre-wrap;max-height:220px;overflow:auto;margin-top:8px">' +
+        esc(log.recent_lines.join("\n")) + "</pre></details>";
+    }
+    box.innerHTML = html;
+  }
+
+  async function load(force) {
+    box.innerHTML = '<div class="empty">正在加载备份状态…</div>';
+    try {
+      var r = await fetch("/admin/r2-backup/status" + (force ? "?force=1" : ""), {
+        cache: "no-store",
+        credentials: "same-origin"
+      });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      render(await r.json());
+    } catch (e) {
+      box.innerHTML = '<div class="empty">加载失败：' + esc(e.message || e) + "</div>";
+    }
+  }
+
+  async function post(url, body) {
+    var opts = {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": CSRF, "Content-Type": "application/json" }
+    };
+    if (body !== undefined) opts.body = JSON.stringify(body);
+    var r = await fetch(url, opts);
+    var data = null;
+    try { data = await r.json(); } catch (e) { data = { ok: false, error: "HTTP " + r.status }; }
+    return { status: r.status, data: data };
+  }
+
+  var btnRefresh = document.getElementById("r2-refresh");
+  var btnTest = document.getElementById("r2-test");
+  var btnRun = document.getElementById("r2-run");
+  var form = document.getElementById("r2-creds-form");
+
+  if (btnRefresh) btnRefresh.addEventListener("click", function () { load(true); });
+  if (btnTest) btnTest.addEventListener("click", async function () {
+    btnTest.disabled = true;
+    try {
+      var res = await post("/admin/r2-backup/test", {});
+      if (res.data && res.data.ok) {
+        var t = res.data.latest ? (res.data.latest.id + " @ " + (res.data.latest.time || "")) : "无快照";
+        alert("凭证可用。最新快照：" + t);
+      } else {
+        alert("测试失败：" + ((res.data && res.data.error) || res.status));
+      }
+    } finally {
+      btnTest.disabled = false;
+      load(true);
+    }
+  });
+  if (btnRun) btnRun.addEventListener("click", async function () {
+    if (!confirm("确定立刻开始一次数据库备份？可能需要数分钟。")) return;
+    btnRun.disabled = true;
+    try {
+      var res = await post("/admin/r2-backup/run", {});
+      if (res.data && res.data.ok) alert(res.data.message || "已触发");
+      else alert("触发失败：" + ((res.data && res.data.error) || res.status));
+    } finally {
+      btnRun.disabled = false;
+      load(true);
+    }
+  });
+  if (form) form.addEventListener("submit", async function (ev) {
+    ev.preventDefault();
+    if (!confirm("确定写入新的 R2 凭证？旧密钥会被覆盖。")) return;
+    var fd = new FormData(form);
+    var body = {
+      access_key_id: fd.get("access_key_id"),
+      secret_access_key: fd.get("secret_access_key"),
+      restic_password: fd.get("restic_password") || "",
+      cf_api_token: fd.get("cf_api_token") || ""
+    };
+    var res = await post("/admin/r2-backup/creds", body);
+    if (res.data && res.data.ok) {
+      alert("已保存：" + (res.data.access_key_id_masked || ""));
+      form.reset();
+      load(true);
+    } else {
+      alert("保存失败：" + ((res.data && res.data.error) || res.status));
+    }
+  });
+
+  load(false);
+})();
+
+/* ---- 服务器同步卡片 ---- */
+(function () {
+  var box = document.getElementById("guild-sync-list");
+  if (!box) return;
+  var CSRF = window.DIXO_ADMIN_CSRF || "";
+  var LABEL = { backfilling: ["回填历史", "#3b82f6"], live: ["实时同步", "#16a34a"], retrying: ["重试中", "#f59e0b"], paused: ["已暂停", "#6b7280"], error: ["错误", "#dc2626"] };
+  function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]; }); }
+  function fmt(t) { if (!t) return "—"; var d = new Date(t); if (isNaN(d)) return esc(t); return d.toLocaleString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" }); }
+  function ago(t) { if (!t) return "—"; var s = (Date.now() - new Date(t).getTime()) / 1000; if (isNaN(s)) return "—"; if (s < 60) return Math.round(s) + " 秒前"; if (s < 3600) return Math.round(s / 60) + " 分钟前"; return Math.round(s / 3600) + " 小时前"; }
+  function n(x) { return (x || 0).toLocaleString("zh-CN"); }
+  function card(g) {
+    var st = LABEL[g.state] || [g.state || "?", "#6b7280"];
+    var running = g.run_status === "running";
+    var phase = g.run_kind === "backfill" ? "历史回填" : (g.run_kind === "live" ? "增量扫描" : "等待下一轮");
+    if (g.run_phase) phase += " · " + esc(g.run_phase);
+    var oldest = g.backfill_done ? "已到最早（" + fmt(g.backfill_done_at) + " 完成）" : (g.oldest_reached || g.run_cursor ? fmt(g.run_cursor || g.oldest_reached) : "—");
+    var rows = [
+      ["当前阶段", phase],
+      ["本轮进度", "已扫描 " + n(g.scan_processed) + " · 已下载 " + n(g.run_completed) + "/" + n(g.run_total)],
+      ["已回填到", oldest],
+      ["累计导入", n(g.threads_done) + " 帖 · " + n(g.messages_ingested) + " 条消息"],
+      ["速率", (g.recent_speed ? (+g.recent_speed).toFixed(1) : "0") + " 帖/分钟 · 机器人 " + (g.active_bots || 0)],
+      ["最后心跳", running ? ago(g.run_heartbeat) + "（" + fmt(g.run_heartbeat) + "）" : fmt(g.updated_at)],
+      ["重试", (g.retry_count || 0) + " 次" + (g.next_retry_at ? " · 下次 " + fmt(g.next_retry_at) : "")],
+      ["下次增量", g.backfill_done ? fmt(g.next_live_at) : "回填完成后开始"]
+    ];
+    var h = '<div class="admin-task" style="border-left:4px solid ' + st[1] + '">';
+    h += '<div class="row between" style="flex-wrap:wrap;gap:8px"><div><b>' + esc(g.server_display_name) + '</b> <span class="muted">' + esc(g.forum_display_name) + '</span> ' +
+      '<span style="background:' + st[1] + ';color:#fff;border-radius:999px;padding:2px 10px;font-size:12px;margin-left:6px">' + st[0] + '</span></div>';
+    h += '<div class="row" style="gap:6px">' +
+      (g.paused ? '<button class="btn btn-primary" data-act="resume" data-id="' + g.id + '">继续</button>' : '<button class="btn btn-ghost" data-act="pause" data-id="' + g.id + '">暂停</button>') +
+      '<button class="btn btn-ghost" data-act="restart" data-id="' + g.id + '">从断点重启</button></div></div>';
+    h += '<div class="stats4" style="grid-template-columns:repeat(auto-fit,minmax(200px,1fr));margin-top:10px">';
+    rows.forEach(function (r) { h += '<div><div class="muted">' + r[0] + '</div><b style="font-weight:600">' + r[1] + '</b></div>'; });
+    h += "</div>";
+    if (g.run_message) h += '<div class="faint" style="font-size:12px;margin-top:8px;word-break:break-word">' + esc(g.run_message) + "</div>";
+    if (g.last_error) h += '<div class="task-error" style="margin-top:6px">最近错误：' + esc(g.last_error) + "</div>";
+    return h + "</div>";
+  }
+  async function load() {
+    try {
+      var r = await fetch("/admin/guild-sync/status", { cache: "no-store", credentials: "same-origin" });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      var d = await r.json();
+      box.innerHTML = (d.syncs || []).length ? d.syncs.map(card).join("") : '<div class="empty">还没有启用的服务器配置。添加下载配置后会自动开始回填 + 实时同步。</div>';
+    } catch (e) { box.innerHTML = '<div class="empty">加载失败：' + esc(e.message || e) + "</div>"; }
+  }
+  box.addEventListener("click", async function (ev) {
+    var b = ev.target.closest("button[data-act]"); if (!b) return;
+    if (b.dataset.act === "restart" && !confirm("从断点重启这个服务器同步？")) return;
+    b.disabled = true;
+    await fetch("/admin/guild-sync/" + b.dataset.id + "/" + b.dataset.act, { method: "POST", credentials: "same-origin", headers: { "X-CSRF-Token": CSRF } });
+    load();
+  });
+  load(); setInterval(load, 5000);
+})();
