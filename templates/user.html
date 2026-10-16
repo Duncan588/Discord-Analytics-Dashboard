@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% import "components/ui.html" as ui %}
 {% block title %}{{ user.nickname or user.username }} · {{ tr("nav.archive") }}{% endblock %}
-{% block head %}<script src="{{ asset('js/dixo-format.js') }}" defer></script><script src="{{ asset('vendor/ui/chart/chart.umd.min.js') }}" defer></script><script src="{{ asset('js/dixo-sentiment.js') }}" defer></script><script src="{{ asset('js/dixo-insights.js') }}" defer></script>{% endblock %}
+{% block head %}
+<script src="{{ asset('js/dixo-ego.js') }}" defer></script><script src="{{ asset('js/dixo-format.js') }}" defer></script><script src="{{ asset('vendor/ui/chart/chart.umd.min.js') }}" defer></script><script src="{{ asset('js/dixo-sentiment.js') }}" defer></script><script src="{{ asset('js/dixo-insights.js') }}" defer></script>{% endblock %}
 {% block body_attrs %}x-data="{ chartMode: 'daily', showViews: false }"{% endblock %}
 {% macro tab_url(p, tab=active_tab, sort=current_sort) -%}?tab={{ tab }}&sort={{ sort }}&page={{ p }}#records{%- endmacro %}
 {% block content %}
@@ -60,10 +61,12 @@
 </section>
 
 <section class="grid g-main" style="margin-top:var(--space-4)">
-  <div class="card">
+  <div class="card fill">
     <div class="card-head"><h2 class="h-card">{{ t("user.activity") }}</h2>
       <div class="seg"><button type="button" :class="chartMode==='daily'&&'on'" @click="chartMode='daily'">{{ t("home.trend.daily") }}</button><button type="button" :class="chartMode==='hourly'&&'on'" @click="chartMode='hourly'">{{ t("home.trend.hourly") }}</button></div></div>
     <div class="chart sm"><div x-show="chartMode==='daily'" style="height:100%"><canvas id="chartDaily"></canvas></div><div x-show="chartMode==='hourly'" x-cloak style="height:100%"><canvas id="chartHourly"></canvas></div></div>
+    <div class="row between" style="margin-top:var(--space-4)"><h3 class="h-card" style="font-size:15px;margin:0">关系网</h3><span class="faint" style="font-size:12px">互动最多的人 · 点头像进入主页</span></div>
+    <div class="ego" id="ego" data-uid="{{ user.user_id }}"><div class="empty">正在加载关系网…</div></div>
   </div>
   <div class="card">
     <div class="card-head"><h2 class="h-card">{{ t("user.incoming") }}</h2></div>

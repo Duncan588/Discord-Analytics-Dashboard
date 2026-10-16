@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}{{ "服务器总结" if scope == "server" else "个人总结" }} · {{ current_server.name if current_server else "Dixo" }}{% endblock %}
+{% block head %}<script src="{{ asset('js/dixo-recap.js') }}" defer></script>{% endblock %}
+{% block content %}
+<div class="rc-wrap" id="recap" data-scope="{{ scope }}" data-gid="{{ current_server.server_id if current_server and current_server.server_id else '' }}" data-user="{{ target_user or '' }}"
+     data-years="{{ avail.years|join(',') }}" data-server="{{ current_server.name if current_server else '' }}">
+  <section class="rc-hero">
+    <div class="eyebrow">{{ "服务器总结 · Server Recap" if scope == "server" else "个人总结 · My Recap" }}</div>
+    <h1 id="rc-title">{{ current_server.name if scope == "server" and current_server else "我的总结" }}</h1>
+    <p id="rc-sub">正在准备…</p>
+  </section>
+  <div class="rc-bar" role="toolbar" aria-label="周期">
+    <div class="seg" id="rc-kind">
+      <button type="button" data-k="year" class="on">年</button><button type="button" data-k="month">月</button><button type="button" data-k="week">周</button><button type="button" data-k="all">全部</button>
+    </div>
+    <select id="rc-year" aria-label="年份"></select>
+    <select id="rc-month" aria-label="月份" hidden></select>
+    <input id="rc-week" type="week" aria-label="周" hidden class="field" style="height:30px;border-radius:999px;padding:0 10px">
+    <span class="faint" id="rc-status" style="font-size:12px;margin-left:auto"></span>
+  </div>
+  <div class="rc-grid" id="rc-body"><div class="rc-skel w12" style="grid-column:span 12"></div><div class="rc-skel" style="grid-column:span 6"></div><div class="rc-skel" style="grid-column:span 6"></div></div>
+</div>
+{% endblock %}

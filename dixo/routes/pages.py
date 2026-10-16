@@ -529,6 +529,15 @@ def claim_account():
 @bp.route("/report")
 @server_required
 def report():
+    if request.args.get("classic") != "1":
+        from dixo import recap as _recap
+        sid = current_server_id()
+        sc = summary_engine.summary_conn(sid)
+        try:
+            avail = _recap.periods_available(sc)
+        finally:
+            sc.close()
+        return render_template("recap.html", scope="me", avail=avail, target_user="")
     sid = current_server_id(); conn = get_db()
     u = get_display_user() or session["user"]
     uid = str(u["id"])

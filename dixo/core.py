@@ -377,7 +377,7 @@ def db_connect_read(path):
 def invalidate_blacklist_caches():
     _blacklist.invalidate()
     for fn in (lambda: summary_engine._memo.clear(), lambda: profile_engine._mem.clear(),
-               lambda: _REPORT_CACHE.clear()):
+               lambda: _REPORT_CACHE.clear(), lambda: __import__('dixo.recap').recap.invalidate()):
         try:
             fn()
         except Exception:
@@ -1673,6 +1673,8 @@ app.register_blueprint(create_ai_api(_api_ctx))
 app.register_blueprint(create_sentiment_api(_api_ctx))
 from dixo.insights import create_insights
 app.register_blueprint(create_insights(_api_ctx))
+from dixo.recap import create_recap
+app.register_blueprint(create_recap(_api_ctx))
 
 if cloud_enabled():
     app.logger.warning(

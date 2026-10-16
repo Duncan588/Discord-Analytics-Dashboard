@@ -51,6 +51,9 @@
 | 📱 **Discord Activity** | Embedded App SDK 自动登录；手机端安全区适配、点击区域修正、服务器选择服务端记忆 | Embedded App SDK auto-login; mobile safe-area insets, fixed tap targets, server choice remembered server-side |
 | ⚡ **性能** | 增量 `summary.db`（影子重建 + 原子替换，重建期间显示上次正确值）、水位缓存、精简索引；百万级消息首页亚秒级 | Incremental `summary.db` (shadow rebuild + atomic swap, last-good KPIs during rebuilds), watermark caches, lean indexes; sub-second home page on millions of messages |
 | 🛡️ **管理后台** | 白名单与配额、下载 Bot、服务器配置、下载任务、成员同步、账号合并 | Whitelist & quotas, download bots, server configs, tasks, member sync, account merges |
+| ✨ **服务器总结** | 首页标题旁的动效按钮 → 年 / 月 / 周 / 全部总结：热帖、热评、热门 / 上升 / 新成员、总量与环比、最热的一天和时段、表情、群梗与高频词、开帖达人、最长对话、成员变动、本期之最。后台生成并缓存 | Animated button next to the server title opens a Year / Month / Week / All-time recap (hot threads & messages, top/rising/new members, totals vs previous period, peak day/hour, emojis, memes & words, starters, longest threads, member changes, superlatives); built in the background and cached |
+| 🪞 **个人总结** | 同样的周期选择：消息数与排名、活跃天数、最长连续发言、活跃时段、常去帖子、最火发言、收到 / 送出的表情、互动最多的人、高频词与群梗、与上期对比 | Same period picker for your own recap: messages & rank, active days, streak, peak hours, top threads, hottest messages, reactions received/given, closest partners, words/memes, change vs previous period |
+| 🫧 **个人关系网** | 个人主页「活跃度」卡片下方：以本人为中心的气泡图，只画 TA 和互动最多的人，可点击跳转，黑名单成员不显示 | Ego-network bubble chart on the profile activity card (only the person and their top partners, clickable, blacklist hidden) |
 | 👥 **成员状态** | 首页环形图 + 排行/成员页徽章：在群 / 已退群 / 已销号（网关 join/leave 实时更新，定期全量校准） | Home donut and badges: in guild / left / deleted, kept live from gateway join/leave events |
 | 📊 **发言集中度** | Top 1 / Top 10 / Top 100 / 其余成员的消息占比环形图 | Donut of message share for top 1 / 10 / 100 vs everyone else |
 | 🚫 **全局黑名单** | 一级管理员维护；黑名单成员在所有页面、统计、洞察与 AI/MCP 接口中隐藏 | Level-1 admins maintain a global blacklist hidden from every page, stat, insight and API |
@@ -74,6 +77,17 @@
 | ![](docs/images/insights-light-desktop.png) | ![](docs/images/admin-guild-sync.png) |
 
 <p align="center"><img src="docs/images/admin-r2-backup.png" width="48%" alt="Cloudflare R2 backup card"></p>
+
+**v1.4 · 服务器总结 / 个人总结 / 个人关系网（深色）**
+
+![](docs/images/recap-button-dark.png)
+
+| 服务器总结 Server recap（年） | 个人总结 My recap |
+| --- | --- |
+| ![](docs/images/server-recap-dark.png) | ![](docs/images/personal-recap-dark.png) |
+
+![](docs/images/profile-ego-dark.png)
+
 
 > 首页（浅色）已更新为 v1.3：活跃趋势下方新增「成员状态」与「发言集中度」两张环形图。后台截图中的密钥、账号 ID 均已打码。
 > The light home screenshot shows v1.3's member-status and message-concentration donuts. Keys and account IDs in admin screenshots are masked.
@@ -125,6 +139,11 @@ venv/bin/python app.py
 > Large DBs: `VACUUM` needs free disk roughly equal to the DB size; summaries rebuild in the background while the last-good values stay on screen.
 
 ---
+
+### 总结缓存 / Recap cache
+
+服务器总结和个人总结在后台线程里生成，结果写到 `data/servers/<gid>/recap/*.json`：已经结束的周期永久缓存，当前周期和「全部」1 小时后重新生成。第一次打开某个周期时页面会显示「正在生成」并自动刷新。删掉这个目录就会全部重算。时间按 Asia/Shanghai 计算。
+Recaps are built in a background thread and cached under `data/servers/<gid>/recap/` (closed periods forever, open periods / all-time for 1 h). Delete the folder to rebuild.
 
 ### R2 备份（可选）/ R2 backup (optional)
 

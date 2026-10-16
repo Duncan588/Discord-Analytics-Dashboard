@@ -32,7 +32,8 @@
 <div class="page-head">
   <div>
     <div class="eyebrow">{{ t("nav.home") }}</div>
-    <h1 class="h-display">{{ current_server.name if current_server else "Discord" }}</h1>
+    <div class="title-row"><h1 class="h-display">{{ current_server.name if current_server else "Discord" }}</h1>
+      {% if current_server %}<a class="recap-btn" href="/recap" aria-label="服务器总结"><span class="spark" aria-hidden="true">✦</span>服务器总结</a>{% endif %}</div>
   </div>
   {% if last_day %}<div class="muted" style="font-size:13px">{{ t("state.updated") }} <span class="mono">{{ last_day }}</span></div>{% endif %}
 </div>
