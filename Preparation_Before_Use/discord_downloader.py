@@ -377,7 +377,38 @@ class Enumerator(discord.Client):
 
             # channel.threads 只是 Gateway 缓存，不能用于获取 Forum 的全部活跃帖子。
             # 必须调用 Discord 的 Get Active Threads API。
-            active_threads = await guild.active_threads()
+            # 与归档翻页相同：网络截断 / Connection reset 时退避重试，避免整轮增量失败。
+            active_threads = []
+            attempt = 0
+            while True:
+                try:
+                    active_threads = await guild.active_threads()
+                    break
+                except (aiohttp.ClientPayloadError, aiohttp.ClientConnectionError, ConnectionResetError, asyncio.TimeoutError) as exc:
+                    if task_status(self.task_id) in ("paused", "cancelled"):
+                        raise TaskCancelled()
+                    attempt += 1
+                    if attempt > 8:
+                        raise
+                    wait_seconds = min(60.0, 2.0 ** min(attempt, 6))
+                    log_step("任务 #%s | 活跃帖子扫描网络中断，将重试 | attempt=%s wait=%ss | %s", self.task_id, attempt, wait_seconds, exc)
+                    await asyncio.sleep(wait_seconds)
+                except discord.HTTPException as exc:
+                    status_code = int(getattr(exc, "status", 0) or 0)
+                    if status_code not in (429, 500, 502, 503, 504):
+                        raise
+                    if task_status(self.task_id) in ("paused", "cancelled"):
+                        raise TaskCancelled()
+                    attempt += 1
+                    if attempt > 8:
+                        raise
+                    retry_after = getattr(exc, "retry_after", None)
+                    try:
+                        wait_seconds = max(1.0, min(90.0, float(retry_after))) if retry_after is not None else min(60.0, 2.0 ** min(attempt, 6))
+                    except (TypeError, ValueError):
+                        wait_seconds = min(60.0, 2.0 ** min(attempt, 6))
+                    log_step("任务 #%s | 活跃帖子扫描 HTTP %s，将重试 | attempt=%s wait=%ss", self.task_id, status_code, attempt, wait_seconds)
+                    await asyncio.sleep(wait_seconds)
             active_threads = [t for t in active_threads if int(getattr(t, "parent_id", 0) or 0) == self.forum_id]
             log_step("任务 #%s | REST 活跃帖子扫描完成 | Forum=%s | 数量=%s", self.task_id, self.forum_id, len(active_threads))
             for t in active_threads:
@@ -1559,7 +1590,7 @@ def run_task(task, dce):
         portal.commit(); portal.close()
         sync_portal_users(guild_id,db_path,task_id)
         shutil.rmtree(task_root,ignore_errors=True)
-        update_task(task_id,status='completed',phase='completed',completed=done,total=total,active_bots=0,message=f"{'更新' if mode=='update' else '首次下载'}完成：{done}/{total}，每个帖子下载后已实时写入数据库，共 {total_messages} 条消息",finished_at=now())
+        update_task(task_id,status='completed',phase='completed',completed=done,total=total,active_bots=0,error=None,message=f"{'更新' if mode=='update' else '首次下载'}完成：{done}/{total}，每个帖子下载后已实时写入数据库，共 {total_messages} 条消息",finished_at=now())
     except TaskCancelled:
         monitor_stop.set()
         bot_refresh_stop.set()
@@ -1857,7 +1888,8 @@ def supervise_syncs(active_ids):
                     conn.execute("UPDATE guild_sync SET next_retry_at=NULL WHERE id=?", (sid,))
                 continue
             if run is not None and run["status"] == "completed":
-                upd = {"retry_count": 0, "next_retry_at": None, "failing_since": None, "fail_notified": 0, "last_error": s["last_error"]}
+                # 成功后清空陈旧错误，避免 Admin 在健康空闲时仍显示上次 TransferEncoding 等误报。
+                upd = {"retry_count": 0, "next_retry_at": None, "failing_since": None, "fail_notified": 0, "last_error": None}
                 if s["run_kind"] == "backfill" and not s["backfill_done"]:
                     upd.update(backfill_done=1, backfill_done_at=now(), oldest_reached="（已到最早）")
                     if not s["backfill_notified"]:
@@ -1867,6 +1899,7 @@ def supervise_syncs(active_ids):
                     upd["last_live_done_at"] = now()
                 upd.update(state="live", current_run_id=None, next_live_at=(nowdt + timedelta(seconds=SYNC_LIVE_INTERVAL_SEC)).isoformat())
                 conn.execute(f"UPDATE guild_sync SET {', '.join(k + '=?' for k in upd)} WHERE id=?", (*upd.values(), sid))
+                conn.execute("UPDATE download_tasks SET error=NULL WHERE id=?", (run["id"],))
                 continue
             # 没有当前 run：回填未完成 → 新建回填 run；否则到点做增量 run
             if not s["backfill_done"]:

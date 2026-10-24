@@ -84,6 +84,25 @@
   <div id="r2-status" class="stack" style="gap:14px">
     <div class="empty">正在加载备份状态…</div>
   </div>
+  <div class="sub-card" id="r2-restore" style="margin-top:var(--space-4)">
+    <div class="card-sub" style="margin-bottom:8px">从 R2 恢复（仅 level-1）</div>
+    <p class="hint">选择 <b>small-dbs</b> 快照作为主恢复点；可自动匹配同一次备份的 discord_data 转储。恢复会短暂停止网站。先点「演练」验证快照可读，不会改库。</p>
+    <div class="admin-form" style="gap:8px">
+      <label class="faint">主快照（small-dbs）
+        <select id="r2-restore-snap" class="field" style="width:100%"></select>
+      </label>
+      <label class="row" style="gap:8px;align-items:center"><input type="checkbox" id="r2-restore-include-data" checked> 同时恢复附近的 discord_data 快照</label>
+      <label class="row" style="gap:8px;align-items:center"><input type="checkbox" id="r2-restore-safety" checked> 恢复前做本地安全副本（portal/summary/visitors）</label>
+      <div id="r2-restore-plan" class="faint" style="font-size:12px"></div>
+      <input id="r2-restore-confirm" class="field" placeholder="真正恢复时输入：确认恢复" autocomplete="off">
+      <div class="row" style="gap:8px;flex-wrap:wrap">
+        <button type="button" class="btn btn-ghost" id="r2-restore-plan-btn">预览配套快照</button>
+        <button type="button" class="btn btn-ghost" id="r2-restore-dry">演练（不改库）</button>
+        <button type="button" class="btn btn-danger" id="r2-restore-run">开始恢复</button>
+      </div>
+      <div id="r2-restore-status" class="faint" style="font-size:12px;margin-top:6px"></div>
+    </div>
+  </div>
   <details style="margin-top:var(--space-4)">
     <summary style="cursor:pointer;font-weight:600">轮换 R2 / restic 凭证</summary>
     <form id="r2-creds-form" class="admin-form" style="margin-top:var(--space-3)">

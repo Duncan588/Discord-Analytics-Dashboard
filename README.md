@@ -57,7 +57,7 @@
 | 👥 **成员状态** | 首页环形图 + 排行/成员页徽章：在群 / 已退群 / 已销号（网关 join/leave 实时更新，定期全量校准） | Home donut and badges: in guild / left / deleted, kept live from gateway join/leave events |
 | 📊 **发言集中度** | Top 1 / Top 10 / Top 100 / 其余成员的消息占比环形图 | Donut of message share for top 1 / 10 / 100 vs everyone else |
 | 🚫 **全局黑名单** | 一级管理员维护；黑名单成员在所有页面、统计、洞察与 AI/MCP 接口中隐藏 | Level-1 admins maintain a global blacklist hidden from every page, stat, insight and API |
-| ☁️ **Cloudflare R2 备份** | 后台查看 restic → R2 备份状态、快照、日志与已用/剩余空间；可测试凭证、立即备份、轮换密钥（只显示掩码） | Admin card for restic→R2 backups: status, snapshots, logs, space used/left; test creds, run now, rotate keys (masked only) |
+| ☁️ **Cloudflare R2 备份 / 恢复** | 后台查看 restic → R2 备份状态、快照、日志与空间；测试凭证、立即备份、轮换密钥；从快照恢复（演练 / 确认词 / 停机恢复，仅 level-1） | Admin R2 backup+restore: status, snapshots, logs, space; test/run/rotate keys; restore from snapshot (dry-run / confirm phrase / brief downtime, level-1 only) |
 
 ---
 
@@ -145,12 +145,14 @@ venv/bin/python app.py
 服务器总结和个人总结在后台线程里生成，结果写到 `data/servers/<gid>/recap/*.json`：已经结束的周期永久缓存，当前周期和「全部」1 小时后重新生成。第一次打开某个周期时页面会显示「正在生成」并自动刷新。删掉这个目录就会全部重算。时间按 Asia/Shanghai 计算。
 Recaps are built in a background thread and cached under `data/servers/<gid>/recap/` (closed periods forever, open periods / all-time for 1 h). Delete the folder to rebuild.
 
-### R2 备份（可选）/ R2 backup (optional)
+### R2 备份与恢复（可选）/ R2 backup & restore (optional)
 
 1. 在 Cloudflare 创建 R2 bucket 和 R2 API Token（Access Key ID + Secret）。Create an R2 bucket and an R2 API token.
 2. 安装 `restic`，并配置每日备份的 systemd timer（`db-backup.service` / `db-backup.timer`，日志写入 `/var/log/db-backup.log`）。Install restic and a daily systemd timer.
 3. 在后台「☁️ Cloudflare 备份」卡片的「轮换 R2 / restic 凭证」里填 Access Key、Secret、restic 密码（可选填 CF API Token 显示官方用量）。会写入 `/root/.config/r2-backup.env` 和 `restic-r2.pass`（权限 600）。仓库地址 `RESTIC_REPOSITORY=s3:https://<CF_ACCOUNT_ID>.r2.cloudflarestorage.com/<bucket>` 也可以预先写入该文件。
    Enter the keys in the admin R2 card; they are written to `/root/.config/r2-backup.env` (600). Set `RESTIC_REPOSITORY` there or via env.
+4. **恢复**：确保服务器上有可执行的 `tools/db-restore.sh`（与应用同目录）。在 Admin 卡片选择 `small-dbs` 快照 →「演练」验证可读 → 输入确认词 `确认恢复` → 开始恢复。脚本会停 `v20`、恢复 portal/summary/visitors（可选配套 `discord_data` 转储）、完整性检查后再启动。进度见 `/run/db-restore-status.json` 与 `/var/log/db-restore.log`。不会在多租户场景下替每个用户单独挂 CF 账号（当前为单租户）。
+   Restore: keep `tools/db-restore.sh` on the server. Dry-run first; type `确认恢复` to run. Brief downtime while `v20` restarts.
 
 ## 配置 / Configuration
 

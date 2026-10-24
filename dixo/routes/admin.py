@@ -854,6 +854,89 @@ def admin_r2_backup_creds():
         return jsonify({"ok": False, "error": str(e)[:300]}), 500
 
 
+@bp.route("/admin/r2-backup/restore/status")
+@login_required
+@level1_required
+def admin_r2_restore_status():
+    from dixo import r2_backup as r2
+    try:
+        return jsonify({"ok": True, **r2.read_restore_status()})
+    except Exception as e:
+        app.logger.exception("r2 restore status failed")
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
+@bp.route("/admin/r2-backup/restore/plan", methods=["POST"])
+@login_required
+@level1_required
+def admin_r2_restore_plan():
+    """Preview companion discord-data snapshots for a small-dbs id (no writes)."""
+    from dixo import r2_backup as r2
+    data = request.get_json(silent=True) or {}
+    sid = (data.get("snapshot_id") or "").strip()
+    if not sid:
+        return jsonify({"ok": False, "error": "缺少 snapshot_id"}), 400
+    try:
+        return jsonify(r2.find_companion_data_snapshots(sid))
+    except Exception as e:
+        app.logger.exception("r2 restore plan failed")
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
+@bp.route("/admin/r2-backup/restore/dry-run", methods=["POST"])
+@login_required
+@level1_required
+def admin_r2_restore_dry_run():
+    from dixo import r2_backup as r2
+    data = request.get_json(silent=True) or {}
+    sid = (data.get("snapshot_id") or "").strip()
+    include_data = data.get("include_data", True)
+    if not sid:
+        return jsonify({"ok": False, "error": "缺少 snapshot_id"}), 400
+    try:
+        result = r2.dry_run_restore(sid, include_data=bool(include_data))
+        app.logger.info("r2 restore dry-run by=%s snap=%s ok=%s", session["user"]["id"], sid, result.get("ok"))
+        return jsonify(result), (200 if result.get("ok") else 400)
+    except Exception as e:
+        app.logger.exception("r2 restore dry-run failed")
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
+@bp.route("/admin/r2-backup/restore/run", methods=["POST"])
+@login_required
+@level1_required
+def admin_r2_restore_run():
+    from dixo import r2_backup as r2
+    data = request.get_json(silent=True) or {}
+    sid = (data.get("snapshot_id") or "").strip()
+    confirm = data.get("confirm") or ""
+    include_data = bool(data.get("include_data", True))
+    safety = bool(data.get("safety", True))
+    dry_run = bool(data.get("dry_run", False))
+    raw_ids = data.get("data_ids")
+    data_ids = None
+    if isinstance(raw_ids, list):
+        data_ids = [str(x) for x in raw_ids]
+    try:
+        result = r2.start_restore(
+            sid,
+            confirm=confirm,
+            include_data=include_data,
+            safety=safety,
+            dry_run=dry_run,
+            data_ids=data_ids,
+            requested_by=str(session["user"]["id"]),
+        )
+        app.logger.info(
+            "r2 restore run by=%s snap=%s dry=%s ok=%s",
+            session["user"]["id"], sid, dry_run, result.get("ok"),
+        )
+        return jsonify(result), (200 if result.get("ok") else 409)
+    except Exception as e:
+        app.logger.exception("r2 restore run failed")
+        return jsonify({"ok": False, "error": str(e)[:300]}), 500
+
+
 # --- 服务器统一同步（guild sync） ---
 def _sync_rows(p, uid, level):
     try:

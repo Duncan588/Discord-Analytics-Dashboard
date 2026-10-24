@@ -313,6 +313,7 @@
       });
     }
     html += "</div>";
+    fillRestoreSelect(snaps);
 
     if (log.recent_lines && log.recent_lines.length) {
       html += '<details><summary style="cursor:pointer;font-weight:600">最近日志</summary><pre class="mono" style="font-size:11px;white-space:pre-wrap;max-height:220px;overflow:auto;margin-top:8px">' +
@@ -401,7 +402,126 @@
     }
   });
 
+  var restoreSel = document.getElementById("r2-restore-snap");
+  var restorePlanBox = document.getElementById("r2-restore-plan");
+  var restoreStatusBox = document.getElementById("r2-restore-status");
+  var plannedDataIds = [];
+
+  function fillRestoreSelect(snaps) {
+    if (!restoreSel) return;
+    var cur = restoreSel.value;
+    var small = (snaps || []).filter(function (s) {
+      return (s.tags || []).indexOf("small-dbs") >= 0;
+    });
+    if (!small.length) small = snaps || [];
+    restoreSel.innerHTML = small.map(function (s) {
+      return '<option value="' + esc(s.id) + '">' + esc(s.id) + " · " + esc(fmtUtc(s.time)) +
+        " · " + esc((s.tags || []).join(",")) + "</option>";
+    }).join("");
+    if (cur) restoreSel.value = cur;
+  }
+
+  async function refreshRestoreStatus() {
+    if (!restoreStatusBox) return;
+    try {
+      var r = await fetch("/admin/r2-backup/restore/status", { cache: "no-store", credentials: "same-origin" });
+      var d = await r.json();
+      var st = d.status || {};
+      var line = (st.phase || "—") + (st.message ? (" · " + st.message) : "");
+      if (d.running) line = "🔄 " + line;
+      else if (st.ok === true) line = "✅ " + line;
+      else if (st.ok === false) line = "❌ " + line;
+      restoreStatusBox.textContent = line;
+      return d;
+    } catch (e) {
+      restoreStatusBox.textContent = "状态读取失败：" + (e.message || e);
+      return null;
+    }
+  }
+
+  var btnPlan = document.getElementById("r2-restore-plan-btn");
+  var btnDry = document.getElementById("r2-restore-dry");
+  var btnRestore = document.getElementById("r2-restore-run");
+
+  if (btnPlan) btnPlan.addEventListener("click", async function () {
+    var sid = restoreSel && restoreSel.value;
+    if (!sid) return alert("请选择快照");
+    btnPlan.disabled = true;
+    try {
+      var res = await post("/admin/r2-backup/restore/plan", { snapshot_id: sid });
+      if (!res.data || !res.data.ok) {
+        alert("预览失败：" + ((res.data && res.data.error) || res.status));
+        return;
+      }
+      plannedDataIds = (res.data.companions || []).map(function (c) { return c.id; });
+      if (restorePlanBox) {
+        restorePlanBox.textContent = plannedDataIds.length
+          ? ("将附带 " + plannedDataIds.length + " 个 discord_data 快照：" + plannedDataIds.join(", "))
+          : "未找到同时间窗口内的 discord_data 配套快照（仍可只恢复 small-dbs）";
+      }
+    } finally {
+      btnPlan.disabled = false;
+    }
+  });
+
+  if (btnDry) btnDry.addEventListener("click", async function () {
+    var sid = restoreSel && restoreSel.value;
+    if (!sid) return alert("请选择快照");
+    btnDry.disabled = true;
+    try {
+      var res = await post("/admin/r2-backup/restore/dry-run", {
+        snapshot_id: sid,
+        include_data: !!(document.getElementById("r2-restore-include-data") || {}).checked
+      });
+      if (res.data && res.data.ok) {
+        alert("演练成功：快照可读，未改动生产库。\n文件样例数：" + ((res.data.files_sample || []).length));
+      } else {
+        alert("演练失败：" + ((res.data && res.data.error) || res.status));
+      }
+    } finally {
+      btnDry.disabled = false;
+      refreshRestoreStatus();
+    }
+  });
+
+  if (btnRestore) btnRestore.addEventListener("click", async function () {
+    var sid = restoreSel && restoreSel.value;
+    if (!sid) return alert("请选择快照");
+    var confirmWord = (document.getElementById("r2-restore-confirm") || {}).value || "";
+    if (confirmWord.trim() !== "确认恢复") {
+      return alert("请在输入框填写：确认恢复");
+    }
+    if (!confirm("这将停止网站并从 R2 覆盖数据库。确定继续？")) return;
+    btnRestore.disabled = true;
+    try {
+      var res = await post("/admin/r2-backup/restore/run", {
+        snapshot_id: sid,
+        confirm: confirmWord.trim(),
+        include_data: !!(document.getElementById("r2-restore-include-data") || {}).checked,
+        safety: !!(document.getElementById("r2-restore-safety") || {}).checked,
+        dry_run: false,
+        data_ids: plannedDataIds.length ? plannedDataIds : undefined
+      });
+      if (res.data && res.data.ok) {
+        alert(res.data.message || "恢复已启动");
+        var n = 0;
+        var timer = setInterval(async function () {
+          n += 1;
+          var st = await refreshRestoreStatus();
+          if (!st || !st.running || n > 120) clearInterval(timer);
+        }, 3000);
+      } else {
+        alert("启动失败：" + ((res.data && res.data.error) || res.status));
+      }
+    } finally {
+      btnRestore.disabled = false;
+      refreshRestoreStatus();
+    }
+  });
+
   load(false);
+  refreshRestoreStatus();
+  setInterval(refreshRestoreStatus, 10000);
 })();
 
 /* ---- 服务器同步卡片 ---- */
@@ -417,15 +537,30 @@
   function card(g) {
     var st = LABEL[g.state] || [g.state || "?", "#6b7280"];
     var running = g.run_status === "running";
-    var phase = g.run_kind === "backfill" ? "历史回填" : (g.run_kind === "live" ? "增量扫描" : "等待下一轮");
-    if (g.run_phase) phase += " · " + esc(g.run_phase);
+    var hasRun = !!g.current_run_id;
+    var nextMs = g.next_live_at ? new Date(g.next_live_at).getTime() : NaN;
+    // 两轮增量之间：current_run_id 为空且 next_live_at 未到 → 显示等待，勿误报 0/0「增量扫描」
+    var idleWaiting = !hasRun && !!g.backfill_done && !isNaN(nextMs) && nextMs > Date.now() && !g.paused && g.state !== "retrying";
+    var phase;
+    if (idleWaiting) phase = "等待下一轮";
+    else if (g.run_kind === "backfill" && hasRun) phase = "历史回填";
+    else if (g.run_kind === "live" && running) phase = "增量扫描";
+    else if (g.run_kind === "live" && hasRun) phase = "增量扫描";
+    else phase = "等待下一轮";
+    if (g.run_phase && hasRun && running) phase += " · " + esc(g.run_phase);
+    var progress = (idleWaiting || (!hasRun && g.backfill_done))
+      ? ("空闲 · 下一轮 " + fmt(g.next_live_at))
+      : ("已扫描 " + n(g.scan_processed) + " · 已下载 " + n(g.run_completed) + "/" + n(g.run_total));
+    var rate = (idleWaiting || (!hasRun && g.backfill_done))
+      ? "空闲"
+      : ((g.recent_speed ? (+g.recent_speed).toFixed(1) : "0") + " 帖/分钟 · 机器人 " + (g.active_bots || 0));
     var oldest = g.backfill_done ? "已到最早（" + fmt(g.backfill_done_at) + " 完成）" : (g.oldest_reached || g.run_cursor ? fmt(g.run_cursor || g.oldest_reached) : "—");
     var rows = [
       ["当前阶段", phase],
-      ["本轮进度", "已扫描 " + n(g.scan_processed) + " · 已下载 " + n(g.run_completed) + "/" + n(g.run_total)],
+      ["本轮进度", progress],
       ["已回填到", oldest],
       ["累计导入", n(g.threads_done) + " 帖 · " + n(g.messages_ingested) + " 条消息"],
-      ["速率", (g.recent_speed ? (+g.recent_speed).toFixed(1) : "0") + " 帖/分钟 · 机器人 " + (g.active_bots || 0)],
+      ["速率", rate],
       ["最后心跳", running ? ago(g.run_heartbeat) + "（" + fmt(g.run_heartbeat) + "）" : fmt(g.updated_at)],
       ["重试", (g.retry_count || 0) + " 次" + (g.next_retry_at ? " · 下次 " + fmt(g.next_retry_at) : "")],
       ["下次增量", g.backfill_done ? fmt(g.next_live_at) : "回填完成后开始"]

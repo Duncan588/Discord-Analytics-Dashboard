@@ -48,11 +48,16 @@ def test_adopt_retry_and_complete(tmp_path, monkeypatch):
     assert q(d, "SELECT status FROM download_tasks WHERE id=2")[0] == "pending"
     assert q(d, "SELECT scan_cursor FROM download_tasks WHERE id=2")[0].startswith("2025-11-11")
     assert not sent  # transient: no notification
-    # completes -> backfill done, live, notify once
-    c = d.db(); c.execute("UPDATE download_tasks SET status='completed' WHERE id=2"); c.commit(); c.close()
+    # completes -> backfill done, live, notify once; last_error and task.error cleared
+    c = d.db()
+    c.execute("UPDATE guild_sync SET last_error=?", ("ConnectionResetError stale",))
+    c.execute("UPDATE download_tasks SET status='completed', error=? WHERE id=2", ("stale error",))
+    c.commit(); c.close()
     d.supervise_syncs(set())
     s = q(d, "SELECT * FROM guild_sync")
     assert s["backfill_done"] == 1 and s["state"] == "live" and s["retry_count"] == 0 and len(sent) == 1
+    assert s["last_error"] in (None, "")
+    assert q(d, "SELECT error FROM download_tasks WHERE id=2")[0] in (None, "")
     # live pass due -> new hidden run with stop point
     c = d.db(); c.execute("UPDATE guild_sync SET next_live_at=?", ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),)); c.commit(); c.close()
     d.supervise_syncs(set())

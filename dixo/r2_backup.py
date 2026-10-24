@@ -1,7 +1,10 @@
-"""Cloudflare R2 / restic backup status for the Admin panel (level-1 only).
+"""Cloudflare R2 / restic backup + restore for the Admin panel (level-1 only).
 
 Reads /root/.config/r2-backup.env and /var/log/db-backup.log; never exposes
 RESTIC_PASSWORD or AWS_SECRET_ACCESS_KEY in return values.
+
+Restore runs via tools/db-restore.sh in a detached process so stopping v20
+does not kill the job. Concurrent restores are locked with /run/db-restore.lock.
 """
 from __future__ import annotations
 
@@ -18,6 +21,15 @@ from urllib.request import Request, urlopen
 ENV_PATH = Path("/root/.config/r2-backup.env")
 PASS_PATH = Path("/root/.config/restic-r2.pass")
 LOG_PATH = Path("/var/log/db-backup.log")
+RESTORE_LOG_PATH = Path("/var/log/db-restore.log")
+RESTORE_STATUS_PATH = Path("/run/db-restore-status.json")
+RESTORE_ENV_PATH = Path("/run/db-restore.env")
+RESTORE_LOCK_PATH = Path("/run/db-restore.lock")
+RESTORE_SCRIPT_CANDIDATES = (
+    Path("/root/v2/V20/tools/db-restore.sh"),
+    Path(__file__).resolve().parents[1] / "tools" / "db-restore.sh",
+)
+DIXO_BASE = Path(os.getenv("DIXO_BASE", "/root/v2/V20"))
 BUCKET_DEFAULT = "discord-dashboard-backup"
 # R2 free tier storage allowance (bytes); soft quota when CF billing API unavailable.
 R2_FREE_STORAGE_BYTES = 10 * 1024 * 1024 * 1024
@@ -211,7 +223,7 @@ def systemd_timer_status() -> dict[str, Any]:
     return info
 
 
-def restic_snapshots(env: dict[str, str], limit: int = 12) -> dict[str, Any]:
+def restic_snapshots(env: dict[str, str], limit: int = 40) -> dict[str, Any]:
     result: dict[str, Any] = {"ok": False, "error": None, "snapshots": [], "count": 0}
     if not env.get("RESTIC_REPOSITORY"):
         result["error"] = "RESTIC_REPOSITORY 未配置"
@@ -419,7 +431,7 @@ def overall_status(force: bool = False) -> dict[str, Any]:
     timer = systemd_timer_status()
     creds = credentials_public_view(env)
     if creds["access_key_configured"] and creds["secret_configured"]:
-        snaps = restic_snapshots(env)
+        snaps = restic_snapshots(env, limit=40)
     else:
         snaps = {"ok": False, "error": "凭证未配置", "snapshots": [], "count": 0}
     stats = restic_stats(env) if snaps.get("ok") else {"ok": False, "error": snaps.get("error")}
@@ -521,6 +533,7 @@ def overall_status(force: bool = False) -> dict[str, Any]:
             "used_human": s3.get("used_human"),
             "object_count": s3.get("object_count"),
         },
+        "restore": read_restore_status(),
     }
     _CACHE["ts"] = now
     _CACHE["data"] = data
@@ -609,3 +622,230 @@ def save_credentials(
         os.chmod(p, 0o600)
     invalidate_cache()
     return {"ok": True, "message": "凭证已保存", "access_key_id_masked": _mask_key(access_key_id)}
+
+
+# --- restore (single-tenant / level-1) ---
+
+def _restore_script() -> Path | None:
+    for p in RESTORE_SCRIPT_CANDIDATES:
+        if p.is_file() and os.access(p, os.X_OK):
+            return p
+    for p in RESTORE_SCRIPT_CANDIDATES:
+        if p.is_file():
+            return p
+    return None
+
+
+def read_restore_status() -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "running": False,
+        "locked": RESTORE_LOCK_PATH.is_file(),
+        "status": None,
+        "log_tail": [],
+    }
+    # flock held by running script makes lock file exist; also check status phase
+    if RESTORE_STATUS_PATH.is_file():
+        try:
+            data = json.loads(RESTORE_STATUS_PATH.read_text(encoding="utf-8"))
+            out["status"] = data
+            phase = str(data.get("phase") or "")
+            out["running"] = phase in {
+                "queued", "checking", "listing", "safety", "stopping",
+                "restoring_small", "restoring_data", "starting",
+            }
+        except Exception as e:
+            out["status"] = {"phase": "unknown", "message": f"无法读取状态：{e}"}
+    if RESTORE_LOG_PATH.is_file():
+        try:
+            lines = RESTORE_LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines()
+            out["log_tail"] = lines[-40:]
+        except OSError:
+            pass
+    # systemd leftover
+    rc, outp, _ = _run(["systemctl", "is-active", "db-restore.service"], timeout=5)
+    if rc == 0 and outp.strip() == "active":
+        out["running"] = True
+    return out
+
+
+def find_companion_data_snapshots(small_id: str, env: dict[str, str] | None = None, window_sec: int = 1800) -> dict[str, Any]:
+    """Given a small-dbs snapshot, find nearby discord-data snapshots (same backup run)."""
+    env = env or load_env()
+    snaps = restic_snapshots(env, limit=80)
+    if not snaps.get("ok"):
+        return {"ok": False, "error": snaps.get("error"), "companions": []}
+    target = None
+    for s in snaps["snapshots"]:
+        if s.get("id") == small_id or (s.get("id") or "").startswith(small_id):
+            target = s
+            break
+    if target is None:
+        # may need full list via restic snapshots ID
+        rc, out, err = _run(["restic", "snapshots", small_id, "--json"], env=env, timeout=60)
+        if rc != 0:
+            return {"ok": False, "error": (err or out or "snapshot not found")[:300], "companions": []}
+        try:
+            arr = json.loads(out) if out.strip() else []
+            raw = arr[0] if isinstance(arr, list) and arr else None
+        except json.JSONDecodeError:
+            raw = None
+        if not raw:
+            return {"ok": False, "error": "找不到该快照", "companions": []}
+        target = {
+            "id": raw.get("short_id") or (raw.get("id") or "")[:8],
+            "time": _parse_iso(raw.get("time")),
+            "tags": raw.get("tags") or [],
+        }
+    tags = set(target.get("tags") or [])
+    if "small-dbs" not in tags and "discord-data" in tags:
+        return {"ok": False, "error": "请选择带 small-dbs 标签的主快照", "companions": [], "target": target}
+    t0 = target.get("time")
+    try:
+        from datetime import datetime as _dt
+        base_dt = _dt.fromisoformat((t0 or "").replace("Z", "+00:00"))
+    except Exception:
+        base_dt = None
+    companions = []
+    for s in snaps["snapshots"]:
+        stags = set(s.get("tags") or [])
+        if "discord-data" not in stags:
+            continue
+        if base_dt is None:
+            companions.append(s)
+            continue
+        try:
+            sd = _dt.fromisoformat((s.get("time") or "").replace("Z", "+00:00"))
+        except Exception:
+            continue
+        if abs((sd - base_dt).total_seconds()) <= window_sec:
+            companions.append(s)
+    companions.sort(key=lambda s: s.get("time") or "")
+    return {"ok": True, "target": target, "companions": companions, "window_sec": window_sec}
+
+
+def dry_run_restore(small_id: str, include_data: bool = True) -> dict[str, Any]:
+    """Verify snapshot readability without stopping services or writing DBs."""
+    env = load_env()
+    if not env.get("RESTIC_REPOSITORY"):
+        return {"ok": False, "error": "RESTIC_REPOSITORY 未配置"}
+    small_id = (small_id or "").strip()
+    if not small_id:
+        return {"ok": False, "error": "请提供 small-dbs 快照 ID"}
+    companions = find_companion_data_snapshots(small_id, env=env)
+    if not companions.get("ok"):
+        return companions
+    rc, out, err = _run(["restic", "ls", small_id], env=env, timeout=120)
+    if rc != 0:
+        return {"ok": False, "error": (err or out or f"restic ls exit {rc}")[:400]}
+    files = [ln.strip() for ln in out.splitlines() if ln.strip()][:80]
+    data_checks = []
+    if include_data:
+        for c in companions.get("companions") or []:
+            cid = c.get("id")
+            rc2, out2, err2 = _run(["restic", "ls", str(cid)], env=env, timeout=120)
+            data_checks.append({
+                "id": cid,
+                "ok": rc2 == 0,
+                "error": None if rc2 == 0 else (err2 or out2)[:200],
+                "sample": [ln.strip() for ln in (out2 or "").splitlines() if ln.strip()][:5],
+            })
+    return {
+        "ok": True,
+        "message": "演练成功：快照可读，未改动生产库",
+        "small": companions.get("target"),
+        "files_sample": files,
+        "companions": companions.get("companions") or [],
+        "data_checks": data_checks,
+    }
+
+
+def start_restore(
+    small_id: str,
+    *,
+    confirm: str,
+    include_data: bool = True,
+    safety: bool = True,
+    dry_run: bool = False,
+    data_ids: list[str] | None = None,
+    requested_by: str | None = None,
+) -> dict[str, Any]:
+    """Kick off tools/db-restore.sh detached. Requires confirm == '确认恢复' unless dry_run."""
+    small_id = (small_id or "").strip()
+    if not small_id:
+        return {"ok": False, "error": "请选择 small-dbs 快照"}
+    if not dry_run and (confirm or "").strip() != "确认恢复":
+        return {"ok": False, "error": "请输入确认词：确认恢复"}
+    st = read_restore_status()
+    if st.get("running"):
+        return {"ok": False, "error": "已有恢复任务在运行", "status": st.get("status")}
+    backup_st = systemd_timer_status()
+    if backup_st.get("service_active") in ("active", "activating"):
+        return {"ok": False, "error": "备份正在运行，请稍后再恢复"}
+
+    env = load_env()
+    if not env.get("RESTIC_REPOSITORY"):
+        return {"ok": False, "error": "RESTIC_REPOSITORY 未配置"}
+
+    script = _restore_script()
+    if script is None:
+        return {"ok": False, "error": "找不到 tools/db-restore.sh（请部署到服务器）"}
+
+    companions = find_companion_data_snapshots(small_id, env=env)
+    if not companions.get("ok"):
+        return {"ok": False, "error": companions.get("error") or "无法解析快照"}
+    if data_ids is None:
+        data_ids = [c["id"] for c in (companions.get("companions") or [])] if include_data else []
+    data_ids = [str(x).strip() for x in (data_ids or []) if str(x).strip()]
+
+    started = _utc_now().strftime("%Y-%m-%dT%H:%M:%SZ")
+    status = {
+        "phase": "queued",
+        "message": "恢复任务已排队" + ("（演练）" if dry_run else ""),
+        "ok": None,
+        "updated_at": started,
+        "started_at": started,
+        "small_id": small_id,
+        "data_ids": data_ids,
+        "dry_run": bool(dry_run),
+        "safety": bool(safety) and not dry_run,
+        "requested_by": requested_by,
+    }
+    try:
+        RESTORE_STATUS_PATH.write_text(json.dumps(status, ensure_ascii=False), encoding="utf-8")
+        env_lines = [
+            f"RESTORE_SMALL_ID={small_id}",
+            f"RESTORE_DRY_RUN={'1' if dry_run else '0'}",
+            f"RESTORE_SAFETY={'1' if safety and not dry_run else '0'}",
+            f"RESTORE_INCLUDE_DATA={'1' if include_data else '0'}",
+            f"RESTORE_DATA_IDS={','.join(data_ids)}",
+            f"DIXO_BASE={DIXO_BASE}",
+        ]
+        RESTORE_ENV_PATH.write_text("\n".join(env_lines) + "\n", encoding="utf-8")
+        os.chmod(RESTORE_ENV_PATH, 0o600)
+    except OSError as e:
+        return {"ok": False, "error": f"无法写入恢复状态文件：{e}"}
+
+    # Detached session so stopping v20 later does not kill restore.
+    logf = open(RESTORE_LOG_PATH, "a", encoding="utf-8")
+    try:
+        proc = subprocess.Popen(
+            ["/bin/bash", str(script)],
+            stdout=logf,
+            stderr=logf,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+            env={**os.environ, **env, "DIXO_BASE": str(DIXO_BASE)},
+        )
+    except OSError as e:
+        logf.close()
+        return {"ok": False, "error": f"无法启动恢复进程：{e}"}
+    logf.close()
+    return {
+        "ok": True,
+        "message": "演练已启动" if dry_run else "恢复已启动：网站将短暂下线，完成后请刷新本页",
+        "pid": proc.pid,
+        "dry_run": bool(dry_run),
+        "small_id": small_id,
+        "data_ids": data_ids,
+        "companions": companions.get("companions") or [],
+    }
