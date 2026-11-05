@@ -66,7 +66,7 @@ def _lock(lottery_id):
 def to_embed(payload):
     embed = discord.Embed(title=payload["title"], description=payload["description"] or None, color=payload["color"])
     for name, value, inline in payload["fields"]:
-        embed.add_field(name=name, value=value or "（无）", inline=inline)
+        embed.add_field(name=name, value=value or "无", inline=inline)
     if payload.get("footer"):
         embed.set_footer(text=payload["footer"])
     return embed
@@ -112,7 +112,7 @@ class LotteryButton(discord.ui.DynamicItem[discord.ui.Button], template=r"lotter
                 result = await asyncio.to_thread(lottery.handle_leave, _db(), self.lottery_id, interaction.user.id)
         except Exception:
             log.exception("抽奖参与操作失败 id=%s action=%s", self.lottery_id, self.action)
-            await interaction.followup.send("操作失败，请稍后再试。", ephemeral=True)
+            await interaction.followup.send("操作失败", ephemeral=True)
             return
         try:
             await interaction.followup.send(result["text"], ephemeral=True)
@@ -126,7 +126,7 @@ class LotteryButton(discord.ui.DynamicItem[discord.ui.Button], template=r"lotter
             result = await asyncio.to_thread(lottery.preview_action, _db(), self.lottery_id, interaction.user.id, kind)
         except Exception:
             log.exception("抽奖预览失败 id=%s kind=%s", self.lottery_id, kind)
-            await interaction.followup.send("操作失败，请稍后再试。", ephemeral=True)
+            await interaction.followup.send("操作失败", ephemeral=True)
             return
         kwargs = {"ephemeral": True}
         if result.get("confirm"):
@@ -155,7 +155,7 @@ class ConfirmView(discord.ui.View):
                 result = await asyncio.to_thread(lottery.commit_cancel, _db(), self.lottery_id, interaction.user.id)
         except Exception:
             log.exception("抽奖确认失败 id=%s kind=%s", self.lottery_id, self.kind)
-            await interaction.followup.send("操作失败，请稍后再试。", ephemeral=True)
+            await interaction.followup.send("操作失败", ephemeral=True)
             return
         if self.kind == "draw" and result.get("code") == "drawn":
             log.info(
@@ -292,35 +292,39 @@ def register(bot):
 
     @bot.tree.command(
         name="抽奖",
-        description="发起一场公平抽奖（按钮参与，到点或提前开奖）",
+        description="发起抽奖",
         guild=guild,
         auto_locale_strings=False,
     )
     @app_commands.guild_only()
-    @app_commands.rename(title="标题", prize="奖品内容", draw_time="开奖时间", winner_count="中奖人数")
+    @app_commands.rename(title="标题", prize="奖品", winner_count="中奖人数", minutes="分钟", hours="小时", days="天")
     @app_commands.describe(
-        title="抽奖标题",
-        prize="奖品内容",
-        draw_time="开奖时间（北京时间），例如 2026-11-06 21:00",
-        winner_count="中奖人数（1 到 40）",
+        title="标题",
+        prize="奖品",
+        winner_count="中奖人数",
+        minutes="几分钟后开奖",
+        hours="几小时后开奖",
+        days="几天后开奖",
     )
     async def lottery_cmd(
         interaction: discord.Interaction,
         title: str,
         prize: str,
-        draw_time: str,
         winner_count: app_commands.Range[int, 1, lottery.MAX_WINNERS],
+        minutes: app_commands.Range[int, 0, 525600] = 0,
+        hours: app_commands.Range[int, 0, 8784] = 0,
+        days: app_commands.Range[int, 0, lottery.MAX_HORIZON_DAYS] = 0,
     ):
-        await _create(interaction, title, prize, draw_time, int(winner_count))
+        await _create(interaction, title, prize, int(minutes), int(hours), int(days), int(winner_count))
 
     @bot.tree.command(
         name="抽奖结果",
-        description="按抽奖 ID 查看结果或当前状态",
+        description="查询抽奖",
         guild=guild,
         auto_locale_strings=False,
     )
     @app_commands.rename(lottery_id="抽奖id")
-    @app_commands.describe(lottery_id="面板底部的抽奖 ID")
+    @app_commands.describe(lottery_id="抽奖ID")
     async def lottery_result_cmd(
         interaction: discord.Interaction,
         lottery_id: app_commands.Range[int, 1, 2_000_000_000],
@@ -328,13 +332,13 @@ def register(bot):
         await _result(interaction, int(lottery_id))
 
 
-async def _create(interaction: discord.Interaction, title: str, prize: str, draw_time: str, winner_count: int):
+async def _create(interaction: discord.Interaction, title: str, prize: str, minutes: int, hours: int, days: int, winner_count: int):
     if interaction.guild is None or interaction.channel_id is None:
         await interaction.response.send_message(lottery.GUILD_ONLY, ephemeral=True)
         return
     now = lottery.utc_now()
     try:
-        when = lottery.parse_draw_at(draw_time, now)
+        when = lottery.draw_at_after(minutes, hours, days, now)
     except lottery.TimeParseError as exc:
         await interaction.response.send_message(str(exc), ephemeral=True)
         return
@@ -348,7 +352,7 @@ async def _create(interaction: discord.Interaction, title: str, prize: str, draw
         return
     except Exception:
         log.exception("创建抽奖失败 guild=%s user=%s", interaction.guild.id, interaction.user.id)
-        await interaction.response.send_message("发起抽奖失败，请稍后再试。", ephemeral=True)
+        await interaction.response.send_message("发起失败", ephemeral=True)
         return
     lid = int(snap["id"])
     embed = to_embed(lottery.panel_payload(snap))
@@ -372,7 +376,7 @@ async def _result(interaction: discord.Interaction, lottery_id: int):
         found = await asyncio.to_thread(lottery.lookup, _db(), lottery_id, guild_id)
     except Exception:
         log.exception("查询抽奖结果失败 id=%s", lottery_id)
-        await interaction.response.send_message("操作失败，请稍后再试。", ephemeral=True)
+        await interaction.response.send_message("操作失败", ephemeral=True)
         return
     embed = to_embed(found["embed"]) if found.get("embed") else None
     await interaction.response.send_message(found["text"], embed=embed, ephemeral=True, allowed_mentions=MENTIONS)
