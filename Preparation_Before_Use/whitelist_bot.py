@@ -952,6 +952,7 @@ class Bot(discord.Client):
             pass
         except discord.HTTPException as exc:
             log.debug("向第三方 bot 触发者发送 DM 失败 user=%s error=%s", invoker.id, exc)
+        return True
 
     async def on_message(self, message: discord.Message):
         # 私信不走拦截
@@ -962,8 +963,8 @@ class Bot(discord.Client):
 
         # 第三方 bot 消息：检查是否由被拉黑用户触发（在楼主帖内调用其他机器人）
         if message.author.bot:
-            await self._handle_third_party_bot_message(message)
-            return
+            if await self._handle_third_party_bot_message(message):
+                return
 
         await self._enforce_blocks(message)
 
@@ -1041,6 +1042,8 @@ class Bot(discord.Client):
                  message.guild.id, message.channel.id, sender.id, target_id, relation, edited, ok)
         # 不论是否删成功都计数，便于在 /list 中发现权限问题
         await self._increment_block_count(message.guild.id, sender.id, target_id)
+        if getattr(sender, 'bot', False):
+            return
         try:
             dm = await sender.create_dm()
             await dm.send(
@@ -2075,13 +2078,9 @@ async def context_block(interaction: discord.Interaction, message: discord.Messa
     if target.id == interaction.user.id:
         await interaction.response.send_message("❌ 不能拉黑自己。", ephemeral=True)
         return
-    if target.bot:
-        await interaction.response.send_message("❌ 无法拉黑机器人。", ephemeral=True)
-        return
-
     success = await _block_user(interaction.user.id, target.id)
     msg = (
-        f"✅ 已将 **{target.name}** 加入黑名单（双方均不可互相回复）。"
+        f"✅ 已拉黑 **{target.name}**"
         if success
         else f"ℹ️ **{target.name}** 已在黑名单中。"
     )
