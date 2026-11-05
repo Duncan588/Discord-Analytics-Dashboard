@@ -67,3 +67,19 @@ class EnforceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BotTargetTest(unittest.TestCase):
+    def test_ai_bot_message_deleted_without_dm(self):
+        f = FakeSelf([(OWNER, U)], OWNER)
+        m = msg(U)
+        m.author.bot = True
+        async def boom(): raise AssertionError("no DM to bots")
+        m.author.create_dm = boom
+        asyncio.run(f._enforce_blocks(m))
+        self.assertEqual(f.deleted, [(1, "message")])
+
+    def test_context_menu_has_no_bot_guard(self):
+        import inspect
+        src = inspect.getsource(wb)
+        self.assertNotIn("无法拉黑机器人", src)
