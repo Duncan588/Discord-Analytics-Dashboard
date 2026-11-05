@@ -1,6 +1,6 @@
 """白名单管理机器人 + 服务器成员名单同步 + Forum 帖子收藏 + 黑名单拦截机器人。
 
-单个 Discord Bot 进程，同一个 Token，同一个 CommandTree，包含四部分功能：
+单个 Discord Bot 进程，同一个 Token，同一个 CommandTree，包含这些功能：
 
 白名单 / 成员同步：
 - 创建下载任务后，网站写入 member_sync_requests，机器人自动同步目标服务器成员
@@ -25,7 +25,12 @@
 - 同时支持「直接 Reply」和「Forum 帖子内的普通跟帖（默认目标 = 楼主）」两种
   触发场景
 
-三类功能数据共用同一个 portal.db（PORTAL_DB）。
+白名单、收藏、黑名单共用 portal.db（PORTAL_DB）。
+
+抽奖（lottery_ui.py / shared/lottery.py）：
+- 生产服务器斜杠命令 /抽奖 、/抽奖结果（注册到 LEGACY_SERVER_ID）
+- 按钮参与 / 退出；发起人可提前开奖或取消；到点由本进程自动开奖
+- 记录在 data/lottery.db，资格读取 data/servers/<gid>/summary.db 与 discord_data.db
 """
 import os
 import sys
@@ -53,6 +58,7 @@ from shared.notify_policy import should_notify_finish, is_auto_poll
 from shared.gateway_ingest import GatewayIngest
 from shared import block_policy
 from shared import liveness
+from Preparation_Before_Use import lottery_ui
 
 load_local_env(os.path.join(BASE_DIR, '.env'))
 
@@ -391,6 +397,10 @@ def help_embed() -> discord.Embed:
             "**🏆 排行榜**\n"
             "`/top`：历史累计 Top 10。\n"
             "`/top30`：最近 30 天 Top 10。\n\n"
+            "**🎁 抽奖**\n"
+            "`/抽奖` 发起。点「参与 / 退出」加入或离开，不会自动报名。\n"
+            "到点自动开奖；发起人可以提前开奖或取消。`/抽奖结果` 按抽奖 ID 查看。\n"
+            "条件：近 30 天内有发言，或历史消息数达到 1000 条。\n\n"
             "收藏关系不会公开给其他用户，排行榜只显示收藏数量。"
         ),
         color=discord.Color.blurple(),
@@ -502,6 +512,7 @@ class Bot(discord.Client):
         self.add_dynamic_items(AliveButton)  # 重启后旧私信里的「我还在」按钮仍然有效
         self.liveness_sender.start()
         self.liveness_expirer.start()
+        await lottery_ui.setup(self)
 
     async def _upsert_restart_command_without_entry_point(self) -> None:
         """Discord 50240 时单独 upsert 一组命令。
@@ -1176,6 +1187,9 @@ class Bot(discord.Client):
         await self.wait_until_ready()
 
     async def close(self):
+        loop = getattr(self, "lottery_draw_loop", None)
+        if loop is not None:
+            loop.cancel()
         if self.db is not None:
             await self.db.close()
         await super().close()
@@ -1222,6 +1236,7 @@ class Bot(discord.Client):
 
 
 bot = Bot()
+lottery_ui.register(bot)
 
 
 # ---------------------------------------------------------------------------
