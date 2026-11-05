@@ -30,32 +30,32 @@ MAX_HORIZON_DAYS = 366
 
 OPEN, DRAWN, CANCELLED, INSUFFICIENT = "open", "drawn", "cancelled", "insufficient"
 
-RULE = "近 30 天内有发言，或历史消息数 ≥ 1000"
-ELIGIBILITY_FAIL = "你暂不符合参与条件。需要满足以下任一条件：近 30 天内有发言，或历史消息数达到 1000 条。"
-NO_DB = "这个服务器还没有消息分析库，暂时无法核对参与条件。"
-UNAVAILABLE = "暂时无法读取消息记录，请稍后再试。"
-BOT_REJECT = "机器人不能参与抽奖。"
-MISSING = "这场抽奖不存在或已失效。"
-ONLY_DRAW = "只有发起人可以提前开奖。"
-ONLY_CANCEL = "只有发起人可以取消抽奖。"
-CANCELLED_OK = "已取消这场抽奖。"
-CANCELLED_STATE = "这场抽奖已取消，不再接受参与。"
-DRAWN_EARLY_OK = "已提前开奖。中奖名单见原消息，也可使用 /抽奖结果。"
-OPEN_DESC = "点「参与」加入，点「退出」离开。到点自动开奖，发起人也可以提前开奖或取消。"
-DRAWN_DESC = "已开奖。"
-TIME_FORMAT = "开奖时间格式无法识别。请用北京时间，例如 2026-11-06 21:00。"
-TIME_PAST = "开奖时间必须晚于现在。请用北京时间，例如 2026-11-06 21:00。"
-TIME_FAR = "开奖时间不能超过 366 天。"
-TITLE_BAD = "标题不能为空，且不超过 80 个字。"
-PRIZE_BAD = "奖品内容不能为空，且不超过 500 个字。"
-WINNERS_BAD = "中奖人数需要在 1 到 40 之间。"
-GUILD_ONLY = "请在服务器频道里使用 /抽奖，不要在私信里发起。"
-ENDED = "这场抽奖已经结束。"
-NOT_IN = "你不在参与名单里。"
-MODE_AUTO = "到点自动开奖"
-MODE_EARLY = "发起人提前开奖"
-HASH_NOTE = "名单按用户 ID 升序拼接后取 SHA-256"
-INSUFFICIENT_STAYS_TAIL = "抽奖仍会继续，到点若人数仍不足将自动结束。"
+RULE = "近30天发言或累计1000条"
+ELIGIBILITY_FAIL = "不符合条件：近30天发言或累计1000条"
+NO_DB = "暂无消息数据"
+UNAVAILABLE = "暂时无法核对，请稍后再试"
+BOT_REJECT = "机器人不能参与"
+MISSING = "抽奖不存在"
+ONLY_DRAW = "仅发起人可开奖"
+ONLY_CANCEL = "仅发起人可取消"
+CANCELLED_OK = "已取消"
+CANCELLED_STATE = "已取消"
+DRAWN_EARLY_OK = "已开奖"
+OPEN_DESC = ""
+DRAWN_DESC = "已开奖"
+TIME_FORMAT = "时间格式错误"
+TIME_PAST = "请填写开奖时长"
+TIME_FAR = "最长366天"
+TITLE_BAD = "标题1到80字"
+PRIZE_BAD = "奖品1到500字"
+WINNERS_BAD = "中奖人数1到40"
+GUILD_ONLY = "请在服务器内使用"
+ENDED = "已结束"
+NOT_IN = "你未参与"
+MODE_AUTO = "定时"
+MODE_EARLY = "提前"
+HASH_NOTE = ""
+INSUFFICIENT_STAYS_TAIL = ""
 
 BTN_JOIN, BTN_LEAVE = "参与", "退出"
 BTN_DRAW, BTN_CANCEL = "提前开奖", "取消抽奖"
@@ -229,6 +229,22 @@ def parse_draw_at(text, now):
     return dt
 
 
+def draw_at_after(minutes, hours, days, now):
+    """Absolute UTC draw time from now plus a relative duration."""
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    now = now.astimezone(timezone.utc).replace(microsecond=0)
+    parts = [int(x or 0) for x in (minutes, hours, days)]
+    if any(x < 0 for x in parts):
+        raise TimeParseError(TIME_FORMAT)
+    total = parts[0] + parts[1] * 60 + parts[2] * 1440
+    if total <= 0:
+        raise TimeParseError(TIME_PAST)
+    if total > MAX_HORIZON_DAYS * 1440:
+        raise TimeParseError(TIME_FAR)
+    return now + timedelta(minutes=total)
+
+
 def _parse_clock(raw):
     candidate = raw.replace("/", "-")
     if candidate.endswith("Z"):
@@ -256,7 +272,7 @@ def format_when(stamp):
     except ValueError:
         return str(stamp)
     local = dt.astimezone(SHANGHAI)
-    return f"{local.strftime('%Y-%m-%d %H:%M')}（北京时间） · <t:{int(dt.timestamp())}:F>"
+    return f"<t:{int(dt.timestamp())}:R>"
 
 
 def _clean_title(title):
@@ -384,48 +400,40 @@ def due_ids(db_path, now=None):
 
 def _closed_text(status, action):
     if status == DRAWN:
-        return "这场抽奖已经开奖，不能再参与。" if action == "join" else (
-            "这场抽奖已经开奖，不能再退出。" if action == "leave" else "这场抽奖已经开奖。"
-        )
+        return "已开奖"
     if status == CANCELLED:
-        return "这场抽奖已取消，不能再参与。" if action in ("join", "leave") else "这场抽奖已取消。"
+        return "已取消"
     if status == INSUFFICIENT:
-        return "这场抽奖已因参与人数不足结束。"
+        return "人数不足，已结束"
     return ENDED
 
 
 def joined_text(count):
-    return f"已加入抽奖。当前参与：{count} 人。"
+    return f"已参与，共{count}人"
 
 
 def already_text(count):
-    return f"你已经在参与名单里。当前参与：{count} 人。"
+    return f"已在名单中，共{count}人"
 
 
 def left_text(count):
-    return f"已退出抽奖。当前参与：{count} 人。"
+    return f"已退出，共{count}人"
 
 
 def insufficient_text(need, count, stays_open):
-    text = f"参与人数不足，无法开奖。需要至少 {need} 人，当前 {count} 人。"
-    if stays_open:
-        text += INSUFFICIENT_STAYS_TAIL
-    return text
+    return f"人数不足：{count}/{need}"
 
 
 def confirm_draw_text(count, need):
-    text = f"确认现在提前开奖？当前参与 {count} 人，中奖人数 {need}。开奖后不能再加入或退出。"
-    if count < need:
-        text += "目前人数不足，确认后不会开奖，抽奖会继续。"
-    return text
+    return f"确认开奖？{count}人参与，抽{need}人"
 
 
 def confirm_cancel_text(count):
-    return f"确认取消这场抽奖？取消后不能恢复。当前参与 {count} 人。"
+    return f"确认取消？{count}人参与"
 
 
 def not_found_text(lottery_id):
-    return f"没有找到抽奖 `{lottery_id}`。"
+    return f"未找到抽奖 {lottery_id}"
 
 
 def lookup_banner(snap):
@@ -433,15 +441,15 @@ def lookup_banner(snap):
     n = snap["participant_count"]
     status = snap["status"]
     if status == OPEN:
-        text = f"这场抽奖尚未开奖。当前参与：{n} 人。"
+        text = f"未开奖，{n}人参与"
     elif status == CANCELLED:
-        text = f"抽奖 `{lid}` 已取消。"
+        text = "已取消"
     elif status == INSUFFICIENT:
-        text = f"抽奖 `{lid}` 因参与人数不足未能开奖。需要至少 {snap['winner_count']} 人，实际 {n} 人。"
+        text = f"人数不足：{n}/{snap['winner_count']}"
     elif status == DRAWN:
-        text = f"抽奖 `{lid}` 的开奖结果："
+        text = "开奖结果"
     else:
-        text = f"抽奖 `{lid}` 状态：{status}。"
+        text = f"状态：{status}"
     url = jump_url(snap)
     if url:
         text += "\n" + url
@@ -730,7 +738,7 @@ def panel_payload(snap):
     elif status == CANCELLED:
         description, color = CANCELLED_STATE, COLOR_CANCELLED
     elif status == INSUFFICIENT:
-        description = f"参与人数不足，未能开奖。需要至少 {k} 人，当前 {n} 人。"
+        description = f"人数不足：{n}/{k}"
         color = COLOR_INSUFFICIENT
     else:
         description, color = OPEN_DESC, COLOR_OPEN
@@ -744,11 +752,9 @@ def panel_payload(snap):
     ]
     if status == DRAWN:
         fields.append((FIELD_WINNERS, _format_winners(snap["winners"]), False))
-        fields.append((FIELD_HASH, f"`{snap['participants_hash']}`" if snap.get("participants_hash") else "（无）", False))
+        fields.append((FIELD_HASH, f"`{snap['participants_hash']}`" if snap.get("participants_hash") else "无", False))
         fields.append((FIELD_MODE, MODE_EARLY if snap.get("draw_mode") == "early" else MODE_AUTO, True))
-    footer = f"抽奖ID：{snap['id']}"
-    if status == DRAWN:
-        footer += f" · {HASH_NOTE}"
+    footer = f"ID {snap['id']}"
     return {
         "title": str(snap["title"])[:256],
         "description": description,
@@ -760,7 +766,7 @@ def panel_payload(snap):
 
 def _format_winners(ids):
     if not ids:
-        return "（无）"
+        return "无"
     lines = [f"<@{i}>" for i in ids]
     text = "\n".join(lines)
     if len(text) <= 1024:

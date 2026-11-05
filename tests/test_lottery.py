@@ -78,8 +78,8 @@ def _open(tmp_path, creator=CREATOR, winners=1, when=None, title="周末福利")
 def test_constants_and_copy():
     assert lottery.RECENT_DAYS == 30
     assert lottery.MIN_HISTORY == 1000
-    assert lottery.RULE == "近 30 天内有发言，或历史消息数 ≥ 1000"
-    assert "1000" in lottery.ELIGIBILITY_FAIL and "近 30 天" in lottery.ELIGIBILITY_FAIL
+    assert lottery.RULE == "近30天发言或累计1000条"
+    assert "1000" in lottery.ELIGIBILITY_FAIL and "近30天" in lottery.ELIGIBILITY_FAIL
     assert (lottery.BTN_JOIN, lottery.BTN_LEAVE, lottery.BTN_DRAW, lottery.BTN_CANCEL) == ("参与", "退出", "提前开奖", "取消抽奖")
     assert "暂停" not in lottery.OPEN_DESC
     assert lottery.FIELD_HASH == "名单校验"
@@ -117,20 +117,14 @@ def test_real_system_random_is_without_replacement():
         assert set(winners) <= set(pool)
 
 
-def test_parse_beijing_time_and_reject_past():
-    parsed = lottery.parse_draw_at("2026-11-06 21：00", NOW)
-    assert lottery.utc_stamp(parsed) == "2026-11-06T13:00:00+00:00"
-    assert lottery.format_when(lottery.utc_stamp(parsed)).startswith("2026-11-06 21:00（北京时间）")
-    zulu = lottery.parse_draw_at("2026-11-06T13:00:00Z", NOW)
-    assert lottery.utc_stamp(zulu) == "2026-11-06T13:00:00+00:00"
-    unix = lottery.parse_draw_at(str(int(parsed.timestamp())), NOW)
-    assert lottery.utc_stamp(unix) == "2026-11-06T13:00:00+00:00"
-    with pytest.raises(lottery.TimeParseError, match="晚于现在"):
-        lottery.parse_draw_at("2026-11-05 11:00", NOW)
-    with pytest.raises(lottery.TimeParseError, match="无法识别"):
-        lottery.parse_draw_at("下周", NOW)
-    with pytest.raises(lottery.TimeParseError, match="366"):
-        lottery.parse_draw_at("2028-11-06 21:00", NOW)
+def test_relative_duration_and_limits():
+    when = lottery.draw_at_after(30, 2, 1, NOW)
+    assert when == NOW + timedelta(minutes=30 + 120 + 1440)
+    assert lottery.format_when(lottery.utc_stamp(when)) == f"<t:{int(when.timestamp())}:R>"
+    with pytest.raises(lottery.TimeParseError):
+        lottery.draw_at_after(0, 0, 0, NOW)
+    with pytest.raises(lottery.TimeParseError):
+        lottery.draw_at_after(0, 0, 367, NOW)
 
 
 def test_create_does_not_enroll_creator_and_has_no_cap(tmp_path):
@@ -144,8 +138,8 @@ def test_create_does_not_enroll_creator_and_has_no_cap(tmp_path):
     panel = lottery.panel_payload(first)
     assert [name for name, _value, _inline in panel["fields"]] == ["奖品", "中奖人数", "开奖时间", "发起人", "当前参与", "条件"]
     assert panel["fields"][4][1] == "0 人"
-    assert "北京时间" in panel["fields"][2][1]
-    assert "点「参与」加入" in panel["description"]
+    assert panel["fields"][2][1].startswith("<t:")
+    assert not panel["description"]
     lottery.set_message(_db(tmp_path), first["id"], "999")
     assert lottery.load(_db(tmp_path), first["id"])["message_id"] == "999"
     ghost = _open(tmp_path, title="没发出去")
@@ -238,15 +232,15 @@ def test_join_leave_eligibility_and_opt_in(tmp_path):
     assert lottery.load(db, lid)["participant_count"] == 0
 
     joined = lottery.handle_join(db, servers, lid, "11", "neo", False, NOW)
-    assert joined["code"] == "joined" and joined["text"] == "已加入抽奖。当前参与：1 人。"
+    assert joined["code"] == "joined" and joined["text"] == "已参与，共1人"
     again = lottery.handle_join(db, servers, lid, "11", "neo", False, NOW)
-    assert again["code"] == "already" and "已经在参与名单里" in again["text"]
+    assert again["code"] == "already" and "已在名单中" in again["text"]
     assert lottery.load(db, lid)["participant_count"] == 1
 
     absent = lottery.handle_leave(db, lid, "12")
     assert absent["code"] == "absent" and absent["text"] == lottery.NOT_IN
     left = lottery.handle_leave(db, lid, "11")
-    assert left["code"] == "left" and left["text"] == "已退出抽奖。当前参与：0 人。"
+    assert left["code"] == "left" and left["text"] == "已退出，共0人"
     assert lottery.load(db, lid)["participant_ids"] == []
 
 
@@ -277,13 +271,13 @@ def test_draw_cancel_permissions_and_audit(tmp_path):
     assert one["code"] == "joined"
     stayed = lottery.commit_draw(db, early_short["id"], "early", CREATOR, NOW, Boom())
     assert stayed["code"] == "insufficient" and stayed["changed"] is False
-    assert "抽奖仍会继续" in stayed["text"]
+    assert stayed["text"] == "人数不足：1/2"
     assert lottery.load(db, early_short["id"])["status"] == "open"
 
     preview = lottery.preview_action(db, lid, OTHER, "cancel")
     assert preview["confirm"] is False and preview["text"] == lottery.ONLY_CANCEL
     preview_ok = lottery.preview_action(db, lid, CREATOR, "draw")
-    assert preview_ok["confirm"] is True and "确认现在提前开奖" in preview_ok["text"]
+    assert preview_ok["confirm"] is True and "确认开奖" in preview_ok["text"]
 
     drawn = lottery.commit_draw(db, lid, "early", CREATOR, NOW)
     assert drawn["code"] == "drawn" and drawn["changed"] is True
@@ -299,13 +293,13 @@ def test_draw_cancel_permissions_and_audit(tmp_path):
     assert "中奖名单" in names and "名单校验" in names and "开奖方式" in names
     assert f"`{report['hash']}`" in [value for _n, value, _i in panel["fields"]]
     assert panel["fields"][5][1] == lottery.RULE
-    assert "发起人提前开奖" in [value for _n, value, _i in panel["fields"]]
-    assert "抽奖ID：" in panel["footer"] and "SHA-256" in panel["footer"]
+    assert "提前" in [value for _n, value, _i in panel["fields"]]
+    assert panel["footer"].startswith("ID ")
 
     again = lottery.commit_draw(db, lid, "early", CREATOR, NOW)
     assert again["code"] == "closed" and lottery.load(db, lid)["winners"] == drawn["winners"]
     joined_late = lottery.handle_join(db, servers, lid, "11", "11", False, NOW)
-    assert joined_late["code"] == "closed" and "已经开奖" in joined_late["text"]
+    assert joined_late["code"] == "closed" and "已开奖" in joined_late["text"]
 
     other = _open(tmp_path, winners=1, title="取消这场")
     oid = other["id"]
@@ -331,15 +325,15 @@ def test_auto_draw_insufficient_and_due(tmp_path):
     lottery.handle_join(db, _servers(tmp_path), past["id"], "11", "11", False, NOW)
     closed = lottery.commit_draw(db, past["id"], "auto", None, NOW)
     assert closed["code"] == "insufficient" and closed["changed"] is True
-    assert "抽奖仍会继续" not in closed["text"]
+    assert "人数不足" in closed["text"]
     snap = lottery.load(db, past["id"])
     assert snap["status"] == "insufficient" and snap["winners"] == []
     assert lottery.audit(db, past["id"])["ok"] is True
-    assert "未能开奖" in lottery.panel_payload(snap)["description"]
+    assert "人数不足" in lottery.panel_payload(snap)["description"]
     assert lottery.due_ids(db, NOW) == []
     assert lottery.load(db, future["id"])["status"] == "open"
     banner = lottery.lookup(db, past["id"], GUILD)["text"]
-    assert "参与人数不足" in banner and "至少 2" in banner and "实际 1" in banner
+    assert "人数不足：1/2" in banner
 
 
 def test_full_auto_draw_matches_hash(tmp_path):
@@ -356,7 +350,7 @@ def test_full_auto_draw_matches_hash(tmp_path):
     assert result["code"] == "drawn" and result["winners"] in (["11"], ["12"])
     assert lottery.audit(db, snap["id"])["ok"] is True
     mode = [value for name, value, _i in lottery.panel_payload(lottery.load(db, snap["id"]))["fields"] if name == "开奖方式"]
-    assert mode == ["到点自动开奖"]
+    assert mode == ["定时"]
     assert "尚未开奖" not in lottery.lookup(db, snap["id"], GUILD)["text"]
     assert "开奖结果" in lottery.lookup(db, snap["id"], GUILD)["text"]
 
@@ -379,8 +373,8 @@ def test_buttons_and_prod_guild_commands():
     assert whitelist_bot.bot.tree.get_command("抽奖") is None
     created = whitelist_bot.bot.tree.get_command("抽奖", guild=guild)
     payload = created.to_dict(whitelist_bot.bot.tree)
-    assert [opt["name"] for opt in payload["options"]] == ["标题", "奖品内容", "开奖时间", "中奖人数"]
-    assert all(opt["required"] for opt in payload["options"])
+    assert [opt["name"] for opt in payload["options"]] == ["标题", "奖品", "中奖人数", "分钟", "小时", "天"]
+    assert [opt["required"] for opt in payload["options"]] == [True, True, True, False, False, False]
     assert payload["dm_permission"] is False
     result = whitelist_bot.bot.tree.get_command("抽奖结果", guild=guild).to_dict(whitelist_bot.bot.tree)
     assert [opt["name"] for opt in result["options"]] == ["抽奖id"]
