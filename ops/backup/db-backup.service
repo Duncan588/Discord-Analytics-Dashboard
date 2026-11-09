@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily SQLite backup of Discord dashboard DBs to Cloudflare R2 (restic)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=HOME=/root
+Environment=XDG_CACHE_HOME=/root/.cache
+ExecStart=/root/bin/db-backup.sh
+Nice=19
+IOSchedulingClass=idle
+CPUWeight=20
+TimeoutStartSec=4h

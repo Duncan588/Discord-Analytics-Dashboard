@@ -1,0 +1,10 @@
+[Unit]
+Description=Run db-backup daily at 04:17 UTC (12:17 UTC+8)
+
+[Timer]
+OnCalendar=*-*-* 04:17:00 UTC
+RandomizedDelaySec=5m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -147,12 +147,17 @@ Recaps are built in a background thread and cached under `data/servers/<gid>/rec
 
 ### R2 备份与恢复（可选）/ R2 backup & restore (optional)
 
+> **增量备份说明（生产现行逻辑）见 [`ops/backup/README.md`](./ops/backup/README.md)**：小库每日 restic（tag `small-dbs`）；`discord_data.db` 只备份 changelog 触发的变更行（tag `discord-incr`），全量基线需 `FULL_BASELINE=1` 手动跑。脚本与 systemd 单元副本在 `ops/backup/`。
+> Production backup details: [`ops/backup/README.md`](./ops/backup/README.md).
+
 1. 在 Cloudflare 创建 R2 bucket 和 R2 API Token（Access Key ID + Secret）。Create an R2 bucket and an R2 API token.
-2. 安装 `restic`，并配置每日备份的 systemd timer（`db-backup.service` / `db-backup.timer`，日志写入 `/var/log/db-backup.log`）。Install restic and a daily systemd timer.
+2. 安装 `restic` / `zstd` / `sqlite3`，把 `ops/backup/` 下的脚本装到 `/root/bin/`，并启用 `db-backup.service` / `db-backup.timer`（日志 `/var/log/db-backup.log`）。Install restic/zstd and deploy scripts from `ops/backup/`.
 3. 在后台「☁️ Cloudflare 备份」卡片的「轮换 R2 / restic 凭证」里填 Access Key、Secret、restic 密码（可选填 CF API Token 显示官方用量）。会写入 `/root/.config/r2-backup.env` 和 `restic-r2.pass`（权限 600）。仓库地址 `RESTIC_REPOSITORY=s3:https://<CF_ACCOUNT_ID>.r2.cloudflarestorage.com/<bucket>` 也可以预先写入该文件。
    Enter the keys in the admin R2 card; they are written to `/root/.config/r2-backup.env` (600). Set `RESTIC_REPOSITORY` there or via env.
-4. **恢复**：确保服务器上有可执行的 `tools/db-restore.sh`（与应用同目录）。在 Admin 卡片选择 `small-dbs` 快照 →「演练」验证可读 → 输入确认词 `确认恢复` → 开始恢复。脚本会停 `v20`、恢复 portal/summary/visitors（可选配套 `discord_data` 转储）、完整性检查后再启动。进度见 `/run/db-restore-status.json` 与 `/var/log/db-restore.log`。不会在多租户场景下替每个用户单独挂 CF 账号（当前为单租户）。
-   Restore: keep `tools/db-restore.sh` on the server. Dry-run first; type `确认恢复` to run. Brief downtime while `v20` restarts.
+4. **小库恢复**：确保服务器上有可执行的 `tools/db-restore.sh`。在 Admin 卡片选择 `small-dbs` 快照 →「演练」→ 确认词 `确认恢复`。脚本会停 `v20`、恢复 portal/summary/visitors、完整性检查后再启动。进度见 `/run/db-restore-status.json` 与 `/var/log/db-restore.log`。
+   Small-DB restore via Admin / `tools/db-restore.sh`.
+5. **大库（discord_data）恢复**：按 [`ops/backup/README.md`](./ops/backup/README.md) 手工 `restic restore` 基线 → 叠加 `discord-incr` → `db-incr-restore.py` → `PRAGMA integrity_check` → 替换库文件（清 WAL/SHM）→ 启 `v20`。
+   Large DB: see ops/backup README (baseline + incrementals).
 
 ## 配置 / Configuration
 
@@ -206,6 +211,7 @@ templates/ static/      # Jinja + Chart.js / Alpine.js（本地托管 · vendore
 Preparation_Before_Use/ # 下载器与白名单 Bot · downloader & whitelist bot
 tests/                  # pytest（含 e2e 浏览器点击回归 · incl. e2e click audit）
 docs/images/            # README 截图 · screenshots
+ops/backup/             # 增量备份脚本与说明（restic/R2）· incr backup scripts
 data/                   # 运行时数据库与日志（不入库）· runtime DBs/logs (not committed)
 ```
 
